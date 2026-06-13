@@ -1,0 +1,34 @@
+# Render Blueprint for the Smart Compta Django backend.
+# Database is EXTERNAL (Neon free Postgres) — set DATABASE_URL in the dashboard.
+# Deploy: push this repo to GitHub, then Render → New → Blueprint → pick the repo.
+services:
+  - type: web
+    name: smartcompta-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    # Build: install, gather static, migrate, and seed demo data.
+    buildCommand: >-
+      pip install -r requirements.txt &&
+      python manage.py collectstatic --noinput &&
+      python manage.py migrate &&
+      python manage.py seed
+    startCommand: gunicorn smartcompta.wsgi --bind 0.0.0.0:$PORT
+    healthCheckPath: /
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.6"
+      # Neon connection string (postgresql://...sslmode=require). Set in dashboard.
+      - key: DATABASE_URL
+        sync: false
+      - key: DJANGO_SECRET_KEY
+        generateValue: true        # Render generates a strong secret
+      - key: DJANGO_DEBUG
+        value: "False"
+      # Set these in the Render dashboard after the frontend is deployed:
+      - key: WEBHOOK_URL
+        sync: false                # your PUBLIC Make/Integromat webhook URL
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false                # https://your-app.vercel.app
+      - key: ALLOWED_HOSTS
+        sync: false                # optional; Render host is auto-added

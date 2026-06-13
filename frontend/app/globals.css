@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+
+:root {
+  --brand: #1e2a78;
+}
+
+html,
+body {
+  padding: 0;
+  margin: 0;
+  font-family: "Inter", sans-serif;
+}
+
+/* RTL: flip flex rows so the Arabic UI mirrors correctly. */
+html[dir="rtl"] .rtl-flip {
+  flex-direction: row-reverse;
+}
+
+.kpi-number {
+  font-size: 32px;
+  font-weight: 700;
+  line-height: 1.1;
+}
+
+table th {
+  font-size: 14px;
+  font-weight: 700;
+}
