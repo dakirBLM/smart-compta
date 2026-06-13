@@ -22,7 +22,7 @@ import { DashboardData } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
 import { formatDZD } from "@/lib/utils";
 
-const COLORS = ["#1E2A78", "#22C55E", "#F59E0B", "#94A3B8"];
+const COLORS = ["#111111", "#16A34A", "#D97706", "#9CA3AF"];
 
 function KpiCard({ label, value, change }: { label: string; value: number; change?: number }) {
   const up = (change ?? 0) >= 0;
@@ -92,9 +92,9 @@ export default function EntrepriseDashboard() {
                   <YAxis fontSize={12} />
                   <Tooltip formatter={(v: number) => formatDZD(v)} />
                   <Legend />
-                  <Line type="monotone" dataKey="produits" stroke="#22C55E" name={t("produits")} />
-                  <Line type="monotone" dataKey="charges" stroke="#EF4444" name={t("charges")} />
-                  <Line type="monotone" dataKey="resultat" stroke="#1E2A78" name={t("resultat")} />
+                  <Line type="monotone" dataKey="produits" stroke="#16A34A" name={t("produits")} />
+                  <Line type="monotone" dataKey="charges" stroke="#DC2626" name={t("charges")} />
+                  <Line type="monotone" dataKey="resultat" stroke="#111111" name={t("resultat")} />
                 </LineChart>
               </ResponsiveContainer>
             </Card>

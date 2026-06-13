@@ -9,14 +9,15 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
+        // Black & white theme. "brand" is the primary dark surface/text color.
         brand: {
-          DEFAULT: "#1E2A78", // accountant dark blue
-          dark: "#16205c",
+          DEFAULT: "#111111", // near-black
+          dark: "#000000",
         },
-        clientbg: "#F0F0F0",
-        success: "#22C55E",
-        danger: "#EF4444",
-        warning: "#F59E0B",
+        clientbg: "#F5F5F5",
+        success: "#16A34A",
+        danger: "#DC2626",
+        warning: "#D97706",
       },
       fontFamily: {
         sans: ["Inter", "ui-sans-serif", "system-ui", "sans-serif"],

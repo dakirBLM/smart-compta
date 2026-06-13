@@ -34,17 +34,18 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
             <Icon size={22} />
           </Link>
         ))}
+        {/* Language switcher — lives only in the left navigation */}
+        <LanguageToggle className="mt-auto text-brand" compact />
         <button
           onClick={logout}
-          className="mt-auto rounded-xl p-3 text-danger hover:bg-red-50"
+          className="rounded-xl p-3 text-danger hover:bg-red-50"
         >
           <LogOut size={22} />
         </button>
       </aside>
 
       <div className="flex flex-1 flex-col">
-        <header className="flex items-center justify-between bg-clientbg px-6 py-4">
-          <LanguageToggle className="text-brand" />
+        <header className="flex items-center justify-end bg-clientbg px-6 py-4">
           <div className="flex items-center gap-2 font-semibold text-brand">
             {user?.username?.toUpperCase()}
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white">

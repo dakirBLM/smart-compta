@@ -23,7 +23,7 @@ export function exportTablePDF(
     body: rows.map((r) => r.map((c) => String(c))),
     startY: subtitle ? 30 : 24,
     styles: { fontSize: 8 },
-    headStyles: { fillColor: [30, 42, 120] },
+    headStyles: { fillColor: [17, 17, 17] },
   });
   doc.save(`${title.replace(/\s+/g, "_").toLowerCase()}.pdf`);
 }

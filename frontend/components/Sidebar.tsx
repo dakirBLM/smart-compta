@@ -12,13 +12,14 @@ import {
   MessageSquare,
   Scale,
   Users,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { LanguageToggle } from "@/components/LanguageToggle";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
-import { TranslationKey } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
 
 const JOURNAL_TYPES: { key: string; label: string }[] = [
@@ -34,15 +35,18 @@ function Item({
   icon,
   label,
   active,
+  onNavigate,
 }: {
   href: string;
   icon: React.ReactNode;
   label: string;
   active: boolean;
+  onNavigate?: () => void;
 }) {
   return (
     <Link
       href={href}
+      onClick={onNavigate}
       className={cn(
         "flex items-center gap-3 rounded-lg px-3 py-2.5 text-[16px] transition-colors",
         active ? "bg-white/15 font-semibold text-white" : "text-white/80 hover:bg-white/10"
@@ -58,10 +62,14 @@ export function Sidebar({
   entrepriseId,
   entrepriseName,
   annee,
+  open = false,
+  onClose,
 }: {
   entrepriseId?: number;
   entrepriseName?: string;
   annee?: number;
+  open?: boolean;
+  onClose?: () => void;
 }) {
   const { t } = useI18n();
   const { logout, user } = useAuth();
@@ -72,11 +80,30 @@ export function Sidebar({
     ? `/accountant/entreprises/${entrepriseId}`
     : "/accountant";
   const is = (p: string) => pathname === p || pathname.startsWith(p + "/");
+  // On mobile, tapping a link should close the drawer.
+  const nav = () => onClose?.();
 
   return (
-    <aside className="flex h-screen w-64 flex-col bg-brand p-4 text-white">
+    <aside
+      className={cn(
+        "fixed inset-y-0 left-0 z-40 flex h-screen w-64 flex-col bg-brand p-4 text-white transition-transform duration-200 lg:static lg:translate-x-0",
+        open ? "translate-x-0" : "-translate-x-full"
+      )}
+    >
+      <div className="mb-6 flex items-start justify-between px-2">
+        <div>
+          <div className="text-lg font-bold">{t("appName")}</div>
+        </div>
+        {/* Close button (mobile only) */}
+        <button
+          onClick={onClose}
+          className="rounded-lg p-1 text-white/70 hover:bg-white/10 lg:hidden"
+          aria-label="Fermer le menu"
+        >
+          <X size={20} />
+        </button>
+      </div>
       <div className="mb-6 px-2">
-        <div className="text-lg font-bold">{t("appName")}</div>
         {entrepriseName && (
           <div className="mt-1 rounded-lg bg-white/10 px-3 py-2 text-sm">
             <div className="font-semibold">{entrepriseName}</div>
@@ -93,12 +120,14 @@ export function Sidebar({
               icon={<LayoutDashboard size={20} />}
               label={t("dashboard")}
               active={is("/accountant/dashboard")}
+              onNavigate={nav}
             />
             <Item
               href="/accountant/entreprises"
               icon={<Building2 size={20} />}
               label={t("entreprises")}
               active={is("/accountant/entreprises")}
+              onNavigate={nav}
             />
           </>
         ) : (
@@ -126,6 +155,7 @@ export function Sidebar({
                   <Link
                     key={j.key}
                     href={`${base}/journaux/${j.key}`}
+                    onClick={nav}
                     className={cn(
                       "block rounded-md px-3 py-1.5 text-sm text-white/70 hover:bg-white/10",
                       pathname.endsWith(`/journaux/${j.key}`) &&
@@ -143,24 +173,28 @@ export function Sidebar({
               icon={<FileText size={20} />}
               label={t("compteResultat")}
               active={is(`${base}/compte-resultat`)}
+              onNavigate={nav}
             />
             <Item
               href={`${base}/balance`}
               icon={<Scale size={20} />}
               label={t("balance")}
               active={is(`${base}/balance`)}
+              onNavigate={nav}
             />
             <Item
               href={`${base}/grand-livre`}
               icon={<Book size={20} />}
               label={t("grandLivre")}
               active={is(`${base}/grand-livre`)}
+              onNavigate={nav}
             />
             <Item
               href={`${base}/dashboard`}
               icon={<BarChart3 size={20} />}
               label={t("dashboard")}
               active={is(`${base}/dashboard`)}
+              onNavigate={nav}
             />
             <div className="my-2 border-t border-white/10" />
             <Item
@@ -168,25 +202,30 @@ export function Sidebar({
               icon={<Users size={20} />}
               label={t("clients")}
               active={is(`${base}/clients`)}
+              onNavigate={nav}
             />
             <Item
               href={`${base}`}
               icon={<MessageSquare size={20} />}
               label={t("messages")}
               active={pathname === base}
+              onNavigate={nav}
             />
             <Item
               href={`${base}/factures`}
               icon={<FolderOpen size={20} />}
               label={t("mesFactures")}
               active={is(`${base}/factures`)}
+              onNavigate={nav}
             />
           </>
         )}
       </nav>
 
-      <div className="mt-4 border-t border-white/10 pt-3">
-        <div className="px-3 pb-2 text-sm text-white/70">{user?.username}</div>
+      <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
+        {/* Language switcher — lives only in the left navigation */}
+        <LanguageToggle className="text-white" />
+        <div className="px-3 pt-1 text-sm text-white/70">{user?.username}</div>
         <button
           onClick={logout}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-[16px] text-white/80 hover:bg-white/10"
