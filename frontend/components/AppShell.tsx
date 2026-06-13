@@ -1,6 +1,6 @@
 "use client";
 
-import { Bell, Menu, Settings } from "lucide-react";
+import { Bell, Menu } from "lucide-react";
 import { useState } from "react";
 import { Sidebar } from "./Sidebar";
 
@@ -53,9 +53,6 @@ export function AppShell({
           <div className="flex items-center gap-3">
             <button className="rounded-full p-2 text-brand hover:bg-gray-100">
               <Bell size={20} />
-            </button>
-            <button className="rounded-full p-2 text-brand hover:bg-gray-100">
-              <Settings size={20} />
             </button>
           </div>
         </header>

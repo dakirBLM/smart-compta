@@ -32,3 +32,5 @@ services:
         sync: false                # https://your-app.vercel.app
       - key: ALLOWED_HOSTS
         sync: false                # optional; Render host is auto-added
+      - key: CLOUDINARY_URL
+        sync: false                # cloudinary://<key>:<secret>@<cloud_name>

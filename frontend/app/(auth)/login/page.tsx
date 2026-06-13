@@ -1,6 +1,7 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -66,7 +67,13 @@ export default function LoginPage() {
           </Button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-gray-400">
+        <p className="mt-6 text-center text-sm text-gray-500">
+          Pas encore de compte ?{" "}
+          <Link href="/register" className="font-semibold text-brand underline">
+            Créer un compte comptable
+          </Link>
+        </p>
+        <p className="mt-3 text-center text-xs text-gray-400">
           Démo : comptable / comptable · client / client
         </p>
       </div>

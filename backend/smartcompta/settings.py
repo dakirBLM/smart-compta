@@ -35,6 +35,9 @@ INSTALLED_APPS = [
     # Third party
     "rest_framework",
     "corsheaders",
+    # Media storage (Cloudinary) — used when CLOUDINARY_URL is set
+    "cloudinary_storage",
+    "cloudinary",
     # Local
     "accounts",
     "core",
@@ -95,12 +98,22 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
     },
 }
+
+# When CLOUDINARY_URL is set (cloudinary://<api_key>:<api_secret>@<cloud_name>),
+# uploaded media (avatars, invoice images) goes to Cloudinary and persists.
+# Without it, media falls back to local disk (fine for dev).
+if os.getenv("CLOUDINARY_URL"):
+    STORAGES["default"] = {
+        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage"
+    }
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 REST_FRAMEWORK = {

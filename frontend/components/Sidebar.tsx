@@ -11,16 +11,21 @@ import {
   LogOut,
   MessageSquare,
   Scale,
+  Settings,
   Users,
   X,
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
 import { cn } from "@/lib/utils";
+
+const MIN_WIDTH = 220;
+const MAX_WIDTH = 460;
+const DEFAULT_WIDTH = 256;
 
 const JOURNAL_TYPES: { key: string; label: string }[] = [
   { key: "achat", label: "Achat" },
@@ -76,6 +81,38 @@ export function Sidebar({
   const pathname = usePathname();
   const [journalOpen, setJournalOpen] = useState(pathname.includes("/journaux"));
 
+  // Resizable width (drag the right edge). Persisted in localStorage.
+  const [width, setWidth] = useState(DEFAULT_WIDTH);
+  const dragging = useRef(false);
+
+  useEffect(() => {
+    const saved = Number(window.localStorage.getItem("sidebarWidth"));
+    if (saved >= MIN_WIDTH && saved <= MAX_WIDTH) setWidth(saved);
+  }, []);
+
+  const startResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    dragging.current = true;
+    const onMove = (ev: MouseEvent) => {
+      if (!dragging.current) return;
+      const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, ev.clientX));
+      setWidth(w);
+    };
+    const onUp = () => {
+      dragging.current = false;
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.userSelect = "";
+      setWidth((w) => {
+        window.localStorage.setItem("sidebarWidth", String(w));
+        return w;
+      });
+    };
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, []);
+
   const base = entrepriseId
     ? `/accountant/entreprises/${entrepriseId}`
     : "/accountant";
@@ -85,25 +122,63 @@ export function Sidebar({
 
   return (
     <aside
+      style={{ width }}
       className={cn(
-        "fixed inset-y-0 left-0 z-40 flex h-screen w-64 flex-col bg-brand p-4 text-white transition-transform duration-200 lg:static lg:translate-x-0",
+        "fixed inset-y-0 left-0 z-40 flex h-screen max-w-[85vw] flex-col bg-brand p-4 text-white transition-transform duration-200 lg:static lg:max-w-none lg:translate-x-0",
         open ? "translate-x-0" : "-translate-x-full"
       )}
     >
-      <div className="mb-6 flex items-start justify-between px-2">
-        <div>
-          <div className="text-lg font-bold">{t("appName")}</div>
-        </div>
-        {/* Close button (mobile only) */}
-        <button
-          onClick={onClose}
-          className="rounded-lg p-1 text-white/70 hover:bg-white/10 lg:hidden"
-          aria-label="Fermer le menu"
+      {/* Resize handle (desktop only) — drag to stretch the nav */}
+      <div
+        onMouseDown={startResize}
+        className="absolute inset-y-0 right-0 hidden w-1.5 cursor-col-resize hover:bg-white/20 lg:block"
+        aria-label="Redimensionner le menu"
+      />
+
+      {/* Top bar: profile photo + settings (-> profile page), mobile close */}
+      <div className="mb-4 flex items-center justify-between px-1">
+        <Link
+          href="/accountant/profile"
+          onClick={nav}
+          className="flex min-w-0 items-center gap-2 rounded-lg p-1 hover:bg-white/10"
+          title="Mon profil"
         >
-          <X size={20} />
-        </button>
+          {user?.photo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={user.photo}
+              alt={user.username}
+              className="h-9 w-9 shrink-0 rounded-full object-cover"
+            />
+          ) : (
+            <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-white/15 text-xs font-semibold">
+              {user?.username?.slice(0, 2).toUpperCase()}
+            </span>
+          )}
+          <span className="truncate text-sm font-medium">{user?.username}</span>
+        </Link>
+        <div className="flex items-center gap-1">
+          <Link
+            href="/accountant/profile"
+            onClick={nav}
+            className="rounded-lg p-1.5 text-white/70 hover:bg-white/10"
+            aria-label={t("settings")}
+          >
+            <Settings size={18} />
+          </Link>
+          {/* Close button (mobile only) */}
+          <button
+            onClick={onClose}
+            className="rounded-lg p-1.5 text-white/70 hover:bg-white/10 lg:hidden"
+            aria-label="Fermer le menu"
+          >
+            <X size={20} />
+          </button>
+        </div>
       </div>
-      <div className="mb-6 px-2">
+
+      <div className="mb-6 px-1">
+        <div className="text-lg font-bold">{t("appName")}</div>
         {entrepriseName && (
           <div className="mt-1 rounded-lg bg-white/10 px-3 py-2 text-sm">
             <div className="font-semibold">{entrepriseName}</div>
@@ -225,7 +300,6 @@ export function Sidebar({
       <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
         {/* Language switcher — lives only in the left navigation */}
         <LanguageToggle className="text-white" />
-        <div className="px-3 pt-1 text-sm text-white/70">{user?.username}</div>
         <button
           onClick={logout}
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-[16px] text-white/80 hover:bg-white/10"

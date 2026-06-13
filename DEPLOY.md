@@ -80,6 +80,7 @@ Push to `main` → both Render and Vercel auto-redeploy.
 | `WEBHOOK_URL` | your public Make/Integromat webhook |
 | `CORS_ALLOWED_ORIGINS` | your Vercel URL |
 | `ALLOWED_HOSTS` | optional (Render host auto-added) |
+| `CLOUDINARY_URL` | `cloudinary://<key>:<secret>@<cloud_name>` (persistent image storage) |
 
 ### Vercel (frontend)
 | Key | Value |
