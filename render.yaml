@@ -13,7 +13,8 @@ services:
       python manage.py collectstatic --noinput &&
       python manage.py migrate &&
       python manage.py seed
-    startCommand: gunicorn smartcompta.wsgi --bind 0.0.0.0:$PORT
+    # --timeout 320: vision extraction can be slow; keep above WEBHOOK_TIMEOUT.
+    startCommand: gunicorn smartcompta.wsgi --bind 0.0.0.0:$PORT --timeout 320
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION

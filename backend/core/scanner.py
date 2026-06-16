@@ -172,7 +172,7 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
                     "image": public_url,
                     "filename": filename,
                 },
-                timeout=120,
+                timeout=settings.WEBHOOK_TIMEOUT,
             )
         elif mode == "base64":
             resp = requests.post(
@@ -181,14 +181,14 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
                     "image": _data_uri(image_bytes, image_base64, filename),
                     "filename": filename,
                 },
-                timeout=120,
+                timeout=settings.WEBHOOK_TIMEOUT,
             )
         elif image_bytes is not None:
             resp = requests.post(
-                url, files={"file": (filename, image_bytes)}, timeout=120
+                url, files={"file": (filename, image_bytes)}, timeout=settings.WEBHOOK_TIMEOUT
             )
         else:
-            resp = requests.post(url, json={"image": image_base64}, timeout=120)
+            resp = requests.post(url, json={"image": image_base64}, timeout=settings.WEBHOOK_TIMEOUT)
         resp.raise_for_status()
     except requests.RequestException as exc:
         raise WebhookError(f"Échec de l'appel au webhook IA: {exc}") from exc

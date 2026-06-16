@@ -150,3 +150,6 @@ WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
 # How the image is sent to the webhook: "multipart" (binary file field) or
 # "base64" (JSON with a data: URI — easiest for LLM vision modules to consume).
 WEBHOOK_IMAGE_MODE = os.getenv("WEBHOOK_IMAGE_MODE", "multipart").lower()
+# Seconds to wait for the AI webhook to return the extraction (vision models
+# can be slow). Keep below gunicorn's --timeout so the worker isn't killed.
+WEBHOOK_TIMEOUT = int(os.getenv("WEBHOOK_TIMEOUT", "300"))

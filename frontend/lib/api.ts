@@ -33,18 +33,43 @@ export class ApiError extends Error {
 
 async function request<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit & { timeoutMs?: number } = {}
 ): Promise<T> {
+  const { timeoutMs, ...init } = options;
   const token = getToken();
   const headers: Record<string, string> = {
-    ...(options.body && !(options.body instanceof FormData)
+    ...(init.body && !(init.body instanceof FormData)
       ? { "Content-Type": "application/json" }
       : {}),
-    ...(options.headers as Record<string, string>),
+    ...(init.headers as Record<string, string>),
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  // Long operations (AI extraction) get a generous timeout via AbortController
+  // so a slow webhook gives a clear message instead of a raw "Load failed".
+  const controller = timeoutMs ? new AbortController() : undefined;
+  const timer = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : undefined;
+
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers,
+      signal: controller?.signal,
+    });
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") {
+      throw new ApiError(
+        408,
+        "L'extraction a pris trop de temps. Réessayez ou utilisez une image plus nette."
+      );
+    }
+    throw new ApiError(0, "Connexion au serveur impossible. Vérifiez votre réseau.");
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 
   if (res.status === 204) return undefined as T;
 
@@ -85,10 +110,11 @@ function extractErrorMessage(data: unknown, status: number): string {
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) =>
+  post: <T>(path: string, body?: unknown, opts?: { timeoutMs?: number }) =>
     request<T>(path, {
       method: "POST",
       body: body instanceof FormData ? body : JSON.stringify(body ?? {}),
+      ...opts,
     }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: JSON.stringify(body ?? {}) }),
@@ -119,5 +145,6 @@ export async function scannerUpload(
 
   const form = new FormData();
   form.append("file", file);
-  return api.post("/api/scanner/upload/", form);
+  // Vision extraction can take a while — wait up to ~5 minutes.
+  return api.post("/api/scanner/upload/", form, { timeoutMs: 320_000 });
 }
