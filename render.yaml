@@ -28,6 +28,8 @@ services:
       # Set these in the Render dashboard after the frontend is deployed:
       - key: WEBHOOK_URL
         sync: false                # your PUBLIC Make/Integromat webhook URL
+      - key: WEBHOOK_IMAGE_MODE
+        value: "base64"            # base64 data URI (works with the vision scenario)
       - key: CORS_ALLOWED_ORIGINS
         sync: false                # https://your-app.vercel.app
       - key: ALLOWED_HOSTS

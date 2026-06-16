@@ -1,5 +1,6 @@
 "use client";
 
+import { compressImage } from "./image";
 import { AIExtraction } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -100,11 +101,14 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
-/** Upload an invoice image to the Django scanner bridge (which calls the AI). */
+/** Upload an invoice image to the Django scanner bridge (which calls the AI).
+ * The image is downscaled/compressed first so it stays under the webhook's
+ * 5 MB limit and the vision model responds faster. */
 export async function scannerUpload(
   file: File
 ): Promise<{ data: AIExtraction; erreurs: string[]; confiance: number }> {
+  const compressed = await compressImage(file);
   const form = new FormData();
-  form.append("file", file);
+  form.append("file", compressed);
   return api.post("/api/scanner/upload/", form);
 }

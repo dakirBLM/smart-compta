@@ -1,6 +1,8 @@
 """Scanner bridge: forwards an invoice image to the AI WEBHOOK_URL and
 persists the confirmed extraction as an Ecriture + LigneEcriture set."""
+import base64
 import json
+import mimetypes
 import re
 from datetime import datetime
 
@@ -30,13 +32,42 @@ class WebhookError(Exception):
     pass
 
 
+def _data_uri(image_bytes, image_base64, filename):
+    """Build a `data:<mime>;base64,<data>` URI — the format LLM vision models
+    accept directly in an image_url field."""
+    if image_bytes is not None:
+        mime = mimetypes.guess_type(filename)[0] or "image/jpeg"
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    # image_base64 may already be a full data URI or just the raw base64.
+    s = str(image_base64 or "")
+    return s if s.startswith("data:") else f"data:image/jpeg;base64,{s}"
+
+
 def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
-    """Send the image to the configured AI webhook and return its JSON."""
+    """Send the image to the configured AI webhook and return its JSON.
+
+    WEBHOOK_IMAGE_MODE controls the wire format the scenario receives:
+      - "multipart" (default): multipart/form-data with a binary `file` field.
+      - "base64": JSON {"image": "data:<mime>;base64,...", "filename": ...} —
+        the data URI drops straight into an LLM vision image_url field.
+    Switch via the env var to match how your Make/Integromat scenario reads it.
+    """
     url = settings.WEBHOOK_URL
     if not url:
         raise WebhookError("WEBHOOK_URL n'est pas configuré sur le serveur.")
+    mode = getattr(settings, "WEBHOOK_IMAGE_MODE", "multipart")
     try:
-        if image_bytes is not None:
+        if mode == "base64":
+            resp = requests.post(
+                url,
+                json={
+                    "image": _data_uri(image_bytes, image_base64, filename),
+                    "filename": filename,
+                },
+                timeout=120,
+            )
+        elif image_bytes is not None:
             resp = requests.post(
                 url, files={"file": (filename, image_bytes)}, timeout=120
             )

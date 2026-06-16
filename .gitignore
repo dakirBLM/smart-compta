@@ -15,3 +15,6 @@ frontend/.env.local
 
 # OS
 .DS_Store
+
+# Test artifacts (sample invoices, scans)
+*.pdf

@@ -147,3 +147,6 @@ if DEBUG:
 
 # AI extraction webhook used by the scanner bridge.
 WEBHOOK_URL = os.getenv("WEBHOOK_URL", "")
+# How the image is sent to the webhook: "multipart" (binary file field) or
+# "base64" (JSON with a data: URI — easiest for LLM vision modules to consume).
+WEBHOOK_IMAGE_MODE = os.getenv("WEBHOOK_IMAGE_MODE", "multipart").lower()
