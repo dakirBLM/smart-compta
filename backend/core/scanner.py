@@ -3,6 +3,7 @@ persists the confirmed extraction as an Ecriture + LigneEcriture set."""
 import base64
 import json
 import mimetypes
+import os
 import re
 from datetime import datetime
 
@@ -32,10 +33,15 @@ class WebhookError(Exception):
     pass
 
 
-# Max bytes the AI webhook (Make) accepts. We keep the sent image safely under.
-WEBHOOK_MAX_BYTES = 4_500_000
 # Reject absurdly large PDF uploads before we even try to render them.
 MAX_PDF_BYTES = 20 * 1024 * 1024
+
+
+def _webhook_max_bytes():
+    """Largest raw image we may send. Make caps an input value at 5 MB; in
+    base64 mode the encoded string is ~33% bigger, so target ~3.6 MB raw."""
+    mode = getattr(settings, "WEBHOOK_IMAGE_MODE", "multipart")
+    return 3_600_000 if mode == "base64" else 4_800_000
 
 
 def pdf_to_jpeg(pdf_bytes):
@@ -67,6 +73,7 @@ def pdf_to_jpeg(pdf_bytes):
 
     import io
 
+    max_bytes = _webhook_max_bytes()
     # Try progressively lower resolution / quality until it fits under the cap.
     for dpi in (170, 140, 110, 90, 72):
         pages = []
@@ -85,7 +92,7 @@ def pdf_to_jpeg(pdf_bytes):
         for quality in (85, 75, 65, 55, 45):
             buf = io.BytesIO()
             combined.save(buf, "JPEG", quality=quality)
-            if buf.tell() <= WEBHOOK_MAX_BYTES:
+            if buf.tell() <= max_bytes:
                 return buf.getvalue()
 
     raise WebhookError(
@@ -106,13 +113,46 @@ def _data_uri(image_bytes, image_base64, filename):
     return s if s.startswith("data:") else f"data:image/jpeg;base64,{s}"
 
 
+def _bytes_from(image_bytes, image_base64):
+    """Return raw image bytes from either source (decoding a base64/data URI)."""
+    if image_bytes is not None:
+        return image_bytes
+    s = str(image_base64 or "")
+    if s.startswith("data:"):
+        s = s.split(",", 1)[-1]
+    return base64.b64decode(s)
+
+
+def _upload_public_url(image_bytes, filename):
+    """Upload the image to Cloudinary and return a public URL the AI module can
+    fetch (for a `file_input` / `file_url` parameter)."""
+    try:
+        import cloudinary.uploader
+    except ImportError as exc:  # pragma: no cover
+        raise WebhookError("Cloudinary n'est pas installé sur le serveur.") from exc
+    if not os.getenv("CLOUDINARY_URL"):
+        raise WebhookError(
+            "CLOUDINARY_URL n'est pas configuré : impossible de générer une URL "
+            "publique pour l'image."
+        )
+    try:
+        res = cloudinary.uploader.upload(
+            image_bytes, folder="scanner", resource_type="image"
+        )
+        return res["secure_url"]
+    except Exception as exc:
+        raise WebhookError(f"Échec de l'envoi de l'image vers Cloudinary: {exc}") from exc
+
+
 def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
     """Send the image to the configured AI webhook and return its JSON.
 
     WEBHOOK_IMAGE_MODE controls the wire format the scenario receives:
-      - "multipart" (default): multipart/form-data with a binary `file` field.
-      - "base64": JSON {"image": "data:<mime>;base64,...", "filename": ...} —
-        the data URI drops straight into an LLM vision image_url field.
+      - "url" (recommended): upload the image to Cloudinary and POST a public
+        URL as JSON {"image_url", "file_url", "image", "filename"} — map any of
+        these to the AI module's `file_input` / `file_url` parameter.
+      - "base64": JSON {"image": "data:<mime>;base64,...", "filename": ...}.
+      - "multipart": multipart/form-data with a binary `file` field.
     Switch via the env var to match how your Make/Integromat scenario reads it.
     """
     url = settings.WEBHOOK_URL
@@ -120,7 +160,21 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
         raise WebhookError("WEBHOOK_URL n'est pas configuré sur le serveur.")
     mode = getattr(settings, "WEBHOOK_IMAGE_MODE", "multipart")
     try:
-        if mode == "base64":
+        if mode == "url":
+            public_url = _upload_public_url(
+                _bytes_from(image_bytes, image_base64), filename
+            )
+            resp = requests.post(
+                url,
+                json={
+                    "image_url": public_url,
+                    "file_url": public_url,
+                    "image": public_url,
+                    "filename": filename,
+                },
+                timeout=120,
+            )
+        elif mode == "base64":
             resp = requests.post(
                 url,
                 json={

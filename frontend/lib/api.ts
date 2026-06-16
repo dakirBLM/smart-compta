@@ -1,6 +1,5 @@
 "use client";
 
-import { compressImage } from "./image";
 import { AIExtraction } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -101,41 +100,24 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
-const WEBHOOK_MAX_BYTES = 5_000_000; // Make webhook hard limit
-const MAX_PDF_BYTES = 20 * 1024 * 1024; // reject oversized PDF imports early
+const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB — the AI webhook's hard limit
 
-/** Upload an invoice (image OR PDF) to the Django scanner bridge.
- * - Images are downscaled/compressed; if still > 5 MB after compression we
- *   refuse rather than let the webhook 413.
- * - PDFs are sent as-is (the backend renders all pages to one image). We only
- *   block PDFs over 20 MB up front. */
+/** Upload an invoice (image or PDF) to the Django scanner bridge.
+ * The file is sent AS-IS (no compression). Anything over 5 MB is blocked up
+ * front with a clear message, since the AI webhook rejects larger payloads. */
 export async function scannerUpload(
   file: File
 ): Promise<{ data: AIExtraction; erreurs: string[]; confiance: number }> {
-  const isPdf =
-    file.type === "application/pdf" ||
-    file.name.toLowerCase().endsWith(".pdf");
-
-  let toSend = file;
-  if (isPdf) {
-    if (file.size > MAX_PDF_BYTES) {
-      throw new ApiError(
-        413,
-        "PDF trop volumineux (max 20 Mo). Réduisez la taille du fichier."
-      );
-    }
-  } else {
-    toSend = await compressImage(file);
-    if (toSend.size > WEBHOOK_MAX_BYTES) {
-      throw new ApiError(
-        413,
-        "Image trop volumineuse même après compression (> 5 Mo). " +
-          "Utilisez une photo plus petite."
-      );
-    }
+  if (file.size > MAX_UPLOAD_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    throw new ApiError(
+      413,
+      `Fichier trop volumineux (${mb} Mo). La taille maximale est de 5 Mo — ` +
+        "veuillez utiliser une photo ou un fichier plus léger."
+    );
   }
 
   const form = new FormData();
-  form.append("file", toSend);
+  form.append("file", file);
   return api.post("/api/scanner/upload/", form);
 }
