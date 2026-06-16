@@ -101,14 +101,41 @@ export const api = {
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
 
-/** Upload an invoice image to the Django scanner bridge (which calls the AI).
- * The image is downscaled/compressed first so it stays under the webhook's
- * 5 MB limit and the vision model responds faster. */
+const WEBHOOK_MAX_BYTES = 5_000_000; // Make webhook hard limit
+const MAX_PDF_BYTES = 20 * 1024 * 1024; // reject oversized PDF imports early
+
+/** Upload an invoice (image OR PDF) to the Django scanner bridge.
+ * - Images are downscaled/compressed; if still > 5 MB after compression we
+ *   refuse rather than let the webhook 413.
+ * - PDFs are sent as-is (the backend renders all pages to one image). We only
+ *   block PDFs over 20 MB up front. */
 export async function scannerUpload(
   file: File
 ): Promise<{ data: AIExtraction; erreurs: string[]; confiance: number }> {
-  const compressed = await compressImage(file);
+  const isPdf =
+    file.type === "application/pdf" ||
+    file.name.toLowerCase().endsWith(".pdf");
+
+  let toSend = file;
+  if (isPdf) {
+    if (file.size > MAX_PDF_BYTES) {
+      throw new ApiError(
+        413,
+        "PDF trop volumineux (max 20 Mo). Réduisez la taille du fichier."
+      );
+    }
+  } else {
+    toSend = await compressImage(file);
+    if (toSend.size > WEBHOOK_MAX_BYTES) {
+      throw new ApiError(
+        413,
+        "Image trop volumineuse même après compression (> 5 Mo). " +
+          "Utilisez une photo plus petite."
+      );
+    }
+  }
+
   const form = new FormData();
-  form.append("file", compressed);
+  form.append("file", toSend);
   return api.post("/api/scanner/upload/", form);
 }

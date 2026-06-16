@@ -32,6 +32,68 @@ class WebhookError(Exception):
     pass
 
 
+# Max bytes the AI webhook (Make) accepts. We keep the sent image safely under.
+WEBHOOK_MAX_BYTES = 4_500_000
+# Reject absurdly large PDF uploads before we even try to render them.
+MAX_PDF_BYTES = 20 * 1024 * 1024
+
+
+def pdf_to_jpeg(pdf_bytes):
+    """Render ALL pages of a PDF into a single stacked JPEG so the vision model
+    receives the whole document (not just page 1). All-or-nothing: if the
+    combined image cannot be compressed under the webhook's 5 MB limit, raise —
+    we never silently drop pages.
+
+    Used for PC imports where users upload a PDF instead of taking a photo.
+    """
+    if len(pdf_bytes) > MAX_PDF_BYTES:
+        raise WebhookError(
+            "PDF trop volumineux (max 20 Mo). Réduisez la taille du fichier."
+        )
+    try:
+        import fitz  # PyMuPDF
+        from PIL import Image
+    except ImportError as exc:  # pragma: no cover
+        raise WebhookError(
+            "Le support PDF n'est pas installé sur le serveur (PyMuPDF/Pillow)."
+        ) from exc
+
+    try:
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    except Exception as exc:
+        raise WebhookError(f"Impossible de lire le PDF: {exc}") from exc
+    if doc.page_count == 0:
+        raise WebhookError("Le PDF est vide.")
+
+    import io
+
+    # Try progressively lower resolution / quality until it fits under the cap.
+    for dpi in (170, 140, 110, 90, 72):
+        pages = []
+        for page in doc:
+            pix = page.get_pixmap(dpi=dpi)
+            pages.append(
+                Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            )
+        width = max(p.width for p in pages)
+        total_h = sum(p.height for p in pages)
+        combined = Image.new("RGB", (width, total_h), "white")
+        y = 0
+        for p in pages:
+            combined.paste(p, (0, y))
+            y += p.height
+        for quality in (85, 75, 65, 55, 45):
+            buf = io.BytesIO()
+            combined.save(buf, "JPEG", quality=quality)
+            if buf.tell() <= WEBHOOK_MAX_BYTES:
+                return buf.getvalue()
+
+    raise WebhookError(
+        "Le PDF dépasse 5 Mo même après compression. Réduisez le nombre de "
+        "pages ou la résolution du document."
+    )
+
+
 def _data_uri(image_bytes, image_base64, filename):
     """Build a `data:<mime>;base64,<data>` URI — the format LLM vision models
     accept directly in an image_url field."""

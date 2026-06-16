@@ -5,8 +5,10 @@ import {
   Camera,
   CheckCircle2,
   Circle,
+  FileText,
   Plus,
   RotateCcw,
+  Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";
 import { Button, Card, Spinner } from "@/components/ui";
@@ -43,6 +45,7 @@ const STEPS: {
 export function ClientScanner() {
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<Phase>("capture");
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -51,10 +54,21 @@ export function ClientScanner() {
   const [errors, setErrors] = useState<string[]>([]);
   const [result, setResult] = useState<AIExtraction | null>(null);
 
+  const isPdf =
+    !!file &&
+    (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
     setFile(f);
+    const pdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+    if (pdf) {
+      // PDFs skip the image quality check (backend renders all pages).
+      setPreview(null);
+      setQuality({ ok: true });
+      return;
+    }
     const url = URL.createObjectURL(f);
     setPreview(url);
     const img = new Image();
@@ -212,8 +226,21 @@ export function ClientScanner() {
         className="hidden"
         onChange={onPick}
       />
+      <input
+        ref={importRef}
+        type="file"
+        accept="image/*,application/pdf"
+        className="hidden"
+        onChange={onPick}
+      />
       {preview ? (
         <img src={preview} alt="facture" className="mx-auto mb-4 max-h-80 rounded-lg" />
+      ) : file && isPdf ? (
+        <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed text-brand">
+          <FileText size={48} />
+          <p className="mt-2 max-w-xs truncate px-4 text-sm">{file.name}</p>
+          <p className="text-xs text-gray-400">PDF — toutes les pages seront analysées</p>
+        </div>
       ) : (
         <div
           onClick={() => inputRef.current?.click()}
@@ -235,9 +262,12 @@ export function ClientScanner() {
         </p>
       )}
 
-      <div className="flex justify-center gap-2">
+      <div className="flex flex-wrap justify-center gap-2">
         <Button variant="outline" onClick={() => inputRef.current?.click()}>
           <Camera size={16} /> {t("prendrePhoto")}
+        </Button>
+        <Button variant="outline" onClick={() => importRef.current?.click()}>
+          <Upload size={16} /> Importer (PDF/Image)
         </Button>
         <Button
           variant="success"

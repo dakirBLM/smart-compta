@@ -23,7 +23,13 @@ from .reports import (
     build_dashboard,
     build_grand_livre,
 )
-from .scanner import WebhookError, call_webhook, persist_extraction, validate_extraction
+from .scanner import (
+    WebhookError,
+    call_webhook,
+    pdf_to_jpeg,
+    persist_extraction,
+    validate_extraction,
+)
 from .serializers import (
     ClientAccessSerializer,
     CreateClientSerializer,
@@ -236,7 +242,20 @@ class ScannerUploadView(APIView):
         try:
             if "file" in request.FILES:
                 f = request.FILES["file"]
-                data = call_webhook(image_bytes=f.read(), filename=f.name)
+                raw = f.read()
+                name = (f.name or "").lower()
+                is_pdf = (
+                    f.content_type == "application/pdf"
+                    or name.endswith(".pdf")
+                    or raw[:5] == b"%PDF-"
+                )
+                if is_pdf:
+                    # PC import: render ALL pages of the PDF into one image so
+                    # the vision model receives the whole document.
+                    raw = pdf_to_jpeg(raw)
+                    data = call_webhook(image_bytes=raw, filename="facture.jpg")
+                else:
+                    data = call_webhook(image_bytes=raw, filename=f.name)
             else:
                 image_b64 = request.data.get("image")
                 if not image_b64:

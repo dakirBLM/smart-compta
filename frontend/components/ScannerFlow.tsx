@@ -1,6 +1,14 @@
 "use client";
 
-import { Camera, CheckCircle2, Circle, Pencil, RotateCcw } from "lucide-react";
+import {
+  Camera,
+  CheckCircle2,
+  Circle,
+  FileText,
+  Pencil,
+  RotateCcw,
+  Upload,
+} from "lucide-react";
 import { useRef, useState } from "react";
 import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
@@ -28,12 +36,20 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
   const [stepDone, setStepDone] = useState(0);
   const [error, setError] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
+
+  const isPdf =
+    !!file &&
+    (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
 
   function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    setError("");
     setFile(f);
-    setPreview(URL.createObjectURL(f));
+    // PDFs can't be shown in an <img>; we show a file card instead.
+    const pdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
+    setPreview(pdf ? null : URL.createObjectURL(f));
   }
 
   async function send() {
@@ -83,6 +99,7 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
   if (phase === "capture")
     return (
       <Card className="mx-auto max-w-xl text-center">
+        {/* Camera (mobile) */}
         <input
           ref={inputRef}
           type="file"
@@ -91,8 +108,22 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
           className="hidden"
           onChange={pickFile}
         />
+        {/* PC import — images AND PDFs, no camera */}
+        <input
+          ref={importRef}
+          type="file"
+          accept="image/*,application/pdf"
+          className="hidden"
+          onChange={pickFile}
+        />
         {preview ? (
           <img src={preview} alt="facture" className="mx-auto mb-4 max-h-80 rounded-lg" />
+        ) : file && isPdf ? (
+          <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed text-brand">
+            <FileText size={48} />
+            <p className="mt-2 max-w-xs truncate px-4 text-sm">{file.name}</p>
+            <p className="text-xs text-gray-400">PDF — toutes les pages seront analysées</p>
+          </div>
         ) : (
           <div
             onClick={() => inputRef.current?.click()}
@@ -103,9 +134,12 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
           </div>
         )}
         {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-        <div className="flex justify-center gap-2">
+        <div className="flex flex-wrap justify-center gap-2">
           <Button variant="outline" onClick={() => inputRef.current?.click()}>
             <Camera size={16} /> {t("prendrePhoto")}
+          </Button>
+          <Button variant="outline" onClick={() => importRef.current?.click()}>
+            <Upload size={16} /> Importer (PDF/Image)
           </Button>
           <Button variant="success" onClick={send} disabled={!file}>
             {t("envoyer")}
