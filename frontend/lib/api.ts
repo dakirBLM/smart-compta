@@ -132,7 +132,8 @@ const MAX_UPLOAD_BYTES = 5 * 1024 * 1024; // 5 MB — the AI webhook's hard limi
  * The file is sent AS-IS (no compression). Anything over 5 MB is blocked up
  * front with a clear message, since the AI webhook rejects larger payloads. */
 export async function scannerUpload(
-  file: File
+  file: File,
+  entrepriseId?: number
 ): Promise<{ data: AIExtraction; erreurs: string[]; confiance: number }> {
   if (file.size > MAX_UPLOAD_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(1);
@@ -145,6 +146,8 @@ export async function scannerUpload(
 
   const form = new FormData();
   form.append("file", file);
+  // Company id lets the backend tell the AI who is scanning (sale vs purchase).
+  if (entrepriseId) form.append("entreprise", String(entrepriseId));
   // Vision extraction can take a while — wait up to ~5 minutes.
   return api.post("/api/scanner/upload/", form, { timeoutMs: 320_000 });
 }

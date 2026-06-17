@@ -144,8 +144,12 @@ def _upload_public_url(image_bytes, filename):
         raise WebhookError(f"Échec de l'envoi de l'image vers Cloudinary: {exc}") from exc
 
 
-def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
+def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg", context=None):
     """Send the image to the configured AI webhook and return its JSON.
+
+    `context` (e.g. {entreprise_nom, entreprise_nif}) is forwarded so the AI can
+    classify the journal (Achats vs Ventes) by checking whether the scanning
+    company is the invoice's issuer (sale) or recipient (purchase).
 
     WEBHOOK_IMAGE_MODE controls the wire format the scenario receives:
       - "url" (recommended): upload the image to Cloudinary and POST a public
@@ -159,6 +163,7 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
     if not url:
         raise WebhookError("WEBHOOK_URL n'est pas configuré sur le serveur.")
     mode = getattr(settings, "WEBHOOK_IMAGE_MODE", "multipart")
+    ctx = context or {}
     try:
         if mode == "url":
             public_url = _upload_public_url(
@@ -171,6 +176,7 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
                     "file_url": public_url,
                     "image": public_url,
                     "filename": filename,
+                    **ctx,
                 },
                 timeout=settings.WEBHOOK_TIMEOUT,
             )
@@ -180,15 +186,21 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
                 json={
                     "image": _data_uri(image_bytes, image_base64, filename),
                     "filename": filename,
+                    **ctx,
                 },
                 timeout=settings.WEBHOOK_TIMEOUT,
             )
         elif image_bytes is not None:
             resp = requests.post(
-                url, files={"file": (filename, image_bytes)}, timeout=settings.WEBHOOK_TIMEOUT
+                url,
+                files={"file": (filename, image_bytes)},
+                data=ctx,
+                timeout=settings.WEBHOOK_TIMEOUT,
             )
         else:
-            resp = requests.post(url, json={"image": image_base64}, timeout=settings.WEBHOOK_TIMEOUT)
+            resp = requests.post(
+                url, json={"image": image_base64, **ctx}, timeout=settings.WEBHOOK_TIMEOUT
+            )
     except requests.Timeout as exc:
         raise WebhookError(
             "L'IA met trop de temps à répondre. Veuillez réessayer dans quelques instants."

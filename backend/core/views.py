@@ -238,7 +238,23 @@ class ScannerUploadView(APIView):
 
     permission_classes = [IsAuthenticated]
 
+    def _entreprise_context(self, request):
+        """Identify the scanning company so the AI can tell a sale from a
+        purchase (is the company the issuer or the recipient of the invoice?)."""
+        ent = None
+        eid = request.data.get("entreprise")
+        if request.user.role == "accountant" and eid:
+            ent = Entreprise.objects.filter(id=eid, accountant=request.user).first()
+        elif request.user.role == "client":
+            access = (ClientAccess.objects.filter(client=request.user)
+                      .select_related("entreprise").first())
+            ent = access.entreprise if access else None
+        if not ent:
+            return {}
+        return {"entreprise_nom": ent.nom, "entreprise_nif": ent.nif}
+
     def post(self, request):
+        ctx = self._entreprise_context(request)
         try:
             if "file" in request.FILES:
                 f = request.FILES["file"]
@@ -253,15 +269,15 @@ class ScannerUploadView(APIView):
                     # PC import: render ALL pages of the PDF into one image so
                     # the vision model receives the whole document.
                     raw = pdf_to_jpeg(raw)
-                    data = call_webhook(image_bytes=raw, filename="facture.jpg")
+                    data = call_webhook(image_bytes=raw, filename="facture.jpg", context=ctx)
                 else:
-                    data = call_webhook(image_bytes=raw, filename=f.name)
+                    data = call_webhook(image_bytes=raw, filename=f.name, context=ctx)
             else:
                 image_b64 = request.data.get("image")
                 if not image_b64:
                     return Response({"error": "Aucune image fournie."},
                                     status=status.HTTP_400_BAD_REQUEST)
-                data = call_webhook(image_base64=image_b64)
+                data = call_webhook(image_base64=image_b64, context=ctx)
         except WebhookError as exc:
             return Response({"error": str(exc)},
                             status=status.HTTP_502_BAD_GATEWAY)

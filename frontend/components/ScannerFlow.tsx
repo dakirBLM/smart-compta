@@ -74,7 +74,7 @@ export function ScannerFlow({
     // Animate the visible step checklist while waiting for the webhook.
     const timer = setInterval(() => setStepDone((s) => Math.min(s + 1, 3)), 700);
     try {
-      const res = await scannerUpload(file);
+      const res = await scannerUpload(file, entrepriseId);
       clearInterval(timer);
       setStepDone(4);
       setExtraction(res.data);
