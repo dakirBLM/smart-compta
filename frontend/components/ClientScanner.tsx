@@ -91,19 +91,29 @@ export function ClientScanner() {
       const data = res.data;
       const confiance = Number(res.confiance ?? data?.confiance ?? 0);
 
-      // 2) Collect every reason the result is NOT good.
-      const problems: string[] = [...(res.erreurs ?? [])];
-      if (!data) problems.push("Aucune donnée renvoyée par l'IA.");
-      if (data?.lignes?.length) {
-        const totals = sumLignes(data.lignes);
-        if (!totals.balanced) problems.push(t("debitCreditError"));
+      // 2) Block only on REAL problems (unreadable / low confidence / broken
+      //    accounting), not on the AI's explanatory notes in `erreurs`.
+      const totals = data?.lignes?.length
+        ? sumLignes(data.lignes)
+        : { debit: 0, credit: 0, balanced: true };
+      const hasAmounts = totals.debit > 0.009 || totals.credit > 0.009;
+      const problems: string[] = [];
+      if (!data) {
+        problems.push("Aucune donnée renvoyée par l'IA.");
+      } else {
+        if (confiance < 60)
+          problems.push(
+            confiance > 0
+              ? `Confiance trop faible (${confiance}%). ${t("qualiteInsuffisante")}`
+              : t("qualiteInsuffisante")
+          );
+        if (!hasAmounts)
+          problems.push(
+            "Aucun montant n'a pu être lu. Reprenez une photo plus nette."
+          );
+        if (data.lignes?.length && !totals.balanced)
+          problems.push(t("debitCreditError"));
       }
-      if (confiance > 0 && confiance < 60)
-        problems.push(
-          `Confiance trop faible (${confiance}%). ${t("qualiteInsuffisante")}`
-        );
-      if (confiance === 0 && problems.length === 0)
-        problems.push(t("qualiteInsuffisante"));
 
       // 3) If anything is wrong, tell the user exactly what — no false success.
       if (problems.length > 0) {

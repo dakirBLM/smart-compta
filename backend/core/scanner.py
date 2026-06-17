@@ -252,9 +252,11 @@ def _extract_json(text):
     return None
 
 
-def validate_extraction(data):
-    """Validate AI payload. Returns list of error strings (empty = ok)."""
-    errors = list(data.get("erreurs") or [])
+def blocking_errors(data):
+    """Hard accounting/structure problems that must prevent saving — does NOT
+    include the AI's `erreurs` notes (those are often just explanations, e.g.
+    'timbre fiscal ajouté', and must not block a balanced entry)."""
+    errors = []
     for field in REQUIRED_FIELDS:
         if field not in data:
             errors.append(f"Champ manquant: {field}")
@@ -262,13 +264,17 @@ def validate_extraction(data):
     if not lignes:
         errors.append("Aucune ligne d'écriture fournie.")
     else:
-        total_debit = sum(float(l.get("debit", 0)) for l in lignes)
-        total_credit = sum(float(l.get("credit", 0)) for l in lignes)
+        total_debit = sum(float(l.get("debit", 0) or 0) for l in lignes)
+        total_credit = sum(float(l.get("credit", 0) or 0) for l in lignes)
         if abs(total_debit - total_credit) > 0.01:
-            errors.append(
-                f"Débit ({total_debit}) ≠ Crédit ({total_credit})."
-            )
+            errors.append(f"Débit ({total_debit}) ≠ Crédit ({total_credit}).")
     return errors
+
+
+def validate_extraction(data):
+    """Errors for DISPLAY in the review screen: the AI's own notes/errors plus
+    the structural checks. Shown to the user but not all blocking."""
+    return list(data.get("erreurs") or []) + blocking_errors(data)
 
 
 def _parse_date(value):
@@ -282,8 +288,9 @@ def _parse_date(value):
 
 @transaction.atomic
 def persist_extraction(entreprise, data, source="scanner"):
-    """Create an Ecriture (+ lignes) in the right journal from AI data."""
-    errors = validate_extraction(data)
+    """Create an Ecriture (+ lignes) in the right journal from AI data.
+    Blocks only on real accounting/structure errors, not AI explanatory notes."""
+    errors = blocking_errors(data)
     if errors:
         raise WebhookError("; ".join(errors))
 

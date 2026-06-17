@@ -5,6 +5,7 @@ import {
   Book,
   Building2,
   ChevronDown,
+  ChevronRight,
   FileText,
   FolderOpen,
   LayoutDashboard,
@@ -17,7 +18,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
@@ -26,6 +27,8 @@ import { cn } from "@/lib/utils";
 const MIN_WIDTH = 220;
 const MAX_WIDTH = 460;
 const DEFAULT_WIDTH = 256;
+// Drag the edge left of this (px from screen left) and the nav collapses away.
+const COLLAPSE_AT = 150;
 
 const JOURNAL_TYPES: { key: string; label: string }[] = [
   { key: "achat", label: "Achat" },
@@ -81,37 +84,72 @@ export function Sidebar({
   const pathname = usePathname();
   const [journalOpen, setJournalOpen] = useState(pathname.includes("/journaux"));
 
-  // Resizable width (drag the right edge). Persisted in localStorage.
+  // Resizable + collapsible nav. Drag the right edge to resize; drag past the
+  // left limit to collapse it away (a thin handle then lets you bring it back).
   const [width, setWidth] = useState(DEFAULT_WIDTH);
-  const dragging = useRef(false);
+  const [collapsed, setCollapsed] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
   useEffect(() => {
     const saved = Number(window.localStorage.getItem("sidebarWidth"));
     if (saved >= MIN_WIDTH && saved <= MAX_WIDTH) setWidth(saved);
+    setCollapsed(window.localStorage.getItem("sidebarCollapsed") === "1");
   }, []);
 
-  const startResize = useCallback((e: React.MouseEvent) => {
-    e.preventDefault();
-    dragging.current = true;
+  const beginDrag = useCallback((fromCollapsed: boolean) => {
+    setIsDragging(true);
+    let expanded = !fromCollapsed;
     const onMove = (ev: MouseEvent) => {
-      if (!dragging.current) return;
-      const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, ev.clientX));
+      const x = ev.clientX;
+      if (x < COLLAPSE_AT) {
+        // Dragged past the left limit → animate away.
+        setCollapsed(true);
+        window.localStorage.setItem("sidebarCollapsed", "1");
+        finish();
+        return;
+      }
+      expanded = true;
+      setCollapsed(false);
+      window.localStorage.setItem("sidebarCollapsed", "0");
+      const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, x));
       setWidth(w);
+      window.localStorage.setItem("sidebarWidth", String(w));
     };
-    const onUp = () => {
-      dragging.current = false;
+    const finish = () => {
       document.removeEventListener("mousemove", onMove);
       document.removeEventListener("mouseup", onUp);
       document.body.style.userSelect = "";
-      setWidth((w) => {
-        window.localStorage.setItem("sidebarWidth", String(w));
-        return w;
-      });
+      setIsDragging(false);
+    };
+    const onUp = () => {
+      // A plain click on the collapsed handle re-opens to the default width.
+      if (fromCollapsed && !expanded) {
+        setCollapsed(false);
+        window.localStorage.setItem("sidebarCollapsed", "0");
+        setWidth(DEFAULT_WIDTH);
+        window.localStorage.setItem("sidebarWidth", String(DEFAULT_WIDTH));
+      }
+      finish();
     };
     document.body.style.userSelect = "none";
     document.addEventListener("mousemove", onMove);
     document.addEventListener("mouseup", onUp);
   }, []);
+
+  const startResize = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      beginDrag(false);
+    },
+    [beginDrag]
+  );
+  const startReopen = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      beginDrag(true);
+    },
+    [beginDrag]
+  );
 
   const base = entrepriseId
     ? `/accountant/entreprises/${entrepriseId}`
@@ -121,19 +159,35 @@ export function Sidebar({
   const nav = () => onClose?.();
 
   return (
-    <aside
-      style={{ width }}
-      className={cn(
-        "fixed inset-y-0 left-0 z-40 flex h-screen max-w-[85vw] flex-col bg-brand p-4 text-white transition-transform duration-200 lg:static lg:max-w-none lg:translate-x-0",
-        open ? "translate-x-0" : "-translate-x-full"
+    <>
+      {/* Collapsed: a thin handle — drag right or click to bring the nav back */}
+      {collapsed && (
+        <div
+          onMouseDown={startReopen}
+          title="Ouvrir le menu"
+          className="fixed inset-y-0 left-0 z-40 hidden w-2 cursor-col-resize bg-brand/40 hover:bg-brand lg:block"
+        >
+          <span className="absolute left-0 top-1/2 flex h-12 w-5 -translate-y-1/2 items-center justify-center rounded-r-md bg-brand text-white shadow">
+            <ChevronRight size={16} />
+          </span>
+        </div>
       )}
-    >
-      {/* Resize handle (desktop only) — drag to stretch the nav */}
-      <div
-        onMouseDown={startResize}
-        className="absolute inset-y-0 right-0 hidden w-1.5 cursor-col-resize hover:bg-white/20 lg:block"
-        aria-label="Redimensionner le menu"
-      />
+
+      <aside
+        style={collapsed ? undefined : { width }}
+        className={cn(
+          "fixed inset-y-0 left-0 z-40 flex h-screen w-64 max-w-[85vw] flex-col bg-brand p-4 text-white lg:static lg:max-w-none lg:translate-x-0",
+          isDragging ? "" : "transition-[width,transform] duration-200",
+          open ? "translate-x-0" : "-translate-x-full",
+          collapsed && "lg:!w-0 lg:!min-w-0 lg:!border-0 lg:!p-0 lg:overflow-hidden"
+        )}
+      >
+        {/* Resize handle (desktop only) — drag to stretch, or past the left to collapse */}
+        <div
+          onMouseDown={startResize}
+          className="absolute inset-y-0 right-0 hidden w-1.5 cursor-col-resize hover:bg-white/20 lg:block"
+          aria-label="Redimensionner le menu"
+        />
 
       {/* Top bar: profile photo + settings (-> profile page), mobile close */}
       <div className="mb-4 flex items-center justify-between px-1">
@@ -308,6 +362,7 @@ export function Sidebar({
           {t("logout")}
         </button>
       </div>
-    </aside>
+      </aside>
+    </>
   );
 }

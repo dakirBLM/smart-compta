@@ -15,7 +15,7 @@ export default function ScannerPage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      {id && <ScannerFlow entrepriseId={id} />}
+      {id && <ScannerFlow entrepriseId={id} annee={annee} />}
     </AppShell>
   );
 }

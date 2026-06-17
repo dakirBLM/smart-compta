@@ -11,7 +11,8 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useRef, useState } from "react";
 import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 import { api, scannerUpload } from "@/lib/api";
@@ -28,8 +29,18 @@ const STEPS: { key: string; labelKey: "lectureDocument" | "extractionInfos" | "a
   { key: "4", labelKey: "generationEcritures" },
 ];
 
-export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
+export function ScannerFlow({
+  entrepriseId,
+  annee,
+}: {
+  entrepriseId: number;
+  annee?: number;
+}) {
   const { t } = useI18n();
+  const router = useRouter();
+  const base = `/accountant/entreprises/${entrepriseId}`;
+  const qs = annee ? `?annee=${annee}` : "";
+  const [redirectIn, setRedirectIn] = useState(5);
   const [phase, setPhase] = useState<Phase>("capture");
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -100,7 +111,20 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
     setExtraction(null);
     setErreurs([]);
     setError("");
+    setRedirectIn(5);
   }
+
+  // After a successful save, count down and auto-return to the dashboard.
+  useEffect(() => {
+    if (phase !== "success") return;
+    setRedirectIn(5);
+    const tick = setInterval(() => setRedirectIn((n) => n - 1), 1000);
+    const go = setTimeout(() => router.push(`${base}/dashboard${qs}`), 5000);
+    return () => {
+      clearInterval(tick);
+      clearTimeout(go);
+    };
+  }, [phase, router, base, qs]);
 
   // ---- CAPTURE ----
   if (phase === "capture")
@@ -181,11 +205,18 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
     );
 
   // ---- SUCCESS ----
-  if (phase === "success" && extraction)
+  if (phase === "success" && extraction) {
+    const journalType =
+      ({ achats: "achat", ventes: "vente", banque: "banque", caisse: "caisse", od: "od" } as Record<string, string>)[
+        String(extraction.journal).toLowerCase()
+      ] || "achat";
     return (
       <Card className="mx-auto max-w-xl text-center">
         <CheckCircle2 className="mx-auto mb-3 text-success" size={56} />
-        <h2 className="mb-4 text-xl font-bold text-success">{t("operationValidee")}</h2>
+        <h2 className="mb-1 text-xl font-bold text-success">{t("operationValidee")}</h2>
+        <p className="mb-4 text-sm text-gray-500">
+          Retour au tableau de bord dans {redirectIn}s…
+        </p>
         <div className="mx-auto mb-6 max-w-sm space-y-1 text-left text-sm">
           <Info label={t("fournisseur")} value={extraction.fournisseur} />
           <Info label="Montant" value={formatDZD(extraction.montant_ttc)} />
@@ -193,20 +224,29 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
           <Info label={t("journaux")} value={extraction.journal} />
           <Info label={t("numeroPiece")} value={extraction.numero_facture} />
         </div>
-        <div className="flex justify-center gap-2">
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button onClick={() => router.push(`${base}/journaux/${journalType}${qs}`)}>
+            {t("voirOperation")}
+          </Button>
           <Button variant="outline" onClick={reset}>
             <RotateCcw size={16} /> {t("scannerAutre")}
           </Button>
         </div>
       </Card>
     );
+  }
 
   // ---- REVIEW / EDIT ----
   if (!extraction) return null;
   const level = confidenceLevel(extraction.confiance);
   const totals = sumLignes(extraction.lignes);
-  const blocked = erreurs.length > 0 || !totals.balanced;
-  const canConfirm = level === "green" && !blocked;
+  const hasAmounts = totals.debit > 0.009 || totals.credit > 0.009;
+  // A valid entry must balance and carry real amounts. AI "erreurs" are often
+  // just explanatory notes (e.g. "timbre fiscal ajouté"), so they no longer
+  // block a balanced entry — only a broken one (unbalanced / all-zero) does.
+  const valid = totals.balanced && hasAmounts;
+  const blocked = !valid;
+  const canConfirm = level === "green" && valid;
 
   const updateLigne = (i: number, patch: Partial<AIExtraction["lignes"][0]>) =>
     setExtraction({
@@ -243,11 +283,20 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
           </p>
         )}
         {erreurs.length > 0 && (
-          <ul className="mb-3 list-inside list-disc rounded-lg bg-red-50 p-3 text-sm text-danger">
-            {erreurs.map((e, i) => (
-              <li key={i}>{e}</li>
-            ))}
-          </ul>
+          <div
+            className={`mb-3 rounded-lg p-3 text-sm ${
+              valid ? "bg-amber-50 text-warning" : "bg-red-50 text-danger"
+            }`}
+          >
+            <div className="mb-1 font-semibold">
+              {valid ? "ℹ Remarques de l'IA" : "⛔ Problèmes à corriger"}
+            </div>
+            <ul className="list-inside list-disc">
+              {erreurs.map((e, i) => (
+                <li key={i}>{e}</li>
+              ))}
+            </ul>
+          </div>
         )}
 
         {phase === "edit" ? (
