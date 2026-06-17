@@ -6,7 +6,9 @@ import {
   Circle,
   FileText,
   Pencil,
+  Plus,
   RotateCcw,
+  Trash2,
   Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";
@@ -35,6 +37,7 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
   const [erreurs, setErreurs] = useState<string[]>([]);
   const [stepDone, setStepDone] = useState(0);
   const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -74,7 +77,9 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
   }
 
   async function confirm() {
-    if (!extraction) return;
+    if (!extraction || submitting) return;
+    setSubmitting(true);
+    setError("");
     try {
       await api.post("/api/scanner/confirm/", {
         entreprise: entrepriseId,
@@ -82,7 +87,9 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
       });
       setPhase("success");
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur");
+      setError(e instanceof Error ? e.message : "Erreur lors de l'enregistrement.");
+    } finally {
+      setSubmitting(false);
     }
   }
 
@@ -206,6 +213,16 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
       ...extraction,
       lignes: extraction.lignes.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
     });
+  const addLigne = () =>
+    setExtraction({
+      ...extraction,
+      lignes: [...extraction.lignes, { compte: "", libelle: "", debit: 0, credit: 0 }],
+    });
+  const removeLigne = (i: number) =>
+    setExtraction({
+      ...extraction,
+      lignes: extraction.lignes.filter((_, idx) => idx !== i),
+    });
 
   return (
     <div className="mx-auto max-w-2xl space-y-4">
@@ -239,6 +256,10 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
             <Field label={t("date")} value={extraction.date_facture} onChange={(v) => setExtraction({ ...extraction, date_facture: v })} />
             <Field label={t("numeroPiece")} value={extraction.numero_facture} onChange={(v) => setExtraction({ ...extraction, numero_facture: v })} />
             <Field label={t("journaux")} value={extraction.journal} onChange={(v) => setExtraction({ ...extraction, journal: v })} />
+            <Field label="Montant HT" type="number" value={String(extraction.montant_ht ?? "")} onChange={(v) => setExtraction({ ...extraction, montant_ht: Number(v) })} />
+            <Field label="TVA %" type="number" value={String(extraction.tva_pourcentage ?? "")} onChange={(v) => setExtraction({ ...extraction, tva_pourcentage: Number(v) })} />
+            <Field label="Montant TVA" type="number" value={String(extraction.montant_tva ?? "")} onChange={(v) => setExtraction({ ...extraction, montant_tva: Number(v) })} />
+            <Field label="Montant TTC" type="number" value={String(extraction.montant_ttc ?? "")} onChange={(v) => setExtraction({ ...extraction, montant_ttc: Number(v) })} />
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-2 text-sm">
@@ -261,13 +282,26 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
               <th className="p-2">{t("libelle")}</th>
               <th className="p-2 text-right">{t("montantDebit")}</th>
               <th className="p-2 text-right">{t("montantCredit")}</th>
+              {phase === "edit" && <th className="p-2"></th>}
             </tr>
           </thead>
           <tbody>
             {extraction.lignes.map((l, i) => (
               <tr key={i} className="border-t">
-                <td className="p-2 font-mono">{l.compte}</td>
-                <td className="p-2">{l.libelle}</td>
+                <td className="p-2 font-mono">
+                  {phase === "edit" ? (
+                    <Input value={l.compte} onChange={(e) => updateLigne(i, { compte: e.target.value })} />
+                  ) : (
+                    l.compte
+                  )}
+                </td>
+                <td className="p-2">
+                  {phase === "edit" ? (
+                    <Input value={l.libelle} onChange={(e) => updateLigne(i, { libelle: e.target.value })} />
+                  ) : (
+                    l.libelle
+                  )}
+                </td>
                 <td className="p-2 text-right">
                   {phase === "edit" ? (
                     <Input type="number" value={l.debit || ""} onChange={(e) => updateLigne(i, { debit: Number(e.target.value) })} />
@@ -282,6 +316,13 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
                     l.credit > 0 && formatDZD(l.credit)
                   )}
                 </td>
+                {phase === "edit" && (
+                  <td className="p-2 text-center">
+                    <button onClick={() => removeLigne(i)} className="text-danger" aria-label="Supprimer">
+                      <Trash2 size={15} />
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -293,7 +334,17 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
             </tr>
           </tfoot>
         </table>
-        {!totals.balanced && (
+        {phase === "edit" && (
+          <div className="flex items-center justify-between p-3">
+            <Button variant="ghost" size="sm" onClick={addLigne}>
+              <Plus size={15} /> Ligne
+            </Button>
+            <span className={totals.balanced ? "text-sm text-success" : "text-sm font-semibold text-danger"}>
+              {totals.balanced ? "✓ Équilibré" : t("debitCreditError")}
+            </span>
+          </div>
+        )}
+        {phase !== "edit" && !totals.balanced && (
           <p className="p-3 text-sm font-semibold text-danger">{t("debitCreditError")}</p>
         )}
       </Card>
@@ -314,9 +365,9 @@ export function ScannerFlow({ entrepriseId }: { entrepriseId: number }) {
           <Button
             variant={canConfirm ? "success" : "warning"}
             onClick={confirm}
-            disabled={blocked || (level === "red" && phase !== "edit")}
+            disabled={blocked || submitting}
           >
-            {t("confirmer")}
+            {submitting ? <Spinner /> : t("confirmer")}
           </Button>
         </div>
       </div>
@@ -333,11 +384,21 @@ function Info({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+function Field({
+  label,
+  value,
+  onChange,
+  type = "text",
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  type?: string;
+}) {
   return (
     <div>
       <Label>{label}</Label>
-      <Input value={value} onChange={(e) => onChange(e.target.value)} />
+      <Input type={type} value={value} onChange={(e) => onChange(e.target.value)} />
     </div>
   );
 }
