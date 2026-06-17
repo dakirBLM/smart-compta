@@ -189,9 +189,28 @@ def call_webhook(image_base64=None, image_bytes=None, filename="facture.jpg"):
             )
         else:
             resp = requests.post(url, json={"image": image_base64}, timeout=settings.WEBHOOK_TIMEOUT)
-        resp.raise_for_status()
+    except requests.Timeout as exc:
+        raise WebhookError(
+            "L'IA met trop de temps à répondre. Veuillez réessayer dans quelques instants."
+        ) from exc
     except requests.RequestException as exc:
-        raise WebhookError(f"Échec de l'appel au webhook IA: {exc}") from exc
+        raise WebhookError(
+            f"Connexion au service IA impossible. Veuillez réessayer plus tard. ({exc})"
+        ) from exc
+
+    # Friendly messages for the common upstream failures.
+    if resp.status_code == 429:
+        raise WebhookError(
+            "L'IA est occupée (trop de requêtes). Veuillez réessayer dans quelques instants."
+        )
+    if resp.status_code >= 500:
+        raise WebhookError(
+            "Le service IA est momentanément indisponible. Veuillez réessayer dans quelques instants."
+        )
+    if resp.status_code >= 400:
+        raise WebhookError(
+            f"Le service IA a renvoyé une erreur ({resp.status_code}). Veuillez réessayer plus tard."
+        )
 
     # The webhook MUST return the extraction JSON synchronously. Some platforms
     # (e.g. Make.com without a "Webhook Response" module) reply with a plain
