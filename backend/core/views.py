@@ -13,6 +13,7 @@ from .models import (
     ExerciceAnnee,
     Facture,
     Journal,
+    LigneEcriture,
 )
 from rest_framework.permissions import AllowAny
 
@@ -346,6 +347,126 @@ class FactureDetailView(APIView):
         else:
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
         return Response(FactureSerializer(facture).data)
+
+
+# --------------------------------------------------------------------------- #
+# Facture – Validate & auto-post to Banque / Caisse
+# --------------------------------------------------------------------------- #
+class FactureValidateView(APIView):
+    """Validate a client facture and auto-create the matching Ecriture in the
+    Banque journal (cheque / virement) or Caisse journal (espèces).
+    For cash payments (espèces) the system also creates an entry in the
+    Caisse journal automatically."""
+
+    permission_classes = [IsAccountant]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        facture = get_object_or_404(
+            Facture, pk=pk, entreprise__accountant=request.user
+        )
+        mode = (request.data.get("mode_paiement") or facture.mode_paiement or "").lower().strip()
+
+        # Determine which journal to post to.
+        # Cash (espèces) → caisse ; anything else (chèque, virement…) → banque
+        is_cash = mode in ("espèce", "especes", "espece", "cash", "espèces")
+        journal_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
+
+        entreprise = facture.entreprise
+
+        # Find active exercise year
+        annee_obj = None
+        if facture.date_facture:
+            try:
+                year = facture.date_facture.year
+                annee_obj = ExerciceAnnee.objects.filter(
+                    entreprise=entreprise, annee=year
+                ).first()
+            except Exception:
+                pass
+        if not annee_obj:
+            annee_obj = ExerciceAnnee.objects.filter(
+                entreprise=entreprise, is_active=True
+            ).first()
+        if not annee_obj:
+            return Response(
+                {"error": "Aucun exercice comptable actif trouvé."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get-or-create the target journal
+        journal, _ = Journal.objects.get_or_create(
+            entreprise=entreprise,
+            annee=annee_obj,
+            type_journal=journal_type,
+        )
+
+        client_nom = facture.client.username
+        montant = float(facture.montant_ttc)
+        date_f = facture.date_facture
+        numero = facture.numero_facture
+
+        # Build accounting lines depending on payment type
+        if is_cash:
+            # Caisse entry: Debit 530 (Caisse) / Credit 411 (Clients)
+            lignes = [
+                LigneEcriture(
+                    numero_compte="530",
+                    libelle=f"Encaissement espèces {numero} – {client_nom}",
+                    montant_debit=montant,
+                    montant_credit=0,
+                ),
+                LigneEcriture(
+                    numero_compte="411",
+                    libelle=f"Client {client_nom} – Facture {numero}",
+                    montant_debit=0,
+                    montant_credit=montant,
+                ),
+            ]
+        else:
+            # Banque entry: Debit 512 (Banque) / Credit 411 (Clients)
+            lignes = [
+                LigneEcriture(
+                    numero_compte="512",
+                    libelle=f"Encaissement banque {numero} – {client_nom}",
+                    montant_debit=montant,
+                    montant_credit=0,
+                ),
+                LigneEcriture(
+                    numero_compte="411",
+                    libelle=f"Client {client_nom} – Facture {numero}",
+                    montant_debit=0,
+                    montant_credit=montant,
+                ),
+            ]
+
+        ecriture = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date_f,
+            numero_piece=numero,
+            fournisseur_client=client_nom,
+            source=Ecriture.Source.MANUEL,
+            mode_paiement=mode,
+            statut=Ecriture.Statut.VALIDE,
+        )
+        for ligne in lignes:
+            ligne.ecriture = ecriture
+            ligne.save()
+
+        # Update facture
+        facture.statut = Facture.Statut.VALIDE
+        facture.ecriture = ecriture
+        if mode:
+            facture.mode_paiement = mode
+        facture.save()
+
+        return Response(
+            {
+                "facture": FactureSerializer(facture).data,
+                "ecriture": EcritureSerializer(ecriture).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # --------------------------------------------------------------------------- #

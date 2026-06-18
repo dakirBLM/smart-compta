@@ -25,6 +25,7 @@ urlpatterns = [
     # Factures
     path("factures/", views.FactureListCreateView.as_view()),
     path("factures/<int:pk>/", views.FactureDetailView.as_view()),
+    path("factures/<int:pk>/validate/", views.FactureValidateView.as_view()),
     # Reports
     path("entreprises/<int:pk>/balance/", views.BalanceView.as_view()),
     path("entreprises/<int:pk>/compte-resultat/", views.CompteResultatView.as_view()),

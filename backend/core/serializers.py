@@ -90,7 +90,7 @@ class EcritureSerializer(serializers.ModelSerializer):
         model = Ecriture
         fields = [
             "id", "journal", "date_ecriture", "numero_piece", "fournisseur_client",
-            "source", "confiance_ia", "statut", "created_at", "lignes",
+            "source", "confiance_ia", "statut", "mode_paiement", "created_at", "lignes",
             "total_debit", "total_credit",
         ]
         read_only_fields = ["journal", "created_at"]
@@ -154,7 +154,7 @@ class FactureSerializer(serializers.ModelSerializer):
             "id", "entreprise", "client", "client_nom", "numero_facture",
             "date_facture", "montant_ht", "tva_pourcentage", "montant_tva",
             "montant_ttc", "image_url", "statut", "confiance_ia", "ecriture",
-            "created_at",
+            "mode_paiement", "created_at",
         ]
         # entreprise is resolved server-side (from the client's ClientAccess),
         # so it must not be required in the request payload.

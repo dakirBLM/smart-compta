@@ -110,6 +110,7 @@ class Ecriture(models.Model):
     source = models.CharField(max_length=20, choices=Source.choices, default=Source.MANUEL)
     confiance_ia = models.IntegerField(null=True, blank=True)
     statut = models.CharField(max_length=20, choices=Statut.choices, default=Statut.EN_COURS)
+    mode_paiement = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -164,6 +165,7 @@ class Facture(models.Model):
     ecriture = models.ForeignKey(
         Ecriture, on_delete=models.SET_NULL, null=True, blank=True, related_name="factures"
     )
+    mode_paiement = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

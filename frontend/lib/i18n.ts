@@ -107,6 +107,12 @@ export const translations = {
     factureNo: "Facture N°",
     voirDetail: "Voir détail",
     aucuneDonnee: "Aucune donnée.",
+    modePaiement: "Mode de paiement",
+    caisse: "Caisse",
+    banque: "Banque",
+    operationsDiverses: "Opérations Diverses",
+    validerFacture: "Valider la facture",
+    comptabilise: "Comptabilisé",
   },
   ar: {
     appName: "سمارت كومبتا",
@@ -206,6 +212,12 @@ export const translations = {
     factureNo: "فاتورة رقم",
     voirDetail: "عرض التفاصيل",
     aucuneDonnee: "لا توجد بيانات.",
+    modePaiement: "طريقة الدفع",
+    caisse: "الصندوق",
+    banque: "البنك",
+    operationsDiverses: "عمليات متنوعة",
+    validerFacture: "التحقق من الفاتورة",
+    comptabilise: "تم المحاسبة",
   },
 } as const;
 

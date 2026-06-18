@@ -85,6 +85,7 @@ export interface Ecriture {
   source: "manuel" | "import" | "scanner";
   confiance_ia: number | null;
   statut: Statut;
+  mode_paiement: string;
   created_at: string;
   lignes: LigneEcriture[];
   total_debit: number;
@@ -106,6 +107,7 @@ export interface Facture {
   statut: Statut;
   confiance_ia: number | null;
   ecriture: number | null;
+  mode_paiement: string;
   created_at: string;
 }
 
