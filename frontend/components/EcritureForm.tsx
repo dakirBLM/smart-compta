@@ -160,9 +160,7 @@ export function EcritureForm({
   const [date, setDate] = useState(initial?.date_ecriture ?? "");
   const [piece, setPiece] = useState(initial?.numero_piece ?? "");
   const [tiers, setTiers] = useState(initial?.fournisseur_client ?? "");
-  const [modePaiement, setModePaiement] = useState(
-    (initial as any)?.mode_paiement ?? ""
-  );
+  const [modePaiement, setModePaiement] = useState(initial?.mode_paiement ?? "");
   const [lignes, setLignes] = useState<LigneInput[]>(
     initial?.lignes.map((l) => ({
       numero_compte: l.numero_compte,
@@ -196,7 +194,7 @@ export function EcritureForm({
       return;
     }
     if (!date) {
-      setError(t("date") + " est obligatoire.");
+      setError(t("date"));
       return;
     }
     setSaving(true);
@@ -294,7 +292,7 @@ export function EcritureForm({
         </div>
         {(journalType === "banque" || journalType === "caisse") && (
           <div>
-            <Label>Mode de paiement</Label>
+            <Label>{t("modePaiement")}</Label>
             <select
               value={modePaiement}
               onChange={(e) => setModePaiement(e.target.value)}

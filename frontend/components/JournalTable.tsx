@@ -40,13 +40,13 @@ export function JournalTable({
           <tr>
             <th className="p-2">{t("date")}</th>
             <th className="p-2">{t("numeroPiece")}</th>
-            <th className="p-2">Tiers</th>
+            <th className="p-2">{t("fournisseur")}</th>
             <th className="p-2">{t("numeroCompteDebit")}</th>
             <th className="p-2">{t("numeroCompteCredit")}</th>
             <th className="p-2">{t("libelle")}</th>
             <th className="p-2 text-right">{t("montantDebit")}</th>
             <th className="p-2 text-right">{t("montantCredit")}</th>
-            {hasModes && <th className="p-2">Mode</th>}
+             {hasModes && <th className="p-2">{t("modePaiement")}</th>}
             <th className="p-2"></th>
           </tr>
         </thead>

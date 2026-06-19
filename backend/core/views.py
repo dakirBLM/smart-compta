@@ -365,7 +365,14 @@ class FactureValidateView(APIView):
         facture = get_object_or_404(
             Facture, pk=pk, entreprise__accountant=request.user
         )
-        mode = (request.data.get("mode_paiement") or facture.mode_paiement or "").lower().strip()
+        if facture.statut == Facture.Statut.VALIDE and facture.ecriture_id:
+            return Response(
+                {"error": "Facture déjà validée."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        mode = (
+            request.data.get("mode_paiement") or facture.mode_paiement or ""
+        ).lower().strip()
 
         # Determine which journal to post to.
         # Cash (espèces) → caisse ; anything else (chèque, virement…) → banque
@@ -402,8 +409,13 @@ class FactureValidateView(APIView):
         )
 
         client_nom = facture.client.username
-        montant = float(facture.montant_ttc)
+        montant = facture.montant_ttc
         date_f = facture.date_facture
+        if not date_f:
+            return Response(
+                 {"error": "La date de facture est obligatoire pour valider."},
+                 status=status.HTTP_400_BAD_REQUEST,
+            )
         numero = facture.numero_facture
 
         # Build accounting lines depending on payment type

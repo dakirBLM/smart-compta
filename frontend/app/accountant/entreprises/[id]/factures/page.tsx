@@ -1,11 +1,11 @@
 "use client";
 
-import { CheckCircle, CreditCard, Banknote, Receipt, Eye } from "lucide-react";
+import { CheckCircle, CreditCard, Banknote, Receipt } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
-import { Button, Card, Input, Spinner } from "@/components/ui";
+import { Button, Card, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { Facture, Ecriture } from "@/lib/types";
@@ -108,7 +108,7 @@ export default function FacturesAccountantPage() {
                   <th className="p-3 text-right">HT</th>
                   <th className="p-3 text-right">TVA</th>
                   <th className="p-3 text-right">TTC</th>
-                  <th className="p-3">Mode paiement</th>
+                  <th className="p-3">{t("modePaiement")}</th>
                   <th className="p-3">Statut</th>
                   <th className="p-3">Actions</th>
                 </tr>
@@ -158,7 +158,7 @@ export default function FacturesAccountantPage() {
                       {f.statut === "valide" && f.ecriture && (
                         <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
                           <CheckCircle size={13} />
-                          Comptabilisé
+                           {t("comptabilise")}
                         </span>
                       )}
                     </td>
@@ -181,7 +181,7 @@ export default function FacturesAccountantPage() {
       <Modal
         open={!!validating}
         onClose={() => setValidating(null)}
-        title="Valider la facture"
+        title={t("validerFacture")}
       >
         {validating && (
           <div className="space-y-5">
