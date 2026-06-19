@@ -13,7 +13,7 @@ frontend/.next/
 frontend/out/
 frontend/tsconfig.tsbuildinfo
 frontend/.env.local
-
+frontend/.env
 # OS
 .DS_Store
 
