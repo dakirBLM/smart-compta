@@ -370,13 +370,34 @@ class FactureValidateView(APIView):
                 {"error": "Facture déjà validée."},
                 status=status.HTTP_409_CONFLICT,
             )
-        mode = (
-            request.data.get("mode_paiement") or facture.mode_paiement or ""
-        ).lower().strip()
+
+        # Normalize incoming mode_paiement and prefer explicit request value,
+        # then existing facture value. Require a non-empty, supported mode.
+        mode = (request.data.get("mode_paiement") or facture.mode_paiement or "").lower().strip()
+        if not mode:
+            return Response(
+                {"error": "Le mode de paiement est obligatoire pour valider la facture."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Whitelist known cash vs bank payment modes. Reject unknown values.
+        CASH_MODES = {"espèce", "espèces", "espece", "especes", "cash"}
+        BANK_MODES = {
+            "chèque", "cheque", "virement", "transfer", "transfert",
+            "carte", "carte bancaire", "cb", "cheque bancaire"
+        }
+
+        if mode in CASH_MODES:
+            is_cash = True
+        elif mode in BANK_MODES:
+            is_cash = False
+        else:
+            return Response(
+                {"error": f"Mode de paiement non supporté: '{mode}'. Valeurs acceptées: {sorted(list(CASH_MODES | BANK_MODES))}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Determine which journal to post to.
-        # Cash (espèces) → caisse ; anything else (chèque, virement…) → banque
-        is_cash = mode in ("espèce", "especes", "espece", "cash", "espèces")
         journal_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
 
         entreprise = facture.entreprise

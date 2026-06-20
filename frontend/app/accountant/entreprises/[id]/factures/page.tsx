@@ -212,7 +212,7 @@ export default function FacturesAccountantPage() {
             {/* Mode de paiement */}
             <div>
               <label className="block text-sm font-semibold text-gray-700 mb-2">
-                Mode de paiement
+                {t("modePaiement")}
               </label>
               <div className="grid grid-cols-2 gap-2">
                 {MODE_OPTIONS.map((opt) => (
