@@ -21,6 +21,23 @@ export default function EntreprisesPage() {
   const [clients, setClients] = useState<ClientAccess[]>([]);
   const [search, setSearch] = useState("");
   const [modal, setModal] = useState<"create" | "edit" | "delete" | null>(null);
+  const [yearFilter, setYearFilter] = useState<number | null>(null);
+
+  // All fiscal years across the accountant's companies (most recent first).
+  const allYears = useMemo(() => {
+    const s = new Set<number>();
+    entreprises.forEach((e) => e.exercices.forEach((x) => s.add(x.annee)));
+    return Array.from(s).sort((a, b) => b - a);
+  }, [entreprises]);
+
+  // Per the workflow: pick the YEAR first, then the entreprise.
+  const visibleEntreprises = useMemo(
+    () =>
+      yearFilter
+        ? entreprises.filter((e) => e.exercices.some((x) => x.annee === yearFilter))
+        : entreprises,
+    [entreprises, yearFilter]
+  );
 
   const load = () =>
     api.get<Entreprise[]>("/api/entreprises/").then((data) => {
@@ -33,10 +50,18 @@ export default function EntreprisesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Default the year filter to the most recent once data loads.
+  useEffect(() => {
+    if (yearFilter === null && allYears.length) setYearFilter(allYears[0]);
+  }, [allYears, yearFilter]);
+
   function selectEntreprise(e: Entreprise) {
     setSelected(e);
     const year =
-      e.exercices.find((x) => x.is_active)?.annee ?? e.exercices[0]?.annee ?? null;
+      yearFilter ??
+      e.exercices.find((x) => x.is_active)?.annee ??
+      e.exercices[0]?.annee ??
+      null;
     setSelectedYear(year);
     api
       .get<ClientAccess[]>(`/api/entreprises/${e.id}/clients/`)
@@ -84,11 +109,30 @@ export default function EntreprisesPage() {
           </Button>
 
           <div className="pt-4">
+            {/* Step 1: choose the year */}
+            <div className="mb-1 text-sm font-semibold text-gray-500">
+              1. {t("annees")}
+            </div>
+            <select
+              className="mb-3 h-10 w-full rounded-lg border border-gray-300 px-2 text-sm"
+              value={yearFilter ?? ""}
+              onChange={(e) => {
+                setYearFilter(e.target.value ? Number(e.target.value) : null);
+                setSelected(null);
+              }}
+            >
+              <option value="">Toutes les années</option>
+              {allYears.map((y) => (
+                <option key={y} value={y}>{y}</option>
+              ))}
+            </select>
+
+            {/* Step 2: choose the entreprise */}
             <div className="mb-2 text-sm font-semibold text-gray-500">
-              {t("entreprises")}
+              2. {t("entreprises")}
             </div>
             <div className="space-y-1">
-              {entreprises.map((e) => (
+              {visibleEntreprises.map((e) => (
                 <button
                   key={e.id}
                   onClick={() => selectEntreprise(e)}
@@ -102,6 +146,9 @@ export default function EntreprisesPage() {
                   {e.nom}
                 </button>
               ))}
+              {visibleEntreprises.length === 0 && (
+                <p className="text-sm text-gray-400">{t("aucuneDonnee")}</p>
+              )}
             </div>
           </div>
         </div>

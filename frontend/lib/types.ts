@@ -24,6 +24,7 @@ export interface Entreprise {
   nom: string;
   nif: string;
   nis: string;
+  nin: string;
   date_creation: string;
   adresse: string;
   ville: string;
@@ -32,8 +33,12 @@ export interface Entreprise {
   banque: string;
   numero_compte: string;
   rib: string;
+  banque2: string;
+  numero_compte2: string;
+  rib2: string;
   regime_fiscale: string;
   activite: string;
+  activite2: string;
   matiere_premiere: string;
   marchandise: string;
   matieres_consommables: string;
@@ -54,13 +59,20 @@ export interface ClientAccess {
   created_at: string;
 }
 
-export type JournalType = "achat" | "vente" | "banque" | "caisse" | "od";
+export type JournalType =
+  | "achat"
+  | "vente"
+  | "banque"
+  | "caisse"
+  | "od"
+  | "autre";
 
 export interface Journal {
   id: number;
   entreprise: number;
   annee: number;
   type_journal: JournalType;
+  nom: string;
   type_label: string;
   ecritures_count: number;
   created_at: string;

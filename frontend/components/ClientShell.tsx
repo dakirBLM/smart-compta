@@ -4,6 +4,7 @@ import { FileText, Home, LogOut, Menu, Settings, User, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
+import { BackButton } from "./BackButton";
 import { LanguageToggle } from "./LanguageToggle";
 import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
@@ -72,13 +73,16 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-1 flex-col">
         <header className="flex items-center justify-between bg-clientbg px-4 py-4 sm:px-6">
           {/* Hamburger — opens the nav on mobile */}
-          <button
-            onClick={() => setNavOpen(true)}
-            className="rounded-lg p-2 text-brand hover:bg-black/5 lg:hidden"
-            aria-label="Ouvrir le menu"
-          >
-            <Menu size={22} />
-          </button>
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setNavOpen(true)}
+              className="rounded-lg p-2 text-brand hover:bg-black/5 lg:hidden"
+              aria-label="Ouvrir le menu"
+            >
+              <Menu size={22} />
+            </button>
+            <BackButton />
+          </div>
           <div className="flex flex-1 items-center justify-end gap-2 font-semibold text-brand">
             {user?.username?.toUpperCase()}
             <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-white">

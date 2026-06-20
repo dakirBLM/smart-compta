@@ -3,6 +3,7 @@
 import { Plus, Trash2, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { Button, Input, Label } from "@/components/ui";
+import { SCF_ACCOUNTS } from "@/lib/algeria";
 import { useI18n } from "@/lib/i18n-context";
 import { Ecriture, LigneEcriture } from "@/lib/types";
 import { formatDZD, sumLignes } from "@/lib/utils";
@@ -315,7 +316,14 @@ export function EcritureForm({
         )}
       </div>
 
-      {/* Lines table */}
+      {/* SCF account suggestions for the Compte field */}
+      <datalist id="scf-accounts">
+        {SCF_ACCOUNTS.map((a) => (
+          <option key={a.compte} value={a.compte}>
+            {a.compte} — {a.libelle}
+          </option>
+        ))}
+      </datalist>
       <div className="overflow-x-auto rounded-lg border">
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left">
@@ -332,9 +340,17 @@ export function EcritureForm({
               <tr key={i} className="border-t">
                 <td className="p-1">
                   <Input
+                    list="scf-accounts"
                     value={l.numero_compte}
-                    onChange={(e) => setLigne(i, { numero_compte: e.target.value })}
                     placeholder="ex: 512"
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      const match = SCF_ACCOUNTS.find((a) => a.compte === v);
+                      // Auto-fill the libellé when a known SCF account is picked.
+                      setLigne(i, match && !l.libelle
+                        ? { numero_compte: v, libelle: match.libelle }
+                        : { numero_compte: v });
+                    }}
                   />
                 </td>
                 <td className="p-1">

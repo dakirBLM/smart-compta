@@ -1,7 +1,7 @@
 "use client";
 
-import { Plus, Search, Upload, Banknote, CreditCard, FileText, Info } from "lucide-react";
-import { useParams } from "next/navigation";
+import { BookPlus, Plus, Search, Upload, Banknote, CreditCard, FileText, Info } from "lucide-react";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { EcritureForm } from "@/components/EcritureForm";
@@ -49,9 +49,14 @@ type Tab = "voir" | "rechercher" | "ajouter" | "importer";
 export default function JournalPage() {
   const { t } = useI18n();
   const params = useParams();
+  const router = useRouter();
   const type = String(params.journalId);
+  const isNumeric = /^\d+$/.test(type);
   const { id, entreprise, annee } = useEntreprise();
+  const base = `/accountant/entreprises/${id}`;
+  const qsAnnee = annee ? `?annee=${annee}` : "";
   const [journal, setJournal] = useState<Journal | null>(null);
+  const [journals, setJournals] = useState<Journal[]>([]);
   const [ecritures, setEcritures] = useState<Ecriture[]>([]);
   const [tab, setTab] = useState<Tab>("voir");
   const [loading, setLoading] = useState(true);
@@ -59,6 +64,8 @@ export default function JournalPage() {
   const [showForm, setShowForm] = useState(false);
   const [searchCompte, setSearchCompte] = useState("");
   const [searchDate, setSearchDate] = useState("");
+  const [showNewJournal, setShowNewJournal] = useState(false);
+  const [newName, setNewName] = useState("");
 
   const loadEcritures = useCallback(
     async (j: Journal, qs = "") => {
@@ -70,7 +77,8 @@ export default function JournalPage() {
     [id]
   );
 
-  // Resolve (get-or-create) the Journal for this type + active year.
+  // Resolve the Journal: a standard type is get-or-created; a numeric id is a
+  // custom journal looked up in the year's journal list.
   useEffect(() => {
     if (!entreprise || !annee) return;
     const exercice = entreprise.exercices.find((x) => x.annee === annee);
@@ -79,17 +87,40 @@ export default function JournalPage() {
       return;
     }
     setLoading(true);
-    api
-      .post<Journal>(`/api/entreprises/${id}/journaux/`, {
-        type_journal: type,
-        annee: exercice.id,
-      })
-      .then(async (j) => {
+    (async () => {
+      const all = await api.get<Journal[]>(
+        `/api/entreprises/${id}/journaux/?annee=${annee}`
+      );
+      setJournals(all);
+      let j: Journal | undefined;
+      if (isNumeric) {
+        j = all.find((x) => x.id === Number(type));
+      } else {
+        j = await api.post<Journal>(`/api/entreprises/${id}/journaux/`, {
+          type_journal: type,
+          annee: exercice.id,
+        });
+      }
+      if (j) {
         setJournal(j);
         await loadEcritures(j);
-      })
-      .finally(() => setLoading(false));
-  }, [entreprise, annee, id, type, loadEcritures]);
+      }
+    })().finally(() => setLoading(false));
+  }, [entreprise, annee, id, type, isNumeric, loadEcritures]);
+
+  async function createJournal() {
+    const exercice = entreprise?.exercices.find((x) => x.annee === annee);
+    if (!exercice || !newName.trim()) return;
+    const j = await api.post<Journal>(`/api/entreprises/${id}/journaux/`, {
+      nom: newName.trim(),
+      annee: exercice.id,
+    });
+    setShowNewJournal(false);
+    setNewName("");
+    router.push(`${base}/journaux/${j.id}${qsAnnee}`);
+  }
+
+  const customJournals = journals.filter((j) => j.type_journal === "autre");
 
   async function saveEcriture(payload: Parameters<typeof api.post>[1]) {
     if (!journal) return;
@@ -127,17 +158,39 @@ export default function JournalPage() {
     { key: "importer", label: t("importer"), icon: <Upload size={15} /> },
   ];
 
+  const title = isNumeric
+    ? journal?.type_label ?? "Journal"
+    : TYPE_LABELS[type] ?? type;
   const gradient = TYPE_COLORS[type] || "from-brand to-brand/80";
   const description = TYPE_DESCRIPTIONS[type];
   const icon = TYPE_ICONS[type];
 
   return (
     <AppShell
-      title={`${t("journaux")} · ${TYPE_LABELS[type] ?? type}`}
+      title={`${t("journaux")} · ${title}`}
       entrepriseId={id}
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
+      {/* Custom journals + create new */}
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        {customJournals.map((j) => (
+          <button
+            key={j.id}
+            onClick={() => router.push(`${base}/journaux/${j.id}${qsAnnee}`)}
+            className={cn(
+              "rounded-full border px-3 py-1 text-sm",
+              journal?.id === j.id ? "bg-brand text-white" : "text-brand"
+            )}
+          >
+            {j.type_label}
+          </button>
+        ))}
+        <Button variant="outline" size="sm" onClick={() => setShowNewJournal(true)}>
+          <BookPlus size={15} /> Nouveau journal
+        </Button>
+      </div>
+
       {/* Journal header banner */}
       <div
         className={`mb-5 rounded-2xl bg-gradient-to-r ${gradient} p-4 text-white shadow-md`}
@@ -292,6 +345,32 @@ export default function JournalPage() {
           }}
           journalType={type}
         />
+      </Modal>
+
+      <Modal
+        open={showNewJournal}
+        onClose={() => setShowNewJournal(false)}
+        title="Nouveau journal"
+      >
+        <div className="space-y-3">
+          <div>
+            <label className="mb-1 block text-sm">Nom du journal</label>
+            <Input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Ex: Journal des salaires"
+              autoFocus
+            />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setShowNewJournal(false)}>
+              {t("annuler")}
+            </Button>
+            <Button variant="success" onClick={createJournal} disabled={!newName.trim()}>
+              {t("creer")}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </AppShell>
   );

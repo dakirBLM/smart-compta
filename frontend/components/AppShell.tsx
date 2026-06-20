@@ -2,6 +2,7 @@
 
 import { Bell, Menu } from "lucide-react";
 import { useState } from "react";
+import { BackButton } from "./BackButton";
 import { Sidebar } from "./Sidebar";
 
 export function AppShell({
@@ -48,6 +49,7 @@ export function AppShell({
             >
               <Menu size={22} />
             </button>
+            <BackButton />
             <h1 className="text-lg font-bold text-brand sm:text-xl">{title}</h1>
           </div>
           <div className="flex items-center gap-3">

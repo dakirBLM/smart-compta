@@ -122,18 +122,19 @@ export function ClientScanner() {
         return;
       }
 
-      // 4) Good result → persist the facture, THEN show success.
-      await api.post("/api/factures/", {
-        numero_facture: data.numero_facture ?? "",
-        date_facture: data.date_facture ? toISODate(data.date_facture) : null,
-        montant_ht: data.montant_ht ?? 0,
-        tva_pourcentage: data.tva_pourcentage ?? 19,
-        montant_tva: data.montant_tva ?? 0,
-        montant_ttc: data.montant_ttc ?? 0,
-        confiance_ia: confiance,
-        image_url: "(image téléversée)",
-        statut: "en_cours",
-      });
+      // 4) Good result → persist the facture WITH its image (archived), then
+      //    show success. Multipart so the backend can store the photo.
+      const fd = new FormData();
+      fd.append("file", file); // archived as an image
+      fd.append("numero_facture", data.numero_facture ?? "");
+      if (data.date_facture) fd.append("date_facture", toISODate(data.date_facture));
+      fd.append("montant_ht", String(data.montant_ht ?? 0));
+      fd.append("tva_pourcentage", String(data.tva_pourcentage ?? 19));
+      fd.append("montant_tva", String(data.montant_tva ?? 0));
+      fd.append("montant_ttc", String(data.montant_ttc ?? 0));
+      fd.append("confiance_ia", String(confiance));
+      fd.append("statut", "en_cours");
+      await api.post("/api/factures/", fd);
       setResult(data);
       setPhase("success");
     } catch (e) {

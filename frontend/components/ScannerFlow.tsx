@@ -49,6 +49,7 @@ export function ScannerFlow({
   const [stepDone, setStepDone] = useState(0);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [journalHint, setJournalHint] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -74,7 +75,7 @@ export function ScannerFlow({
     // Animate the visible step checklist while waiting for the webhook.
     const timer = setInterval(() => setStepDone((s) => Math.min(s + 1, 3)), 700);
     try {
-      const res = await scannerUpload(file, entrepriseId);
+      const res = await scannerUpload(file, entrepriseId, journalHint);
       clearInterval(timer);
       setStepDone(4);
       setExtraction(res.data);
@@ -164,6 +165,25 @@ export function ScannerFlow({
             <p className="mt-2">{t("prendrePhoto")}</p>
           </div>
         )}
+        {/* Optional: pre-select the journal to help the AI classify (facultatif) */}
+        <div className="mx-auto mb-3 max-w-xs text-left">
+          <label className="mb-1 block text-xs text-gray-500">
+            Journal (facultatif — aide l'IA)
+          </label>
+          <select
+            value={journalHint}
+            onChange={(e) => setJournalHint(e.target.value)}
+            className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm"
+          >
+            <option value="">Détection automatique</option>
+            <option value="Achats">Achats</option>
+            <option value="Ventes">Ventes</option>
+            <option value="Banque">Banque</option>
+            <option value="Caisse">Caisse</option>
+            <option value="OD">Opérations diverses</option>
+          </select>
+        </div>
+
         {error && <p className="mb-3 text-sm text-danger">{error}</p>}
         <div className="flex flex-wrap justify-center gap-2">
           <Button variant="outline" onClick={() => inputRef.current?.click()}>

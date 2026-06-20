@@ -31,16 +31,72 @@ class EntrepriseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Entreprise
         fields = [
-            "id", "nom", "nif", "nis", "date_creation", "adresse", "ville",
-            "code_postal", "exercice_comptable", "banque", "numero_compte", "rib",
-            "regime_fiscale", "activite", "matiere_premiere", "marchandise",
-            "matieres_consommables", "telephone", "email", "accountant",
-            "created_at", "exercices", "clients_count",
+            "id", "nom", "nif", "nis", "nin", "date_creation", "adresse", "ville",
+            "code_postal", "exercice_comptable",
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+            "regime_fiscale", "activite", "activite2", "matiere_premiere",
+            "marchandise", "matieres_consommables", "telephone", "email",
+            "accountant", "created_at", "exercices", "clients_count",
         ]
         read_only_fields = ["accountant", "created_at"]
 
     def get_clients_count(self, obj):
         return obj.client_accesses.count()
+
+    # --- field-level format rules ---
+    def _digit_limit(self, value, maxlen, label):
+        if value and (not str(value).isdigit() or len(str(value)) > maxlen):
+            raise serializers.ValidationError(
+                f"{label} doit contenir uniquement des chiffres (max {maxlen})."
+            )
+        return value
+
+    def validate_nif(self, v):
+        return self._digit_limit(v, 15, "Le NIF")
+
+    def validate_nis(self, v):
+        return self._digit_limit(v, 15, "Le NIS")
+
+    def validate_nin(self, v):
+        return self._digit_limit(v, 15, "Le NIN")
+
+    def validate_numero_compte(self, v):
+        return self._digit_limit(v, 10, "Le numéro de compte")
+
+    def validate_numero_compte2(self, v):
+        return self._digit_limit(v, 10, "Le numéro de compte")
+
+    def validate_rib(self, v):
+        return self._digit_limit(v, 22, "Le RIB")
+
+    def validate_rib2(self, v):
+        return self._digit_limit(v, 22, "Le RIB")
+
+    def validate_exercice_comptable(self, v):
+        if not v or not str(v).strip():
+            raise serializers.ValidationError("L'exercice comptable est obligatoire.")
+        return v
+
+    def validate(self, attrs):
+        # Activity-dependent required fields.
+        def g(f):
+            if f in attrs:
+                return attrs[f]
+            return getattr(self.instance, f, "") if self.instance else ""
+
+        activites = {g("activite"), g("activite2")}
+        errors = {}
+        if "Commerciale" in activites and not g("marchandise"):
+            errors["marchandise"] = "Obligatoire pour une activité commerciale."
+        if "Industrielle" in activites:
+            if not g("matiere_premiere"):
+                errors["matiere_premiere"] = "Obligatoire pour une activité industrielle."
+            if not g("matieres_consommables"):
+                errors["matieres_consommables"] = "Obligatoire pour une activité industrielle."
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
 
     def update(self, instance, validated_data):
         # Enforce locked fields: silently ignore any attempt to change them.
@@ -132,14 +188,18 @@ class EcritureSerializer(serializers.ModelSerializer):
 
 
 class JournalSerializer(serializers.ModelSerializer):
-    type_label = serializers.CharField(source="get_type_journal_display", read_only=True)
+    type_label = serializers.SerializerMethodField()
     ecritures_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Journal
-        fields = ["id", "entreprise", "annee", "type_journal", "type_label",
+        fields = ["id", "entreprise", "annee", "type_journal", "nom", "type_label",
                   "ecritures_count", "created_at"]
         read_only_fields = ["entreprise", "created_at"]
+
+    def get_type_label(self, obj):
+        # Custom journals display their given name.
+        return obj.nom or obj.get_type_journal_display()
 
     def get_ecritures_count(self, obj):
         return obj.ecritures.count()
