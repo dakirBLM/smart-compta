@@ -28,6 +28,7 @@ from .scanner import (
     call_webhook,
     pdf_to_jpeg,
     persist_extraction,
+    upload_invoice_image,
     validate_extraction,
 )
 from .serializers import (
@@ -46,6 +47,23 @@ User = get_user_model()
 def _accountant_entreprise(request, pk):
     """Fetch an entreprise the requesting accountant owns (404 otherwise)."""
     return get_object_or_404(Entreprise, pk=pk, accountant=request.user)
+
+
+def _assert_unique_piece(entreprise, numero, exclude_id=None):
+    """Reject a duplicate invoice number within the same entreprise."""
+    from rest_framework.exceptions import ValidationError
+    numero = (numero or "").strip()
+    if not numero:
+        return
+    qs = Ecriture.objects.filter(
+        journal__entreprise=entreprise, numero_piece=numero
+    )
+    if exclude_id:
+        qs = qs.exclude(pk=exclude_id)
+    if qs.exists():
+        raise ValidationError(
+            {"numero_piece": f"Une écriture avec le numéro « {numero} » existe déjà."}
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -151,8 +169,16 @@ class ExerciceListCreateView(APIView):
         entreprise = _accountant_entreprise(request, pk)
         serializer = ExerciceAnneeSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(entreprise=entreprise)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        annee = serializer.validated_data["annee"]
+        # Idempotent: don't 500 on a year that already exists.
+        exercice, created = ExerciceAnnee.objects.get_or_create(
+            entreprise=entreprise, annee=annee,
+            defaults={"is_active": serializer.validated_data.get("is_active", False)},
+        )
+        return Response(
+            ExerciceAnneeSerializer(exercice).data,
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -170,14 +196,22 @@ class JournalListView(APIView):
         return Response(JournalSerializer(qs, many=True).data)
 
     def post(self, request, pk):
-        """Create a journal for a given type + year (idempotent)."""
+        """Create a journal. Standard type (idempotent), or a custom journal
+        identified only by its name (type 'autre')."""
         entreprise = _accountant_entreprise(request, pk)
-        type_journal = request.data.get("type_journal")
         annee_id = request.data.get("annee")
         annee = get_object_or_404(ExerciceAnnee, pk=annee_id, entreprise=entreprise)
-        journal, _ = Journal.objects.get_or_create(
-            entreprise=entreprise, annee=annee, type_journal=type_journal
-        )
+        nom = (request.data.get("nom") or "").strip()
+        if nom:
+            journal, _ = Journal.objects.get_or_create(
+                entreprise=entreprise, annee=annee,
+                type_journal=Journal.Type.AUTRE, nom=nom,
+            )
+        else:
+            journal, _ = Journal.objects.get_or_create(
+                entreprise=entreprise, annee=annee,
+                type_journal=request.data.get("type_journal"), nom="",
+            )
         return Response(JournalSerializer(journal).data,
                         status=status.HTTP_201_CREATED)
 
@@ -201,6 +235,7 @@ class JournalEcrituresView(APIView):
     def post(self, request, pk, journal_id):
         entreprise = _accountant_entreprise(request, pk)
         journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
+        _assert_unique_piece(entreprise, request.data.get("numero_piece"))
         serializer = EcritureSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         serializer.save(journal=journal)
@@ -239,8 +274,9 @@ class ScannerUploadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def _entreprise_context(self, request):
-        """Identify the scanning company so the AI can tell a sale from a
-        purchase (is the company the issuer or the recipient of the invoice?)."""
+        """Context the AI uses to classify the invoice: the scanning company's
+        identity (sale vs purchase), its activity and the goods it deals in
+        (to pick the right SCF accounts), plus an optional journal hint."""
         ent = None
         eid = request.data.get("entreprise")
         if request.user.role == "accountant" and eid:
@@ -249,9 +285,21 @@ class ScannerUploadView(APIView):
             access = (ClientAccess.objects.filter(client=request.user)
                       .select_related("entreprise").first())
             ent = access.entreprise if access else None
-        if not ent:
-            return {}
-        return {"entreprise_nom": ent.nom, "entreprise_nif": ent.nif}
+        ctx = {}
+        if ent:
+            ctx = {
+                "entreprise_nom": ent.nom,
+                "entreprise_nif": ent.nif,
+                "activite": ", ".join(filter(None, [ent.activite, ent.activite2])),
+                "marchandise": ent.marchandise,
+                "matiere_premiere": ent.matiere_premiere,
+                "matieres_consommables": ent.matieres_consommables,
+            }
+        # Optional journal the user pre-selected for this operation.
+        hint = (request.data.get("journal_hint") or "").strip()
+        if hint:
+            ctx["journal_hint"] = hint
+        return ctx
 
     def post(self, request):
         ctx = self._entreprise_context(request)
@@ -296,6 +344,7 @@ class ScannerConfirmView(APIView):
         entreprise_id = request.data.get("entreprise")
         data = request.data.get("data") or request.data
         entreprise = _accountant_entreprise(request, entreprise_id)
+        _assert_unique_piece(entreprise, data.get("numero_facture") or data.get("numero_piece"))
         try:
             ecriture = persist_extraction(entreprise, data, source="scanner")
         except WebhookError as exc:
@@ -330,9 +379,30 @@ class FactureListCreateView(APIView):
         if not entreprise_id:
             return Response({"error": "Aucune entreprise associée."},
                             status=status.HTTP_400_BAD_REQUEST)
+
+        # Duplicate invoice number guard (per entreprise).
+        numero = (request.data.get("numero_facture") or "").strip()
+        if numero and Facture.objects.filter(
+            entreprise_id=entreprise_id, numero_facture=numero
+        ).exists():
+            return Response(
+                {"numero_facture": f"Une facture N° « {numero} » existe déjà."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Keep the invoice as an image: upload the file to storage and store URL.
+        # Non-blocking — if storage isn't available the facture still saves.
+        image_url = request.data.get("image_url") or ""
+        if "file" in request.FILES:
+            try:
+                image_url = upload_invoice_image(request.FILES["file"].read()) or image_url
+            except WebhookError:
+                pass
+
         serializer = FactureSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(client=request.user, entreprise_id=entreprise_id)
+        serializer.save(client=request.user, entreprise_id=entreprise_id,
+                        image_url=image_url)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 

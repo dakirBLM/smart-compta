@@ -1,0 +1,97 @@
+// Algerian reference data used by the entreprise form and accounting entry.
+
+export const REGIMES_FISCAUX = ["Réel", "Forfaitaire"] as const;
+
+export const ACTIVITES = [
+  "Commerciale",
+  "Industrielle",
+  "Libérale",
+  "Services",
+  "Artisanale",
+] as const;
+
+/** Plan Comptable SCF (Algérie) — comptes au format 6 chiffres. */
+export const SCF_ACCOUNTS: { compte: string; libelle: string }[] = [
+  { compte: "100000", libelle: "Capital social" },
+  { compte: "200000", libelle: "Immobilisations incorporelles" },
+  { compte: "211000", libelle: "Terrains" },
+  { compte: "213000", libelle: "Constructions" },
+  { compte: "300000", libelle: "Stocks" },
+  { compte: "380000", libelle: "Marchandises" },
+  { compte: "381000", libelle: "Matières premières" },
+  { compte: "401000", libelle: "Fournisseurs" },
+  { compte: "411000", libelle: "Clients" },
+  { compte: "445600", libelle: "TVA déductible" },
+  { compte: "445700", libelle: "TVA collectée" },
+  { compte: "512000", libelle: "Banque" },
+  { compte: "530000", libelle: "Caisse" },
+  { compte: "600000", libelle: "Achats" },
+  { compte: "700000", libelle: "Ventes de marchandises" },
+  { compte: "701000", libelle: "Ventes de matières premières" },
+];
+
+/** 58 wilayas with representative postal codes (capital + a few major communes). */
+export const WILAYAS: { nom: string; codes: string[] }[] = [
+  { nom: "Adrar", codes: ["01000"] },
+  { nom: "Chlef", codes: ["02000"] },
+  { nom: "Laghouat", codes: ["03000"] },
+  { nom: "Oum El Bouaghi", codes: ["04000"] },
+  { nom: "Batna", codes: ["05000"] },
+  { nom: "Béjaïa", codes: ["06000"] },
+  { nom: "Biskra", codes: ["07000"] },
+  { nom: "Béchar", codes: ["08000"] },
+  { nom: "Blida", codes: ["09000"] },
+  { nom: "Bouira", codes: ["10000"] },
+  { nom: "Tamanrasset", codes: ["11000"] },
+  { nom: "Tébessa", codes: ["12000"] },
+  { nom: "Tlemcen", codes: ["13000"] },
+  { nom: "Tiaret", codes: ["14000"] },
+  { nom: "Tizi Ouzou", codes: ["15000"] },
+  { nom: "Alger", codes: ["16000", "16001", "16002", "16003", "16004", "16005"] },
+  { nom: "Djelfa", codes: ["17000"] },
+  { nom: "Jijel", codes: ["18000"] },
+  { nom: "Sétif", codes: ["19000"] },
+  { nom: "Saïda", codes: ["20000"] },
+  { nom: "Skikda", codes: ["21000"] },
+  { nom: "Sidi Bel Abbès", codes: ["22000"] },
+  { nom: "Annaba", codes: ["23000"] },
+  { nom: "Guelma", codes: ["24000"] },
+  { nom: "Constantine", codes: ["25000", "25001", "25002"] },
+  { nom: "Médéa", codes: ["26000"] },
+  { nom: "Mostaganem", codes: ["27000"] },
+  { nom: "M'Sila", codes: ["28000"] },
+  { nom: "Mascara", codes: ["29000"] },
+  { nom: "Ouargla", codes: ["30000"] },
+  { nom: "Oran", codes: ["31000", "31001", "31002", "31003"] },
+  { nom: "El Bayadh", codes: ["32000"] },
+  { nom: "Illizi", codes: ["33000"] },
+  { nom: "Bordj Bou Arréridj", codes: ["34000"] },
+  { nom: "Boumerdès", codes: ["35000"] },
+  { nom: "El Tarf", codes: ["36000"] },
+  { nom: "Tindouf", codes: ["37000"] },
+  { nom: "Tissemsilt", codes: ["38000"] },
+  { nom: "El Oued", codes: ["39000"] },
+  { nom: "Khenchela", codes: ["40000"] },
+  { nom: "Souk Ahras", codes: ["41000"] },
+  { nom: "Tipaza", codes: ["42000"] },
+  { nom: "Mila", codes: ["43000"] },
+  { nom: "Aïn Defla", codes: ["44000"] },
+  { nom: "Naâma", codes: ["45000"] },
+  { nom: "Aïn Témouchent", codes: ["46000"] },
+  { nom: "Ghardaïa", codes: ["47000"] },
+  { nom: "Relizane", codes: ["48000"] },
+  { nom: "Timimoun", codes: ["49000"] },
+  { nom: "Bordj Badji Mokhtar", codes: ["50000"] },
+  { nom: "Ouled Djellal", codes: ["51000"] },
+  { nom: "Béni Abbès", codes: ["52000"] },
+  { nom: "In Salah", codes: ["53000"] },
+  { nom: "In Guezzam", codes: ["54000"] },
+  { nom: "Touggourt", codes: ["55000"] },
+  { nom: "Djanet", codes: ["56000"] },
+  { nom: "El M'Ghair", codes: ["57000"] },
+  { nom: "El Meniaa", codes: ["58000"] },
+];
+
+export function postalCodesFor(wilaya: string): string[] {
+  return WILAYAS.find((w) => w.nom === wilaya)?.codes ?? [];
+}

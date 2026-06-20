@@ -123,6 +123,14 @@ def _bytes_from(image_bytes, image_base64):
     return base64.b64decode(s)
 
 
+def upload_invoice_image(image_bytes, filename="facture.jpg"):
+    """Store an uploaded invoice image and return its public URL (for archiving
+    factures). Returns "" if Cloudinary isn't configured rather than failing."""
+    if not os.getenv("CLOUDINARY_URL"):
+        return ""
+    return _upload_public_url(image_bytes, filename)
+
+
 def _upload_public_url(image_bytes, filename):
     """Upload the image to Cloudinary and return a public URL the AI module can
     fetch (for a `file_input` / `file_url` parameter)."""

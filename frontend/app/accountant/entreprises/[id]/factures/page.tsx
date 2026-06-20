@@ -31,6 +31,7 @@ export default function FacturesAccountantPage() {
         <table className="w-full text-sm">
           <thead className="bg-brand text-left text-white">
             <tr>
+              <th className="p-3">Image</th>
               <th className="p-3">{t("factureNo")}</th>
               <th className="p-3">{t("date")}</th>
               <th className="p-3 text-right">TTC</th>
@@ -40,6 +41,16 @@ export default function FacturesAccountantPage() {
           <tbody>
             {factures.map((f) => (
               <tr key={f.id} className="border-t">
+                <td className="p-3">
+                  {f.image_url && f.image_url.startsWith("http") ? (
+                    <a href={f.image_url} target="_blank" rel="noopener noreferrer">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={f.image_url} alt="facture" className="h-12 w-12 rounded object-cover" />
+                    </a>
+                  ) : (
+                    <span className="text-xs text-gray-400">—</span>
+                  )}
+                </td>
                 <td className="p-3">{f.numero_facture}</td>
                 <td className="p-3">{formatDate(f.date_facture)}</td>
                 <td className="p-3 text-right">{formatDZD(f.montant_ttc)}</td>
@@ -50,7 +61,7 @@ export default function FacturesAccountantPage() {
             ))}
             {factures.length === 0 && (
               <tr>
-                <td colSpan={4} className="p-6 text-center text-gray-400">
+                <td colSpan={5} className="p-6 text-center text-gray-400">
                   {t("aucuneDonnee")}
                 </td>
               </tr>

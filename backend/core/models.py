@@ -6,16 +6,23 @@ class Entreprise(models.Model):
     nom = models.CharField(max_length=255)
     nif = models.CharField(max_length=50, unique=True)          # locked after creation
     nis = models.CharField(max_length=50, unique=True)          # locked after creation
+    nin = models.CharField(max_length=50, blank=True, default="")
     date_creation = models.DateField()
     adresse = models.CharField(max_length=255, blank=True, default="")
     ville = models.CharField(max_length=120, blank=True, default="")
     code_postal = models.CharField(max_length=20, blank=True, default="")
     exercice_comptable = models.CharField(max_length=20)        # locked after creation
+    # Up to two banks.
     banque = models.CharField(max_length=120, blank=True, default="")
     numero_compte = models.CharField(max_length=60, blank=True, default="")
     rib = models.CharField(max_length=60, blank=True, default="")
+    banque2 = models.CharField(max_length=120, blank=True, default="")
+    numero_compte2 = models.CharField(max_length=60, blank=True, default="")
+    rib2 = models.CharField(max_length=60, blank=True, default="")
     regime_fiscale = models.CharField(max_length=120, blank=True, default="")
+    # Up to two activities (e.g. "Commerciale", "Industrielle").
     activite = models.CharField(max_length=255, blank=True, default="")
+    activite2 = models.CharField(max_length=255, blank=True, default="")
     matiere_premiere = models.CharField(max_length=255, blank=True, default="")
     marchandise = models.CharField(max_length=255, blank=True, default="")
     matieres_consommables = models.CharField(max_length=255, blank=True, default="")
@@ -72,6 +79,7 @@ class Journal(models.Model):
         BANQUE = "banque", "Banque"
         CAISSE = "caisse", "Caisse"
         OD = "od", "Opérations diverses"
+        AUTRE = "autre", "Autre"
 
     entreprise = models.ForeignKey(
         Entreprise, on_delete=models.CASCADE, related_name="journaux"
@@ -80,14 +88,16 @@ class Journal(models.Model):
         ExerciceAnnee, on_delete=models.CASCADE, related_name="journaux"
     )
     type_journal = models.CharField(max_length=20, choices=Type.choices)
+    nom = models.CharField(max_length=120, blank=True, default="")  # custom journals
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        unique_together = ("entreprise", "annee", "type_journal")
-        ordering = ["type_journal"]
+        unique_together = ("entreprise", "annee", "type_journal", "nom")
+        ordering = ["type_journal", "nom"]
 
     def __str__(self) -> str:
-        return f"{self.entreprise.nom} - {self.get_type_journal_display()} {self.annee.annee}"
+        label = self.nom or self.get_type_journal_display()
+        return f"{self.entreprise.nom} - {label} {self.annee.annee}"
 
 
 class Ecriture(models.Model):
