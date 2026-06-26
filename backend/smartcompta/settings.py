@@ -1,4 +1,4 @@
-"""Django settings for the Smart Compta backend."""
+import importlib.util
 import os
 from datetime import timedelta
 from pathlib import Path
@@ -35,13 +35,18 @@ INSTALLED_APPS = [
     # Third party
     "rest_framework",
     "corsheaders",
-    # Media storage (Cloudinary) — used when CLOUDINARY_URL is set
-    "cloudinary_storage",
-    "cloudinary",
     # Local
     "accounts",
     "core",
 ]
+
+# Media storage (Cloudinary) — only load if CLOUDINARY_URL is set and the package is installed
+cloudinary_available = (
+    importlib.util.find_spec("cloudinary_storage") is not None
+    and importlib.util.find_spec("cloudinary") is not None
+)
+if os.getenv("CLOUDINARY_URL") and cloudinary_available:
+    INSTALLED_APPS += ["cloudinary_storage", "cloudinary"]
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
@@ -110,7 +115,7 @@ STORAGES = {
 # When CLOUDINARY_URL is set (cloudinary://<api_key>:<api_secret>@<cloud_name>),
 # uploaded media (avatars, invoice images) goes to Cloudinary and persists.
 # Without it, media falls back to local disk (fine for dev).
-if os.getenv("CLOUDINARY_URL"):
+if os.getenv("CLOUDINARY_URL") and cloudinary_available:
     STORAGES["default"] = {
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage"
     }

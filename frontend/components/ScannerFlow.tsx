@@ -29,17 +29,34 @@ const STEPS: { key: string; labelKey: "lectureDocument" | "extractionInfos" | "a
   { key: "4", labelKey: "generationEcritures" },
 ];
 
+const ACCEPTED_ACCEPT = ".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf";
+const ACCEPTED_EXT = /\.(pdf|jpe?g|png)$/i;
+
+function isAcceptedFile(f: File): boolean {
+  const name = f.name.toLowerCase();
+  return (
+    f.type === "application/pdf" ||
+    f.type === "image/jpeg" ||
+    f.type === "image/png" ||
+    ACCEPTED_EXT.test(name)
+  );
+}
+
 export function ScannerFlow({
   entrepriseId,
   annee,
+  successPath,
 }: {
   entrepriseId: number;
   annee?: number;
+  /** Route après succès (défaut : Mes factures). */
+  successPath?: string;
 }) {
   const { t } = useI18n();
   const router = useRouter();
   const base = `/accountant/entreprises/${entrepriseId}`;
   const qs = annee ? `?annee=${annee}` : "";
+  const afterSuccess = successPath ?? `${base}/factures${qs}`;
   const [redirectIn, setRedirectIn] = useState(5);
   const [phase, setPhase] = useState<Phase>("capture");
   const [preview, setPreview] = useState<string | null>(null);
@@ -60,6 +77,10 @@ export function ScannerFlow({
   function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
     if (!f) return;
+    if (!isAcceptedFile(f)) {
+      setError("Format non supporté. Utilisez PDF, JPG, JPEG ou PNG.");
+      return;
+    }
     setError("");
     setFile(f);
     // PDFs can't be shown in an <img>; we show a file card instead.
@@ -120,12 +141,12 @@ export function ScannerFlow({
     if (phase !== "success") return;
     setRedirectIn(5);
     const tick = setInterval(() => setRedirectIn((n) => n - 1), 1000);
-    const go = setTimeout(() => router.push(`${base}/dashboard${qs}`), 5000);
+    const go = setTimeout(() => router.push(afterSuccess), 5000);
     return () => {
       clearInterval(tick);
       clearTimeout(go);
     };
-  }, [phase, router, base, qs]);
+  }, [phase, router, afterSuccess]);
 
   // ---- CAPTURE ----
   if (phase === "capture")
@@ -135,16 +156,15 @@ export function ScannerFlow({
         <input
           ref={inputRef}
           type="file"
-          accept="image/*"
+          accept={ACCEPTED_ACCEPT}
           capture="environment"
           className="hidden"
           onChange={pickFile}
         />
-        {/* PC import — images AND PDFs, no camera */}
         <input
           ref={importRef}
           type="file"
-          accept="image/*,application/pdf"
+          accept={ACCEPTED_ACCEPT}
           className="hidden"
           onChange={pickFile}
         />
@@ -190,7 +210,7 @@ export function ScannerFlow({
             <Camera size={16} /> {t("prendrePhoto")}
           </Button>
           <Button variant="outline" onClick={() => importRef.current?.click()}>
-            <Upload size={16} /> Importer (PDF/Image)
+            <Upload size={16} /> Importer (PDF / Image)
           </Button>
           <Button variant="success" onClick={send} disabled={!file}>
             {t("envoyer")}

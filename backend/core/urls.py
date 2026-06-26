@@ -10,6 +10,17 @@ urlpatterns = [
     path("entreprises/<int:pk>/clients/", views.ClientListCreateView.as_view()),
     path("entreprises/<int:pk>/clients/<int:client_id>/",
          views.ClientDeleteView.as_view()),
+    # Fournisseurs
+    path("entreprises/<int:pk>/fournisseurs/",
+         views.FournisseurListCreateView.as_view()),
+    path("entreprises/<int:pk>/fournisseurs/<int:fournisseur_id>/",
+         views.FournisseurDetailView.as_view()),
+    # Messages
+    path("entreprises/<int:pk>/conversations/",
+         views.ConversationListView.as_view()),
+    path("entreprises/<int:pk>/conversations/<int:client_id>/messages/",
+         views.MessageListCreateView.as_view()),
+    path("messages/", views.MessageListCreateView.as_view()),
     # Exercices
     path("entreprises/<int:pk>/exercices/", views.ExerciceListCreateView.as_view()),
     # Journaux & écritures
@@ -25,6 +36,7 @@ urlpatterns = [
     # Factures
     path("factures/", views.FactureListCreateView.as_view()),
     path("factures/<int:pk>/", views.FactureDetailView.as_view()),
+    path("factures/<int:pk>/validate/", views.FactureValidateView.as_view()),
     # Reports
     path("entreprises/<int:pk>/balance/", views.BalanceView.as_view()),
     path("entreprises/<int:pk>/compte-resultat/", views.CompteResultatView.as_view()),

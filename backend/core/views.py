@@ -1,18 +1,23 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .account_helpers import get_or_create_client_comptable
 from .models import (
     ClientAccess,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
     Facture,
+    Fournisseur,
     Journal,
+    LigneEcriture,
+    Message,
 )
 from rest_framework.permissions import AllowAny
 
@@ -38,7 +43,9 @@ from .serializers import (
     EntrepriseSerializer,
     ExerciceAnneeSerializer,
     FactureSerializer,
+    FournisseurSerializer,
     JournalSerializer,
+    MessageSerializer,
 )
 
 User = get_user_model()
@@ -152,6 +159,171 @@ class ClientDeleteView(APIView):
                                    client_id=client_id)
         access.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------- #
+# Fournisseurs
+# --------------------------------------------------------------------------- #
+class FournisseurListCreateView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        qs = entreprise.fournisseurs.all()
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(nom__icontains=q)
+        return Response(FournisseurSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        from .account_helpers import next_account_number
+        entreprise = _accountant_entreprise(request, pk)
+        serializer = FournisseurSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fournisseur = serializer.save(
+            entreprise=entreprise,
+            numero_compte=next_account_number(entreprise, "401"),
+        )
+        return Response(FournisseurSerializer(fournisseur).data,
+                        status=status.HTTP_201_CREATED)
+
+
+class FournisseurDetailView(APIView):
+    permission_classes = [IsAccountant]
+
+    def _get(self, request, pk, fournisseur_id):
+        entreprise = _accountant_entreprise(request, pk)
+        return get_object_or_404(Fournisseur, pk=fournisseur_id, entreprise=entreprise)
+
+    def put(self, request, pk, fournisseur_id):
+        fournisseur = self._get(request, pk, fournisseur_id)
+        serializer = FournisseurSerializer(fournisseur, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk, fournisseur_id):
+        self._get(request, pk, fournisseur_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------- #
+# Messages
+# --------------------------------------------------------------------------- #
+class ConversationListView(APIView):
+    """Liste des conversations (un client portail par entreprise)."""
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        accesses = entreprise.client_accesses.select_related("client").all()
+        result = []
+        for access in accesses:
+            last = Message.objects.filter(
+                entreprise=entreprise, client_user=access.client
+            ).order_by("-created_at").first()
+            unread = Message.objects.filter(
+                entreprise=entreprise,
+                client_user=access.client,
+                sender=access.client,
+                read_at__isnull=True,
+            ).count()
+            result.append({
+                "client_id": access.client_id,
+                "nom_client": access.nom_client,
+                "username": access.client.username,
+                "last_message": last.content if last else "",
+                "last_message_at": last.created_at.isoformat() if last else None,
+                "unread_count": unread,
+            })
+        return Response(result)
+
+
+class MessageListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk=None, client_id=None):
+        if request.user.role == "accountant" and pk and client_id:
+            entreprise = _accountant_entreprise(request, pk)
+            client_user = get_object_or_404(User, pk=client_id, role=User.Role.CLIENT)
+            get_object_or_404(ClientAccess, entreprise=entreprise, client=client_user)
+            qs = Message.objects.filter(
+                entreprise=entreprise, client_user=client_user
+            ).select_related("sender")
+            # Mark client messages as read when accountant opens conversation
+            Message.objects.filter(
+                entreprise=entreprise,
+                client_user=client_user,
+                sender=client_user,
+                read_at__isnull=True,
+            ).update(read_at=timezone.now())
+        elif request.user.role == "client":
+            access = ClientAccess.objects.filter(client=request.user).select_related(
+                "entreprise"
+            ).first()
+            if not access:
+                return Response([])
+            entreprise = access.entreprise
+            client_user = request.user
+            qs = Message.objects.filter(
+                entreprise=entreprise, client_user=client_user
+            ).select_related("sender")
+            Message.objects.filter(
+                entreprise=entreprise,
+                client_user=client_user,
+                sender=entreprise.accountant,
+                read_at__isnull=True,
+            ).update(read_at=timezone.now())
+        else:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        return Response(
+            MessageSerializer(qs, many=True, context={"request": request}).data
+        )
+
+    def post(self, request, pk=None, client_id=None):
+        content = (request.data.get("content") or "").strip()
+        if not content:
+            return Response(
+                {"content": "Le message ne peut pas être vide."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if request.user.role == "accountant" and pk and client_id:
+            entreprise = _accountant_entreprise(request, pk)
+            client_user = get_object_or_404(User, pk=client_id, role=User.Role.CLIENT)
+            get_object_or_404(ClientAccess, entreprise=entreprise, client=client_user)
+        elif request.user.role == "client":
+            access = ClientAccess.objects.filter(client=request.user).select_related(
+                "entreprise"
+            ).first()
+            if not access:
+                return Response(
+                    {"error": "Aucune entreprise associée. Veuillez contacter le comptable pour être ajouté."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            entreprise = access.entreprise
+            client_user = request.user
+        else:
+            return Response(
+                {"error": "Accès refusé. Seuls les comptables et les clients peuvent envoyer des messages."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        try:
+            msg = Message.objects.create(
+                entreprise=entreprise,
+                sender=request.user,
+                client_user=client_user,
+                content=content,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Erreur lors de la création du message: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        return Response(
+            MessageSerializer(msg, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -313,6 +485,15 @@ class ScannerUploadView(APIView):
                     or name.endswith(".pdf")
                     or raw[:5] == b"%PDF-"
                 )
+                is_image = (
+                    f.content_type in ("image/jpeg", "image/png")
+                    or name.endswith((".jpg", ".jpeg", ".png"))
+                )
+                if not is_pdf and not is_image:
+                    return Response(
+                        {"error": "Format non supporté. Utilisez PDF, JPG, JPEG ou PNG."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 if is_pdf:
                     # PC import: render ALL pages of the PDF into one image so
                     # the vision model receives the whole document.
@@ -416,6 +597,167 @@ class FactureDetailView(APIView):
         else:
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
         return Response(FactureSerializer(facture).data)
+
+
+# --------------------------------------------------------------------------- #
+# Facture – Validate & auto-post to Banque / Caisse
+# --------------------------------------------------------------------------- #
+class FactureValidateView(APIView):
+    """Validate a client facture and auto-create the matching Ecriture in the
+    Banque journal (cheque / virement) or Caisse journal (espèces).
+    For cash payments (espèces) the system also creates an entry in the
+    Caisse journal automatically."""
+
+    permission_classes = [IsAccountant]
+
+    @transaction.atomic
+    def post(self, request, pk):
+        facture = get_object_or_404(
+            Facture, pk=pk, entreprise__accountant=request.user
+        )
+        if facture.statut == Facture.Statut.VALIDE and facture.ecriture_id:
+            return Response(
+                {"error": "Facture déjà validée."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        # Normalize incoming mode_paiement and prefer explicit request value,
+        # then existing facture value. Require a non-empty, supported mode.
+        mode = (request.data.get("mode_paiement") or facture.mode_paiement or "").lower().strip()
+        if not mode:
+            return Response(
+                {"error": "Le mode de paiement est obligatoire pour valider la facture."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Whitelist known cash vs bank payment modes. Reject unknown values.
+        CASH_MODES = {"espèce", "espèces", "espece", "especes", "cash"}
+        BANK_MODES = {
+            "chèque", "cheque", "virement", "transfer", "transfert",
+            "carte", "carte bancaire", "cb", "cheque bancaire"
+        }
+
+        if mode in CASH_MODES:
+            is_cash = True
+        elif mode in BANK_MODES:
+            is_cash = False
+        else:
+            return Response(
+                {"error": f"Mode de paiement non supporté: '{mode}'. Valeurs acceptées: {sorted(list(CASH_MODES | BANK_MODES))}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Determine which journal to post to.
+        journal_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
+
+        entreprise = facture.entreprise
+
+        # Find active exercise year
+        annee_obj = None
+        if facture.date_facture:
+            try:
+                year = facture.date_facture.year
+                annee_obj = ExerciceAnnee.objects.filter(
+                    entreprise=entreprise, annee=year
+                ).first()
+            except Exception:
+                pass
+        if not annee_obj:
+            annee_obj = ExerciceAnnee.objects.filter(
+                entreprise=entreprise, is_active=True
+            ).first()
+        if not annee_obj:
+            return Response(
+                {"error": "Aucun exercice comptable actif trouvé."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get-or-create the target journal
+        journal, _ = Journal.objects.get_or_create(
+            entreprise=entreprise,
+            annee=annee_obj,
+            type_journal=journal_type,
+        )
+
+        client_nom = facture.client.username
+        # Résoudre le nom du client portail (nom_client si disponible)
+        access = ClientAccess.objects.filter(
+            entreprise=entreprise, client=facture.client
+        ).first()
+        display_nom = access.nom_client if access else client_nom
+        client_comptable = get_or_create_client_comptable(entreprise, display_nom)
+        compte_client = client_comptable.numero_compte
+
+        montant = facture.montant_ttc
+        date_f = facture.date_facture
+        if not date_f:
+            return Response(
+                 {"error": "La date de facture est obligatoire pour valider."},
+                 status=status.HTTP_400_BAD_REQUEST,
+            )
+        numero = facture.numero_facture
+
+        # Build accounting lines depending on payment type
+        if is_cash:
+            # Caisse entry: Debit 530 (Caisse) / Credit 411 (Clients)
+            lignes = [
+                LigneEcriture(
+                    numero_compte="530",
+                    libelle=f"Encaissement espèces {numero} – {client_nom}",
+                    montant_debit=montant,
+                    montant_credit=0,
+                ),
+                LigneEcriture(
+                    numero_compte=compte_client,
+                    libelle=f"Client {display_nom} – Facture {numero}",
+                    montant_debit=0,
+                    montant_credit=montant,
+                ),
+            ]
+        else:
+            # Banque entry: Debit 512 (Banque) / Credit 411 (Clients)
+            lignes = [
+                LigneEcriture(
+                    numero_compte="512",
+                    libelle=f"Encaissement banque {numero} – {client_nom}",
+                    montant_debit=montant,
+                    montant_credit=0,
+                ),
+                LigneEcriture(
+                    numero_compte=compte_client,
+                    libelle=f"Client {display_nom} – Facture {numero}",
+                    montant_debit=0,
+                    montant_credit=montant,
+                ),
+            ]
+
+        ecriture = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date_f,
+            numero_piece=numero,
+            fournisseur_client=display_nom,
+            source=Ecriture.Source.MANUEL,
+            mode_paiement=mode,
+            statut=Ecriture.Statut.VALIDE,
+        )
+        for ligne in lignes:
+            ligne.ecriture = ecriture
+            ligne.save()
+
+        # Update facture
+        facture.statut = Facture.Statut.VALIDE
+        facture.ecriture = ecriture
+        if mode:
+            facture.mode_paiement = mode
+        facture.save()
+
+        return Response(
+            {
+                "facture": FactureSerializer(facture).data,
+                "ecriture": EcritureSerializer(ecriture).data,
+            },
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # --------------------------------------------------------------------------- #

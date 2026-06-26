@@ -1,6 +1,6 @@
 "use client";
 
-import { FileText, Home, LogOut, Menu, Settings, User, X } from "lucide-react";
+import { FileText, Home, LogOut, Menu, MessageSquare, Settings, User, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/client/dashboard", icon: Home },
   { href: "/client/factures", icon: FileText },
+  { href: "/client/messages", icon: MessageSquare },
   { href: "/client/settings", icon: Settings },
 ];
 

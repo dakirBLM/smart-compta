@@ -59,6 +59,39 @@ export interface ClientAccess {
   created_at: string;
 }
 
+export interface Fournisseur {
+  id: number;
+  entreprise: number;
+  nom: string;
+  numero_compte: string;
+  email: string;
+  telephone: string;
+  adresse: string;
+  created_at: string;
+}
+
+export interface Conversation {
+  client_id: number;
+  nom_client: string;
+  username: string;
+  last_message: string;
+  last_message_at: string | null;
+  unread_count: number;
+}
+
+export interface ChatMessage {
+  id: number;
+  entreprise: number;
+  sender: number;
+  sender_username: string;
+  sender_role: Role;
+  client_user: number;
+  content: string;
+  read_at: string | null;
+  created_at: string;
+  is_mine: boolean;
+}
+
 export type JournalType =
   | "achat"
   | "vente"
@@ -97,6 +130,7 @@ export interface Ecriture {
   source: "manuel" | "import" | "scanner";
   confiance_ia: number | null;
   statut: Statut;
+  mode_paiement: string;
   created_at: string;
   lignes: LigneEcriture[];
   total_debit: number;
@@ -118,6 +152,7 @@ export interface Facture {
   statut: Statut;
   confiance_ia: number | null;
   ecriture: number | null;
+  mode_paiement: string;
   created_at: string;
 }
 

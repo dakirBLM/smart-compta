@@ -11,6 +11,11 @@ import requests
 from django.conf import settings
 from django.db import transaction
 
+from .account_helpers import (
+    apply_tiers_account,
+    get_or_create_client_comptable,
+    get_or_create_fournisseur,
+)
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
 REQUIRED_FIELDS = [
@@ -327,6 +332,17 @@ def persist_extraction(entreprise, data, source="scanner"):
         entreprise=entreprise, annee=annee, type_journal=type_journal
     )
 
+    fournisseur_nom = (data.get("fournisseur") or "").strip()
+    lignes_data = list(data["lignes"])
+    if type_journal == Journal.Type.ACHAT and fournisseur_nom:
+        tiers = get_or_create_fournisseur(entreprise, fournisseur_nom)
+        lignes_data = apply_tiers_account(lignes_data, tiers.numero_compte, "401")
+        fournisseur_nom = tiers.nom
+    elif type_journal == Journal.Type.VENTE and fournisseur_nom:
+        tiers = get_or_create_client_comptable(entreprise, fournisseur_nom)
+        lignes_data = apply_tiers_account(lignes_data, tiers.numero_compte, "411")
+        fournisseur_nom = tiers.nom
+
     confiance = int(data.get("confiance", 0))
     statut = (Ecriture.Statut.VALIDE if confiance >= 90
               else Ecriture.Statut.EN_COURS)
@@ -335,12 +351,12 @@ def persist_extraction(entreprise, data, source="scanner"):
         journal=journal,
         date_ecriture=_parse_date(data["date_facture"]),
         numero_piece=data.get("numero_facture", ""),
-        fournisseur_client=data.get("fournisseur", ""),
+        fournisseur_client=fournisseur_nom,
         source=source,
         confiance_ia=confiance,
         statut=statut,
     )
-    for ligne in data["lignes"]:
+    for ligne in lignes_data:
         LigneEcriture.objects.create(
             ecriture=ecriture,
             numero_compte=ligne.get("compte", ""),

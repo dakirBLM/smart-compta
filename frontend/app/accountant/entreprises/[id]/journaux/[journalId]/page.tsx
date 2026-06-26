@@ -1,6 +1,6 @@
 "use client";
 
-import { BookPlus, Plus, Search, Upload } from "lucide-react";
+import { BookPlus, Plus, Search, Banknote, CreditCard, FileText, Info } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -19,10 +19,32 @@ const TYPE_LABELS: Record<string, string> = {
   vente: "Vente",
   banque: "Banque",
   caisse: "Caisse",
-  od: "OD",
+  od: "OD – Opérations Diverses",
 };
 
-type Tab = "voir" | "rechercher" | "ajouter" | "importer";
+const TYPE_ICONS: Record<string, React.ReactNode> = {
+  banque: <CreditCard size={18} />,
+  caisse: <Banknote size={18} />,
+  od: <FileText size={18} />,
+};
+
+const TYPE_COLORS: Record<string, string> = {
+  banque: "from-blue-500 to-blue-600",
+  caisse: "from-amber-500 to-orange-500",
+  od: "from-purple-500 to-purple-600",
+  achat: "from-red-500 to-rose-600",
+  vente: "from-emerald-500 to-green-600",
+};
+
+const TYPE_DESCRIPTIONS: Record<string, string> = {
+  banque:
+    "Mouvements bancaires : encaissements par chèque ou virement, paiements fournisseurs, remboursements d'emprunts, etc.",
+  caisse:
+    "Opérations en espèces : encaissements cash, paiements en liquide, dépenses de petite caisse, etc.",
+  od: "Opérations diverses : factures d'électricité, téléphone, loyer, salaires, amortissements, etc.",
+};
+
+type Tab = "voir" | "rechercher" | "ajouter";
 
 export default function JournalPage() {
   const { t } = useI18n();
@@ -133,12 +155,14 @@ export default function JournalPage() {
     { key: "voir", label: t("voir"), icon: <Search size={15} /> },
     { key: "rechercher", label: t("rechercher"), icon: <Search size={15} /> },
     { key: "ajouter", label: t("ajouterEcriture"), icon: <Plus size={15} /> },
-    { key: "importer", label: t("importer"), icon: <Upload size={15} /> },
   ];
 
   const title = isNumeric
     ? journal?.type_label ?? "Journal"
     : TYPE_LABELS[type] ?? type;
+  const gradient = TYPE_COLORS[type] || "from-brand to-brand/80";
+  const description = TYPE_DESCRIPTIONS[type];
+  const icon = TYPE_ICONS[type];
 
   return (
     <AppShell
@@ -166,6 +190,28 @@ export default function JournalPage() {
         </Button>
       </div>
 
+      {/* Journal header banner */}
+      <div
+        className={`mb-5 rounded-2xl bg-gradient-to-r ${gradient} p-4 text-white shadow-md`}
+      >
+        <div className="flex items-center gap-3">
+          <div className="rounded-xl bg-white/20 p-2">{icon}</div>
+          <div>
+            <h2 className="text-lg font-bold">
+              Journal {TYPE_LABELS[type] ?? type}
+            </h2>
+            {description && (
+              <p className="text-sm text-white/80 mt-0.5">{description}</p>
+            )}
+          </div>
+          <div className="ml-auto text-right">
+            <div className="text-2xl font-bold">{ecritures.length}</div>
+            <div className="text-xs text-white/70">écriture{ecritures.length !== 1 ? "s" : ""}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Tabs */}
       <div className="mb-4 flex flex-wrap gap-2">
         {tabs.map((tb) => (
           <button
@@ -178,8 +224,8 @@ export default function JournalPage() {
               }
             }}
             className={cn(
-              "flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium",
-              tab === tb.key ? "bg-brand text-white" : "bg-white text-brand border"
+              "flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-medium transition-all",
+              tab === tb.key ? "bg-brand text-white shadow-sm" : "bg-white text-brand border hover:bg-brand/5"
             )}
           >
             {tb.icon}
@@ -219,11 +265,45 @@ export default function JournalPage() {
             </div>
           )}
 
-          {tab === "importer" && (
-            <div className="rounded-lg border-2 border-dashed p-8 text-center text-gray-500">
-              <Upload className="mx-auto mb-2" />
-              <p>Importer un fichier CSV / Excel</p>
-              <input type="file" accept=".csv,.xlsx,.xls" className="mt-3" />
+          {/* OD info panel */}
+          {type === "od" && ecritures.length === 0 && tab === "voir" && (
+            <div className="mb-4 flex items-start gap-3 rounded-xl bg-purple-50 border border-purple-200 p-4 text-sm text-purple-800">
+              <Info size={18} className="mt-0.5 shrink-0 text-purple-500" />
+              <div>
+                <p className="font-semibold">Opérations Diverses (OD)</p>
+                <p className="mt-1 text-purple-700">
+                  Ce journal enregistre toutes les opérations qui ne passent ni par la banque ni par la caisse :
+                  factures d&apos;électricité, téléphone, loyers, salaires, amortissements, régularisations, etc.
+                  Utilisez les <strong>modèles prédéfinis</strong> pour accélérer la saisie.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {type === "caisse" && ecritures.length === 0 && tab === "voir" && (
+            <div className="mb-4 flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
+              <Info size={18} className="mt-0.5 shrink-0 text-amber-500" />
+              <div>
+                <p className="font-semibold">Journal de Caisse</p>
+                <p className="mt-1 text-amber-700">
+                  Ce journal enregistre tous les mouvements en <strong>espèces</strong>.
+                  Les factures payées en espèces sont automatiquement comptabilisées ici depuis la page Factures.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {type === "banque" && ecritures.length === 0 && tab === "voir" && (
+            <div className="mb-4 flex items-start gap-3 rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800">
+              <Info size={18} className="mt-0.5 shrink-0 text-blue-500" />
+              <div>
+                <p className="font-semibold">Journal de Banque</p>
+                <p className="mt-1 text-blue-700">
+                  Ce journal enregistre tous les mouvements bancaires : encaissements par <strong>chèque</strong> ou{" "}
+                  <strong>virement</strong>, paiements fournisseurs, remboursements d&apos;emprunts, etc.
+                  Les factures réglées par chèque/virement sont automatiquement comptabilisées ici.
+                </p>
+              </div>
             </div>
           )}
 
@@ -254,6 +334,7 @@ export default function JournalPage() {
             setShowForm(false);
             setEditing(null);
           }}
+          journalType={type}
         />
       </Modal>
 

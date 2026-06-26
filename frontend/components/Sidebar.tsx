@@ -13,6 +13,7 @@ import {
   MessageSquare,
   Scale,
   Settings,
+  Truck,
   Users,
   X,
 } from "lucide-react";
@@ -334,10 +335,17 @@ export function Sidebar({
               onNavigate={nav}
             />
             <Item
-              href={`${base}`}
+              href={`${base}/fournisseurs`}
+              icon={<Truck size={20} />}
+              label={t("fournisseurs")}
+              active={is(`${base}/fournisseurs`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/messages`}
               icon={<MessageSquare size={20} />}
               label={t("messages")}
-              active={pathname === base}
+              active={is(`${base}/messages`)}
               onNavigate={nav}
             />
             <Item

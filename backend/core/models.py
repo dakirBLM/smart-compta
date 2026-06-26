@@ -120,6 +120,7 @@ class Ecriture(models.Model):
     source = models.CharField(max_length=20, choices=Source.choices, default=Source.MANUEL)
     confiance_ia = models.IntegerField(null=True, blank=True)
     statut = models.CharField(max_length=20, choices=Statut.choices, default=Statut.EN_COURS)
+    mode_paiement = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -150,6 +151,70 @@ class LigneEcriture(models.Model):
         return f"{self.numero_compte} - {self.libelle}"
 
 
+class Fournisseur(models.Model):
+    """Fournisseur comptable (compte 401)."""
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="fournisseurs"
+    )
+    nom = models.CharField(max_length=255)
+    numero_compte = models.CharField(max_length=20)
+    email = models.EmailField(blank=True, default="")
+    telephone = models.CharField(max_length=30, blank=True, default="")
+    adresse = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["nom"]
+        unique_together = ("entreprise", "numero_compte")
+
+    def __str__(self) -> str:
+        return f"{self.nom} ({self.numero_compte})"
+
+
+class ClientComptable(models.Model):
+    """Client comptable (compte 411) — distinct des accès portail ClientAccess."""
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="clients_comptables"
+    )
+    nom = models.CharField(max_length=255)
+    numero_compte = models.CharField(max_length=20)
+    email = models.EmailField(blank=True, default="")
+    telephone = models.CharField(max_length=30, blank=True, default="")
+    adresse = models.CharField(max_length=255, blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["nom"]
+        unique_together = ("entreprise", "numero_compte")
+
+    def __str__(self) -> str:
+        return f"{self.nom} ({self.numero_compte})"
+
+
+class Message(models.Model):
+    """Message entre le comptable et un client (portail) d'une entreprise."""
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="messages"
+    )
+    sender = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="sent_messages"
+    )
+    client_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="conversation_messages",
+    )
+    content = models.TextField()
+    read_at = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at"]
+
+    def __str__(self) -> str:
+        return f"Message {self.id} ({self.entreprise.nom})"
+
+
 class Facture(models.Model):
     class Statut(models.TextChoices):
         EN_COURS = "en_cours", "En cours"
@@ -174,6 +239,7 @@ class Facture(models.Model):
     ecriture = models.ForeignKey(
         Ecriture, on_delete=models.SET_NULL, null=True, blank=True, related_name="factures"
     )
+    mode_paiement = models.CharField(max_length=50, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
