@@ -24,6 +24,7 @@ export function ChatPanel({
   const [loading, setLoading] = useState(false);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const loadMessages = useCallback(async () => {
@@ -53,6 +54,7 @@ export function ChatPanel({
 
   async function send() {
     if (!selectedClientId || !text.trim() || sending) return;
+    setError("");
     setSending(true);
     try {
       const msg = await api.post<ChatMessage>(
@@ -61,6 +63,8 @@ export function ChatPanel({
       );
       setMessages((prev) => [...prev, msg]);
       setText("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur lors de l'envoi du message");
     } finally {
       setSending(false);
     }
@@ -114,6 +118,11 @@ export function ChatPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/50">
+              {error && (
+                <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                  {error}
+                </div>
+              )}
               {loading && messages.length === 0 ? (
                 <div className="flex justify-center py-8">
                   <Spinner className="h-6 w-6 text-brand" />

@@ -297,20 +297,29 @@ class MessageListCreateView(APIView):
             ).first()
             if not access:
                 return Response(
-                    {"error": "Aucune entreprise associée."},
+                    {"error": "Aucune entreprise associée. Veuillez contacter le comptable pour être ajouté."},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
             entreprise = access.entreprise
             client_user = request.user
         else:
-            return Response(status=status.HTTP_403_FORBIDDEN)
+            return Response(
+                {"error": "Accès refusé. Seuls les comptables et les clients peuvent envoyer des messages."},
+                status=status.HTTP_403_FORBIDDEN
+            )
 
-        msg = Message.objects.create(
-            entreprise=entreprise,
-            sender=request.user,
-            client_user=client_user,
-            content=content,
-        )
+        try:
+            msg = Message.objects.create(
+                entreprise=entreprise,
+                sender=request.user,
+                client_user=client_user,
+                content=content,
+            )
+        except Exception as e:
+            return Response(
+                {"error": f"Erreur lors de la création du message: {str(e)}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
         return Response(
             MessageSerializer(msg, context={"request": request}).data,
             status=status.HTTP_201_CREATED,

@@ -15,6 +15,7 @@ export default function ClientMessagesPage() {
   const [loading, setLoading] = useState(true);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [error, setError] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const load = useCallback(async () => {
@@ -40,11 +41,14 @@ export default function ClientMessagesPage() {
 
   async function send() {
     if (!text.trim() || sending) return;
+    setError("");
     setSending(true);
     try {
       const msg = await api.post<ChatMessage>("/api/messages/", { content: text.trim() });
       setMessages((prev) => [...prev, msg]);
       setText("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Erreur lors de l'envoi du message");
     } finally {
       setSending(false);
     }
@@ -56,6 +60,11 @@ export default function ClientMessagesPage() {
         <h1 className="mb-4 text-xl font-bold text-brand">{t("messages")}</h1>
         <div className="flex h-[calc(100vh-10rem)] min-h-[400px] flex-col overflow-hidden rounded-xl border bg-white shadow-sm">
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/50">
+            {error && (
+              <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            )}
             {loading ? (
               <div className="flex justify-center py-8">
                 <Spinner className="h-6 w-6 text-brand" />
