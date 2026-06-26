@@ -92,7 +92,15 @@ async function request<T>(
 /** Pull a human-readable message out of a DRF error body, including field
  * validation errors like {"entreprise": ["Ce champ est obligatoire."]}. */
 function extractErrorMessage(data: unknown, status: number): string {
-  if (typeof data === "string" && data) return data;
+  // If the server returned an HTML error page, don't surface the raw HTML
+  // to users — return a concise, actionable message instead.
+  if (typeof data === "string" && data) {
+    const trimmed = data.trim();
+    if (trimmed.startsWith("<!DOCTYPE") || trimmed.startsWith("<html")) {
+      return `Erreur serveur (${status}) — réponse HTML inattendue. Vérifiez l'onglet Réseau (Network) pour les détails.`;
+    }
+    return data;
+  }
   if (data && typeof data === "object") {
     const obj = data as Record<string, unknown>;
     if (typeof obj.detail === "string") return obj.detail;

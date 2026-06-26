@@ -19,6 +19,7 @@ export const translations = {
     messages: "Messages",
     mesFactures: "Mes factures",
     clients: "Clients",
+    fournisseurs: "Fournisseurs",
     settings: "Paramètres",
     // Entreprises page
     ajouter: "Ajouter",
@@ -113,6 +114,15 @@ export const translations = {
     operationsDiverses: "Opérations Diverses",
     validerFacture: "Valider la facture",
     comptabilise: "Comptabilisé",
+    // Messages
+    nouvelleConversation: "Sélectionnez un client",
+    ecrireMessage: "Écrire un message…",
+    envoyerMessage: "Envoyer",
+    aucunMessage: "Aucun message pour le moment.",
+    scannerImport: "Scanner / Importer",
+    facturesClients: "Factures clients",
+    importerFacture: "Importer une facture (PDF ou image)",
+    formatsAcceptes: "Formats acceptés : PDF, JPG, JPEG, PNG",
   },
   ar: {
     appName: "سمارت كومبتا",
@@ -131,6 +141,7 @@ export const translations = {
     messages: "الرسائل",
     mesFactures: "فواتيري",
     clients: "العملاء",
+    fournisseurs: "الموردين",
     settings: "الإعدادات",
     ajouter: "إضافة",
     supprimer: "حذف",
@@ -218,6 +229,14 @@ export const translations = {
     operationsDiverses: "عمليات متنوعة",
     validerFacture: "التحقق من الفاتورة",
     comptabilise: "تم المحاسبة",
+    nouvelleConversation: "اختر عميلاً",
+    ecrireMessage: "اكتب رسالة…",
+    envoyerMessage: "إرسال",
+    aucunMessage: "لا توجد رسائل حتى الآن.",
+    scannerImport: "مسح / استيراد",
+    facturesClients: "فواتير العملاء",
+    importerFacture: "استيراد فاتورة (PDF أو صورة)",
+    formatsAcceptes: "الصيغ المقبولة: PDF، JPG، JPEG، PNG",
   },
 } as const;
 

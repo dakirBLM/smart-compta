@@ -1,21 +1,18 @@
 "use client";
 
-import { AppShell } from "@/components/AppShell";
-import { ScannerFlow } from "@/components/ScannerFlow";
-import { useI18n } from "@/lib/i18n-context";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 import { useEntreprise } from "@/lib/useEntreprise";
 
+/** Redirige vers Mes factures (scanner + import fusionné). */
 export default function ScannerPage() {
-  const { t } = useI18n();
-  const { id, entreprise, annee } = useEntreprise();
-  return (
-    <AppShell
-      title={t("scanner")}
-      entrepriseId={id}
-      entrepriseName={entreprise?.nom}
-      annee={annee}
-    >
-      {id && <ScannerFlow entrepriseId={id} annee={annee} />}
-    </AppShell>
-  );
+  const router = useRouter();
+  const { id, annee } = useEntreprise();
+  const qs = annee ? `?annee=${annee}` : "";
+
+  useEffect(() => {
+    if (id) router.replace(`/accountant/entreprises/${id}/factures${qs}`);
+  }, [id, annee, qs, router]);
+
+  return null;
 }

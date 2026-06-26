@@ -1,6 +1,6 @@
 "use client";
 
-import { BookPlus, Plus, Search, Upload, Banknote, CreditCard, FileText, Info } from "lucide-react";
+import { BookPlus, Plus, Search, Banknote, CreditCard, FileText, Info } from "lucide-react";
 import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -44,7 +44,7 @@ const TYPE_DESCRIPTIONS: Record<string, string> = {
   od: "Opérations diverses : factures d'électricité, téléphone, loyer, salaires, amortissements, etc.",
 };
 
-type Tab = "voir" | "rechercher" | "ajouter" | "importer";
+type Tab = "voir" | "rechercher" | "ajouter";
 
 export default function JournalPage() {
   const { t } = useI18n();
@@ -155,7 +155,6 @@ export default function JournalPage() {
     { key: "voir", label: t("voir"), icon: <Search size={15} /> },
     { key: "rechercher", label: t("rechercher"), icon: <Search size={15} /> },
     { key: "ajouter", label: t("ajouterEcriture"), icon: <Plus size={15} /> },
-    { key: "importer", label: t("importer"), icon: <Upload size={15} /> },
   ];
 
   const title = isNumeric
@@ -263,14 +262,6 @@ export default function JournalPage() {
                 {t("rechercher")}
               </Button>
               <p className="text-xs text-gray-400">N° compte ou Date (au moins un)</p>
-            </div>
-          )}
-
-          {tab === "importer" && (
-            <div className="rounded-lg border-2 border-dashed p-8 text-center text-gray-500">
-              <Upload className="mx-auto mb-2" />
-              <p>Importer un fichier CSV / Excel</p>
-              <input type="file" accept=".csv,.xlsx,.xls" className="mt-3" />
             </div>
           )}
 

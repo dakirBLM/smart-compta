@@ -1,7 +1,7 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Plus, Search, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Modal } from "@/components/Modal";
 import { Button, Card, Input, Label } from "@/components/ui";
@@ -14,6 +14,7 @@ export default function ClientsPage() {
   const { t } = useI18n();
   const { id, entreprise, annee } = useEntreprise();
   const [clients, setClients] = useState<ClientAccess[]>([]);
+  const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
   const [form, setForm] = useState({ nom_client: "", username: "", password: "", email: "" });
   const [error, setError] = useState("");
@@ -25,6 +26,17 @@ export default function ClientsPage() {
     if (id) load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return clients;
+    return clients.filter(
+      (c) =>
+        c.nom_client.toLowerCase().includes(q) ||
+        c.username.toLowerCase().includes(q) ||
+        c.email.toLowerCase().includes(q)
+    );
+  }, [clients, search]);
 
   async function create() {
     setError("");
@@ -50,7 +62,16 @@ export default function ClientsPage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      <div className="mb-4 flex justify-end">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="relative max-w-xs flex-1">
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder={t("rechercher")}
+            className="pl-9"
+          />
+        </div>
         <Button onClick={() => setOpen(true)}>
           <Plus size={16} /> {t("ajouter")}
         </Button>
@@ -67,7 +88,7 @@ export default function ClientsPage() {
             </tr>
           </thead>
           <tbody>
-            {clients.map((c) => (
+            {filtered.map((c) => (
               <tr key={c.id} className="border-t">
                 <td className="p-3">{c.nom_client}</td>
                 <td className="p-3">{c.username}</td>
@@ -79,7 +100,7 @@ export default function ClientsPage() {
                 </td>
               </tr>
             ))}
-            {clients.length === 0 && (
+            {filtered.length === 0 && (
               <tr>
                 <td colSpan={4} className="p-6 text-center text-gray-400">
                   {t("aucuneDonnee")}

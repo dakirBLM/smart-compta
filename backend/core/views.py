@@ -1,19 +1,23 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from .account_helpers import get_or_create_client_comptable
 from .models import (
     ClientAccess,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
     Facture,
+    Fournisseur,
     Journal,
     LigneEcriture,
+    Message,
 )
 from rest_framework.permissions import AllowAny
 
@@ -39,7 +43,9 @@ from .serializers import (
     EntrepriseSerializer,
     ExerciceAnneeSerializer,
     FactureSerializer,
+    FournisseurSerializer,
     JournalSerializer,
+    MessageSerializer,
 )
 
 User = get_user_model()
@@ -153,6 +159,162 @@ class ClientDeleteView(APIView):
                                    client_id=client_id)
         access.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------- #
+# Fournisseurs
+# --------------------------------------------------------------------------- #
+class FournisseurListCreateView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        qs = entreprise.fournisseurs.all()
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(nom__icontains=q)
+        return Response(FournisseurSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        from .account_helpers import next_account_number
+        entreprise = _accountant_entreprise(request, pk)
+        serializer = FournisseurSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        fournisseur = serializer.save(
+            entreprise=entreprise,
+            numero_compte=next_account_number(entreprise, "401"),
+        )
+        return Response(FournisseurSerializer(fournisseur).data,
+                        status=status.HTTP_201_CREATED)
+
+
+class FournisseurDetailView(APIView):
+    permission_classes = [IsAccountant]
+
+    def _get(self, request, pk, fournisseur_id):
+        entreprise = _accountant_entreprise(request, pk)
+        return get_object_or_404(Fournisseur, pk=fournisseur_id, entreprise=entreprise)
+
+    def put(self, request, pk, fournisseur_id):
+        fournisseur = self._get(request, pk, fournisseur_id)
+        serializer = FournisseurSerializer(fournisseur, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk, fournisseur_id):
+        self._get(request, pk, fournisseur_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------- #
+# Messages
+# --------------------------------------------------------------------------- #
+class ConversationListView(APIView):
+    """Liste des conversations (un client portail par entreprise)."""
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        accesses = entreprise.client_accesses.select_related("client").all()
+        result = []
+        for access in accesses:
+            last = Message.objects.filter(
+                entreprise=entreprise, client_user=access.client
+            ).order_by("-created_at").first()
+            unread = Message.objects.filter(
+                entreprise=entreprise,
+                client_user=access.client,
+                sender=access.client,
+                read_at__isnull=True,
+            ).count()
+            result.append({
+                "client_id": access.client_id,
+                "nom_client": access.nom_client,
+                "username": access.client.username,
+                "last_message": last.content if last else "",
+                "last_message_at": last.created_at.isoformat() if last else None,
+                "unread_count": unread,
+            })
+        return Response(result)
+
+
+class MessageListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk=None, client_id=None):
+        if request.user.role == "accountant" and pk and client_id:
+            entreprise = _accountant_entreprise(request, pk)
+            client_user = get_object_or_404(User, pk=client_id, role=User.Role.CLIENT)
+            get_object_or_404(ClientAccess, entreprise=entreprise, client=client_user)
+            qs = Message.objects.filter(
+                entreprise=entreprise, client_user=client_user
+            ).select_related("sender")
+            # Mark client messages as read when accountant opens conversation
+            Message.objects.filter(
+                entreprise=entreprise,
+                client_user=client_user,
+                sender=client_user,
+                read_at__isnull=True,
+            ).update(read_at=timezone.now())
+        elif request.user.role == "client":
+            access = ClientAccess.objects.filter(client=request.user).select_related(
+                "entreprise"
+            ).first()
+            if not access:
+                return Response([])
+            entreprise = access.entreprise
+            client_user = request.user
+            qs = Message.objects.filter(
+                entreprise=entreprise, client_user=client_user
+            ).select_related("sender")
+            Message.objects.filter(
+                entreprise=entreprise,
+                client_user=client_user,
+                sender=entreprise.accountant,
+                read_at__isnull=True,
+            ).update(read_at=timezone.now())
+        else:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        return Response(
+            MessageSerializer(qs, many=True, context={"request": request}).data
+        )
+
+    def post(self, request, pk=None, client_id=None):
+        content = (request.data.get("content") or "").strip()
+        if not content:
+            return Response(
+                {"content": "Le message ne peut pas être vide."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        if request.user.role == "accountant" and pk and client_id:
+            entreprise = _accountant_entreprise(request, pk)
+            client_user = get_object_or_404(User, pk=client_id, role=User.Role.CLIENT)
+            get_object_or_404(ClientAccess, entreprise=entreprise, client=client_user)
+        elif request.user.role == "client":
+            access = ClientAccess.objects.filter(client=request.user).select_related(
+                "entreprise"
+            ).first()
+            if not access:
+                return Response(
+                    {"error": "Aucune entreprise associée."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            entreprise = access.entreprise
+            client_user = request.user
+        else:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        msg = Message.objects.create(
+            entreprise=entreprise,
+            sender=request.user,
+            client_user=client_user,
+            content=content,
+        )
+        return Response(
+            MessageSerializer(msg, context={"request": request}).data,
+            status=status.HTTP_201_CREATED,
+        )
 
 
 # --------------------------------------------------------------------------- #
@@ -314,6 +476,15 @@ class ScannerUploadView(APIView):
                     or name.endswith(".pdf")
                     or raw[:5] == b"%PDF-"
                 )
+                is_image = (
+                    f.content_type in ("image/jpeg", "image/png")
+                    or name.endswith((".jpg", ".jpeg", ".png"))
+                )
+                if not is_pdf and not is_image:
+                    return Response(
+                        {"error": "Format non supporté. Utilisez PDF, JPG, JPEG ou PNG."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
                 if is_pdf:
                     # PC import: render ALL pages of the PDF into one image so
                     # the vision model receives the whole document.
@@ -500,6 +671,14 @@ class FactureValidateView(APIView):
         )
 
         client_nom = facture.client.username
+        # Résoudre le nom du client portail (nom_client si disponible)
+        access = ClientAccess.objects.filter(
+            entreprise=entreprise, client=facture.client
+        ).first()
+        display_nom = access.nom_client if access else client_nom
+        client_comptable = get_or_create_client_comptable(entreprise, display_nom)
+        compte_client = client_comptable.numero_compte
+
         montant = facture.montant_ttc
         date_f = facture.date_facture
         if not date_f:
@@ -520,8 +699,8 @@ class FactureValidateView(APIView):
                     montant_credit=0,
                 ),
                 LigneEcriture(
-                    numero_compte="411",
-                    libelle=f"Client {client_nom} – Facture {numero}",
+                    numero_compte=compte_client,
+                    libelle=f"Client {display_nom} – Facture {numero}",
                     montant_debit=0,
                     montant_credit=montant,
                 ),
@@ -536,8 +715,8 @@ class FactureValidateView(APIView):
                     montant_credit=0,
                 ),
                 LigneEcriture(
-                    numero_compte="411",
-                    libelle=f"Client {client_nom} – Facture {numero}",
+                    numero_compte=compte_client,
+                    libelle=f"Client {display_nom} – Facture {numero}",
                     montant_debit=0,
                     montant_credit=montant,
                 ),
@@ -547,7 +726,7 @@ class FactureValidateView(APIView):
             journal=journal,
             date_ecriture=date_f,
             numero_piece=numero,
-            fournisseur_client=client_nom,
+            fournisseur_client=display_nom,
             source=Ecriture.Source.MANUEL,
             mode_paiement=mode,
             statut=Ecriture.Statut.VALIDE,

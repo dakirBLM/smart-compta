@@ -45,6 +45,7 @@ export default function EntrepriseDashboard() {
   const { id, entreprise, annee } = useEntreprise();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
 
   useEffect(() => {
     if (!id) return;
@@ -52,6 +53,7 @@ export default function EntrepriseDashboard() {
     api
       .get<DashboardData>(`/api/entreprises/${id}/dashboard/${qs}`)
       .then(setData)
+      .catch((e) => setError(e instanceof Error ? e.message : "Erreur"))
       .finally(() => setLoading(false));
   }, [id, annee]);
 
@@ -62,9 +64,21 @@ export default function EntrepriseDashboard() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      {loading || !data ? (
+      {loading ? (
         <div className="flex justify-center py-12">
           <Spinner className="h-8 w-8 text-brand" />
+        </div>
+      ) : error ? (
+        <div className="flex justify-center py-12">
+          <div className="rounded-lg border bg-red-50 px-6 py-4 text-sm text-red-700">
+            {error}
+          </div>
+        </div>
+      ) : !data ? (
+        <div className="flex justify-center py-12">
+          <div className="rounded-lg border bg-gray-50 px-6 py-6 text-sm text-gray-600">
+            {t("aucuneDonnee")}
+          </div>
         </div>
       ) : (
         <>

@@ -3,12 +3,15 @@ from rest_framework import serializers
 
 from .models import (
     ClientAccess,
+    ClientComptable,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
     Facture,
+    Fournisseur,
     Journal,
     LigneEcriture,
+    Message,
 )
 
 User = get_user_model()
@@ -117,7 +120,6 @@ class ClientAccessSerializer(serializers.ModelSerializer):
 
 
 class CreateClientSerializer(serializers.Serializer):
-    """Used by the accountant to create a client account + access link."""
 
     nom_client = serializers.CharField()
     username = serializers.CharField()
@@ -129,6 +131,46 @@ class CreateClientSerializer(serializers.Serializer):
         if User.objects.filter(username=value).exists():
             raise serializers.ValidationError("Ce nom d'utilisateur existe déjà.")
         return value
+
+
+class FournisseurSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Fournisseur
+        fields = [
+            "id", "entreprise", "nom", "numero_compte", "email",
+            "telephone", "adresse", "created_at",
+        ]
+        read_only_fields = ["entreprise", "numero_compte", "created_at"]
+
+
+class ClientComptableSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClientComptable
+        fields = [
+            "id", "entreprise", "nom", "numero_compte", "email",
+            "telephone", "adresse", "created_at",
+        ]
+        read_only_fields = ["entreprise", "numero_compte", "created_at"]
+
+
+class MessageSerializer(serializers.ModelSerializer):
+    sender_username = serializers.CharField(source="sender.username", read_only=True)
+    sender_role = serializers.CharField(source="sender.role", read_only=True)
+    is_mine = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Message
+        fields = [
+            "id", "entreprise", "sender", "sender_username", "sender_role",
+            "client_user", "content", "read_at", "created_at", "is_mine",
+        ]
+        read_only_fields = ["entreprise", "sender", "client_user", "created_at"]
+
+    def get_is_mine(self, obj):
+        request = self.context.get("request")
+        if not request or not request.user:
+            return False
+        return obj.sender_id == request.user.id
 
 
 class LigneEcritureSerializer(serializers.ModelSerializer):

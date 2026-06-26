@@ -232,7 +232,7 @@ export function ClientScanner() {
       <input
         ref={inputRef}
         type="file"
-        accept="image/*"
+        accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
         capture="environment"
         className="hidden"
         onChange={onPick}
@@ -240,7 +240,7 @@ export function ClientScanner() {
       <input
         ref={importRef}
         type="file"
-        accept="image/*,application/pdf"
+        accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
         className="hidden"
         onChange={onPick}
       />
