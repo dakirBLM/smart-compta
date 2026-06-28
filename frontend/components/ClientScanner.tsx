@@ -97,10 +97,25 @@ export function ClientScanner() {
         ? sumLignes(data.lignes)
         : { debit: 0, credit: 0, balanced: true };
       const hasAmounts = totals.debit > 0.009 || totals.credit > 0.009;
+      // The AI flags when the company isn't the issuer/client → wrong file.
+      const wrongCompany = (res.erreurs ?? []).some((e) => {
+        const s = (e || "").toLowerCase();
+        return (
+          (s.includes("n'appara") || s.includes("napparaît") || s.includes("ne figure") ||
+            s.includes("n'est pas mentionn") || s.includes("par défaut")) &&
+          (s.includes("émetteur") || s.includes("emetteur") || s.includes("client") ||
+            s.includes("facture"))
+        );
+      });
       const problems: string[] = [];
       if (!data) {
         problems.push("Aucune donnée renvoyée par l'IA.");
       } else {
+        if (wrongCompany)
+          problems.push(
+            "Cette facture ne semble pas concerner votre entreprise. " +
+              "Vérifiez que vous avez choisi le bon fichier."
+          );
         if (confiance < 60)
           problems.push(
             confiance > 0

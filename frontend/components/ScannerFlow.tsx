@@ -283,10 +283,21 @@ export function ScannerFlow({
   const level = confidenceLevel(extraction.confiance);
   const totals = sumLignes(extraction.lignes);
   const hasAmounts = totals.debit > 0.009 || totals.credit > 0.009;
+  // If the AI says the scanning company isn't the issuer/client on the invoice,
+  // the wrong file was scanned — block confirmation and ask to re-scan.
+  const wrongCompany = (erreurs ?? []).some((e) => {
+    const s = (e || "").toLowerCase();
+    return (
+      (s.includes("n'appara") || s.includes("napparaît") || s.includes("ne figure") ||
+        s.includes("n'est pas mentionn") || s.includes("par défaut")) &&
+      (s.includes("émetteur") || s.includes("emetteur") || s.includes("client") ||
+        s.includes("facture"))
+    );
+  });
   // A valid entry must balance and carry real amounts. AI "erreurs" are often
   // just explanatory notes (e.g. "timbre fiscal ajouté"), so they no longer
   // block a balanced entry — only a broken one (unbalanced / all-zero) does.
-  const valid = totals.balanced && hasAmounts;
+  const valid = totals.balanced && hasAmounts && !wrongCompany;
   const blocked = !valid;
   const canConfirm = level === "green" && valid;
 
@@ -314,7 +325,14 @@ export function ScannerFlow({
           <ConfidenceBadge score={extraction.confiance} />
         </div>
 
-        {level === "yellow" && (
+        {wrongCompany && (
+          <div className="mb-3 rounded-lg border border-danger bg-red-50 p-3 text-sm text-danger">
+            <div className="mb-1 font-semibold">⛔ Mauvais fichier ?</div>
+            Cette facture ne semble pas concerner cette entreprise. Veuillez vérifier
+            que vous avez scanné ou choisi le bon fichier, puis recommencez.
+          </div>
+        )}
+        {level === "yellow" && !wrongCompany && (
           <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-warning">
             ⚠ {t("confiance")} moyenne — vérifiez les champs avant de confirmer.
           </p>
