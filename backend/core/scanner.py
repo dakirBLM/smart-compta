@@ -327,18 +327,30 @@ def persist_extraction(entreprise, data, source="scanner"):
             entreprise=entreprise, annee=date_fact.year, is_active=True
         )
 
-    type_journal = JOURNAL_MAP.get(str(data["journal"]).lower(), Journal.Type.ACHAT)
+    base_type = JOURNAL_MAP.get(str(data["journal"]).lower(), Journal.Type.ACHAT)
+
+    # Cash payment → the operation goes to the CAISSE journal and the tiers line
+    # (which carries the TTC) becomes the Caisse account 530000.
+    mode = (data.get("mode_paiement") or "").strip().lower()
+    is_cash = any(k in mode for k in ("espèce", "espece", "cash", "comptant", "liquide"))
+
+    type_journal = Journal.Type.CAISSE if is_cash else base_type
     journal, _ = Journal.objects.get_or_create(
         entreprise=entreprise, annee=annee, type_journal=type_journal
     )
 
     fournisseur_nom = (data.get("fournisseur") or "").strip()
     lignes_data = list(data["lignes"])
-    if type_journal == Journal.Type.ACHAT and fournisseur_nom:
+    if is_cash:
+        # Replace the supplier(401)/client(411) line with Caisse 530000, keeping
+        # its TTC amount — the cash settlement.
+        prefix = "411" if base_type == Journal.Type.VENTE else "401"
+        lignes_data = apply_tiers_account(lignes_data, "530000", prefix)
+    elif base_type == Journal.Type.ACHAT and fournisseur_nom:
         tiers = get_or_create_fournisseur(entreprise, fournisseur_nom)
         lignes_data = apply_tiers_account(lignes_data, tiers.numero_compte, "401")
         fournisseur_nom = tiers.nom
-    elif type_journal == Journal.Type.VENTE and fournisseur_nom:
+    elif base_type == Journal.Type.VENTE and fournisseur_nom:
         tiers = get_or_create_client_comptable(entreprise, fournisseur_nom)
         lignes_data = apply_tiers_account(lignes_data, tiers.numero_compte, "411")
         fournisseur_nom = tiers.nom
@@ -355,6 +367,7 @@ def persist_extraction(entreprise, data, source="scanner"):
         source=source,
         confiance_ia=confiance,
         statut=statut,
+        mode_paiement=data.get("mode_paiement", "") or "",
     )
     for ligne in lignes_data:
         LigneEcriture.objects.create(

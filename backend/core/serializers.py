@@ -62,7 +62,7 @@ class EntrepriseSerializer(serializers.ModelSerializer):
         return self._digit_limit(v, 15, "Le NIS")
 
     def validate_nin(self, v):
-        return self._digit_limit(v, 15, "Le NIN")
+        return self._digit_limit(v, 18, "Le NIN")
 
     def validate_numero_compte(self, v):
         return self._digit_limit(v, 10, "Le numéro de compte")

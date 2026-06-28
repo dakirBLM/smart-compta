@@ -72,7 +72,7 @@ export function EntrepriseForm({
     if (!form.nom) return "Le nom est obligatoire.";
     if (!form.exercice_comptable.trim()) return "L'exercice comptable est obligatoire.";
     for (const [f, len, label] of [
-      ["nif", 15, "NIF"], ["nis", 15, "NIS"], ["nin", 15, "NIN"],
+      ["nif", 15, "NIF"], ["nis", 15, "NIS"], ["nin", 18, "NIN"],
       ["numero_compte", 10, "N° de compte"], ["rib", 22, "RIB"],
       ["numero_compte2", 10, "N° de compte 2"], ["rib2", 22, "RIB 2"],
     ] as [string, number, string][]) {
@@ -180,9 +180,9 @@ export function EntrepriseForm({
                 onChange={(e) => set("nis", onlyDigits(e.target.value, 15))} />
             </div>
             <div>
-              <Label>NIN</Label>
+              <Label>NIN (18 chiffres)</Label>
               <Input inputMode="numeric" value={form.nin}
-                onChange={(e) => set("nin", onlyDigits(e.target.value, 15))} />
+                onChange={(e) => set("nin", onlyDigits(e.target.value, 18))} />
             </div>
             <div>
               <Label>Date de création</Label>
@@ -217,12 +217,17 @@ export function EntrepriseForm({
             </div>
             <div>
               <Label>Code postal</Label>
-              <select className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm disabled:bg-gray-100"
-                value={form.code_postal} disabled={!form.ville}
-                onChange={(e) => set("code_postal", e.target.value)}>
-                <option value="">—</option>
-                {codes.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
+              {/* Suggestions from the selected wilaya, but free to type manually */}
+              <Input
+                inputMode="numeric"
+                list="postal-codes"
+                placeholder={codes[0] ?? "Code postal"}
+                value={form.code_postal}
+                onChange={(e) => set("code_postal", onlyDigits(e.target.value, 5))}
+              />
+              <datalist id="postal-codes">
+                {codes.map((c) => <option key={c} value={c} />)}
+              </datalist>
             </div>
           </div>
 

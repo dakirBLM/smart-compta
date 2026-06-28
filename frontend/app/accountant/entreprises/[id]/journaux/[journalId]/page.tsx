@@ -1,7 +1,7 @@
 "use client";
 
 import { BookPlus, Plus, Search, Banknote, CreditCard, FileText, Info } from "lucide-react";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { EcritureForm } from "@/components/EcritureForm";
@@ -65,6 +65,7 @@ export default function JournalPage() {
   const [searchCompte, setSearchCompte] = useState("");
   const [searchDate, setSearchDate] = useState("");
   const [showNewJournal, setShowNewJournal] = useState(false);
+  const searchParams = useSearchParams();
   const [newName, setNewName] = useState("");
 
   const loadEcritures = useCallback(
@@ -107,6 +108,11 @@ export default function JournalPage() {
       }
     })().finally(() => setLoading(false));
   }, [entreprise, annee, id, type, isNumeric, loadEcritures]);
+
+  // Open the "Nouveau journal" modal when arriving with ?newjournal=1 (from nav).
+  useEffect(() => {
+    if (searchParams.get("newjournal") === "1") setShowNewJournal(true);
+  }, [searchParams]);
 
   async function createJournal() {
     const exercice = entreprise?.exercices.find((x) => x.annee === annee);

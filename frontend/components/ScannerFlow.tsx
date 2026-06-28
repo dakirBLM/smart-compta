@@ -114,10 +114,12 @@ export function ScannerFlow({
     setSubmitting(true);
     setError("");
     try {
-      await api.post("/api/scanner/confirm/", {
-        entreprise: entrepriseId,
-        data: extraction,
-      });
+      // Send the image too so the comptabilisé facture is archived as an image.
+      const fd = new FormData();
+      fd.append("entreprise", String(entrepriseId));
+      fd.append("data", JSON.stringify(extraction));
+      if (file) fd.append("file", file);
+      await api.post("/api/scanner/confirm/", fd);
       setPhase("success");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur lors de l'enregistrement.");

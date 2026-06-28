@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   LogOut,
   MessageSquare,
+  Plus,
   Scale,
   Settings,
   Truck,
@@ -21,8 +22,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageToggle";
+import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
+import { Journal } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 const MIN_WIDTH = 220;
@@ -84,6 +87,16 @@ export function Sidebar({
   const { logout, user } = useAuth();
   const pathname = usePathname();
   const [journalOpen, setJournalOpen] = useState(pathname.includes("/journaux"));
+  const [customJournaux, setCustomJournaux] = useState<Journal[]>([]);
+
+  // Custom journals (type 'autre') shown in the Journaux list.
+  useEffect(() => {
+    if (!entrepriseId || !annee) return;
+    api
+      .get<Journal[]>(`/api/entreprises/${entrepriseId}/journaux/?annee=${annee}`)
+      .then((js) => setCustomJournaux(js.filter((j) => j.type_journal === "autre")))
+      .catch(() => setCustomJournaux([]));
+  }, [entrepriseId, annee, pathname]);
 
   // Resizable + collapsible nav. Drag the right edge to resize; drag past the
   // left limit to collapse it away (a thin handle then lets you bring it back).
@@ -295,6 +308,29 @@ export function Sidebar({
                     {j.label}
                   </Link>
                 ))}
+                {/* Custom journals */}
+                {customJournaux.map((j) => (
+                  <Link
+                    key={j.id}
+                    href={`${base}/journaux/${j.id}`}
+                    onClick={nav}
+                    className={cn(
+                      "block truncate rounded-md px-3 py-1.5 text-sm text-white/70 hover:bg-white/10",
+                      pathname.endsWith(`/journaux/${j.id}`) &&
+                        "bg-white/15 font-semibold text-white"
+                    )}
+                  >
+                    {j.type_label}
+                  </Link>
+                ))}
+                {/* Create a new journal (opens the modal on the journal page) */}
+                <Link
+                  href={`${base}/journaux/achat?newjournal=1`}
+                  onClick={nav}
+                  className="flex items-center gap-1 rounded-md px-3 py-1.5 text-sm text-white/60 hover:bg-white/10"
+                >
+                  <Plus size={14} /> Nouveau journal
+                </Link>
               </div>
             )}
 

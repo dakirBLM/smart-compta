@@ -30,6 +30,7 @@ from .reports import (
 )
 from .scanner import (
     WebhookError,
+    _parse_date,
     call_webhook,
     pdf_to_jpeg,
     persist_extraction,
@@ -522,8 +523,16 @@ class ScannerConfirmView(APIView):
     permission_classes = [IsAccountant]
 
     def post(self, request):
+        import json as _json
         entreprise_id = request.data.get("entreprise")
-        data = request.data.get("data") or request.data
+        raw = request.data.get("data")
+        if isinstance(raw, str):
+            try:
+                data = _json.loads(raw)
+            except ValueError:
+                data = {}
+        else:
+            data = raw or request.data
         entreprise = _accountant_entreprise(request, entreprise_id)
         _assert_unique_piece(entreprise, data.get("numero_facture") or data.get("numero_piece"))
         try:
@@ -531,6 +540,32 @@ class ScannerConfirmView(APIView):
         except WebhookError as exc:
             return Response({"error": str(exc)},
                             status=status.HTTP_400_BAD_REQUEST)
+
+        # Archive the comptabilisé invoice as an image in "Mes factures".
+        image_url = ""
+        if "file" in request.FILES:
+            try:
+                image_url = upload_invoice_image(request.FILES["file"].read())
+            except WebhookError:
+                image_url = ""
+        try:
+            Facture.objects.create(
+                entreprise=entreprise,
+                client=request.user,
+                numero_facture=data.get("numero_facture", "") or "",
+                date_facture=_parse_date(data.get("date_facture")),
+                montant_ht=data.get("montant_ht", 0) or 0,
+                tva_pourcentage=data.get("tva_pourcentage", 19) or 0,
+                montant_tva=data.get("montant_tva", 0) or 0,
+                montant_ttc=data.get("montant_ttc", 0) or 0,
+                image_url=image_url,
+                statut=Facture.Statut.VALIDE,
+                confiance_ia=int(data.get("confiance", 0) or 0),
+                ecriture=ecriture,
+            )
+        except Exception:
+            pass  # never fail the écriture because of facture archiving
+
         return Response(EcritureSerializer(ecriture).data,
                         status=status.HTTP_201_CREATED)
 
