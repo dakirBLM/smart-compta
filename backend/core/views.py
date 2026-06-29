@@ -714,6 +714,13 @@ class FactureValidateView(APIView):
             type_journal=journal_type,
         )
 
+        image_url = facture.image_url or request.data.get("image_url") or ""
+        if "file" in request.FILES:
+            try:
+                image_url = upload_invoice_image(request.FILES["file"].read()) or image_url
+            except WebhookError:
+                pass
+
         client_nom = facture.client.username
         # Résoudre le nom du client portail (nom_client si disponible)
         access = ClientAccess.objects.filter(
@@ -784,6 +791,8 @@ class FactureValidateView(APIView):
         facture.ecriture = ecriture
         if mode:
             facture.mode_paiement = mode
+        if image_url:
+            facture.image_url = image_url
         facture.save()
 
         return Response(

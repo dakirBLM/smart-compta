@@ -329,12 +329,21 @@ def persist_extraction(entreprise, data, source="scanner"):
 
     base_type = JOURNAL_MAP.get(str(data["journal"]).lower(), Journal.Type.ACHAT)
 
-    # Cash payment → the operation goes to the CAISSE journal and the tiers line
-    # (which carries the TTC) becomes the Caisse account 530000.
     mode = (data.get("mode_paiement") or "").strip().lower()
     is_cash = any(k in mode for k in ("espèce", "espece", "cash", "comptant", "liquide"))
+    is_bank_cheque = any(k in mode for k in (
+        "chèque", "cheque", "chèque bancaire", "cheque bancaire"
+    ))
 
-    type_journal = Journal.Type.CAISSE if is_cash else base_type
+    # Cash payments are posted to the CAISSE journal and keep the TTC amount
+    # on the cash account 530000. Cheque payments are posted to the BANQUE journal.
+    if is_cash:
+        type_journal = Journal.Type.CAISSE
+    elif is_bank_cheque:
+        type_journal = Journal.Type.BANQUE
+    else:
+        type_journal = base_type
+
     journal, _ = Journal.objects.get_or_create(
         entreprise=entreprise, annee=annee, type_journal=type_journal
     )
