@@ -142,6 +142,7 @@ export default function FacturesAccountantPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-brand text-left text-white">
                     <tr>
+                      <th className="p-3">Image</th>
                       <th className="p-3">{t("factureNo")}</th>
                       <th className="p-3">Client</th>
                       <th className="p-3">{t("date")}</th>
@@ -156,6 +157,17 @@ export default function FacturesAccountantPage() {
                   <tbody>
                     {factures.map((f) => (
                       <tr key={f.id} className="border-t hover:bg-gray-50 transition-colors">
+                        <td className="p-3">
+                          {f.image_url ? (
+                            <img
+                              src={f.image_url}
+                              alt="archive facture"
+                              className="h-12 w-12 rounded object-cover"
+                            />
+                          ) : (
+                            <span className="text-gray-400 text-xs">—</span>
+                          )}
+                        </td>
                         <td className="p-3 font-mono text-xs font-semibold text-brand">
                           {f.numero_facture || `#${f.id}`}
                         </td>
@@ -206,7 +218,7 @@ export default function FacturesAccountantPage() {
                     ))}
                     {factures.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="p-8 text-center text-gray-400">
+                        <td colSpan={10} className="p-8 text-center text-gray-400">
                           {t("aucuneDonnee")}
                         </td>
                       </tr>

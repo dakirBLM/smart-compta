@@ -173,11 +173,19 @@ export function EcritureForm({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [activeCompteIndex, setActiveCompteIndex] = useState<number | null>(null);
+  const [compteFilter, setCompteFilter] = useState("");
 
   const templates = journalType ? JOURNAL_TEMPLATES[journalType] || [] : [];
 
   const totals = sumLignes(
     lignes.map((l) => ({ debit: l.montant_debit, credit: l.montant_credit }))
+  );
+
+  const filteredScfAccounts = SCF_ACCOUNTS.filter(
+    (a) =>
+      a.compte.includes(compteFilter) ||
+      a.libelle.toLowerCase().includes(compteFilter.toLowerCase())
   );
 
   const setLigne = (i: number, patch: Partial<LigneInput>) =>
@@ -343,10 +351,18 @@ export function EcritureForm({
                     list="scf-accounts"
                     value={l.numero_compte}
                     placeholder="ex: 512"
+                    onFocus={() => {
+                      setActiveCompteIndex(i);
+                      setCompteFilter(l.numero_compte);
+                    }}
+                    onClick={() => {
+                      setActiveCompteIndex(i);
+                      setCompteFilter(l.numero_compte);
+                    }}
                     onChange={(e) => {
                       const v = e.target.value;
                       const match = SCF_ACCOUNTS.find((a) => a.compte === v);
-                      // Auto-fill the libellé when a known SCF account is picked.
+                      setCompteFilter(v);
                       setLigne(i, match && !l.libelle
                         ? { numero_compte: v, libelle: match.libelle }
                         : { numero_compte: v });
@@ -403,6 +419,61 @@ export function EcritureForm({
           </tfoot>
         </table>
       </div>
+
+      {activeCompteIndex !== null && (
+        <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm mt-3">
+          <div className="mb-3 flex items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-semibold">Comptes SCF algériens</div>
+              <div className="text-xs text-gray-500">
+                Cliquez sur un compte pour le remplir automatiquement.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveCompteIndex(null)}
+              className="text-xs text-gray-500 hover:text-gray-800"
+            >
+              Fermer
+            </button>
+          </div>
+          <div className="mb-3">
+            <Input
+              value={compteFilter}
+              onChange={(e) => setCompteFilter(e.target.value)}
+              placeholder="Filtrer par numéro ou libellé"
+              className="w-full"
+            />
+          </div>
+          <div className="grid gap-1 max-h-64 overflow-y-auto">
+            {filteredScfAccounts.slice(0, 12).map((account) => (
+              <button
+                key={account.compte}
+                type="button"
+                onClick={() => {
+                  if (activeCompteIndex === null) return;
+                  const ligne = lignes[activeCompteIndex];
+                  setLigne(activeCompteIndex, {
+                    numero_compte: account.compte,
+                    libelle: ligne.libelle || account.libelle,
+                  });
+                  setActiveCompteIndex(null);
+                  setCompteFilter("");
+                }}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-left text-sm hover:bg-gray-50"
+              >
+                <div className="font-mono text-xs text-brand">{account.compte}</div>
+                <div className="text-sm text-gray-700">{account.libelle}</div>
+              </button>
+            ))}
+            {filteredScfAccounts.length === 0 && (
+              <div className="rounded-lg border border-dashed border-gray-300 px-3 py-4 text-sm text-gray-500">
+                Aucun compte SCF trouvé.
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="flex items-center justify-between">
         <Button
