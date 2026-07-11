@@ -2,13 +2,18 @@
 
 import { Camera, RotateCcw, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { preloadDocumentScanner } from "@/lib/opencv-loader";
+import { CornerAdjust } from "./CornerAdjust";
 import { Button } from "./ui";
 
 /**
- * In-app guided document camera. Shows the live camera with a document frame
- * so the user aligns the invoice, then captures and CROPS to that frame — so
- * you get the paper, not a whole-scene photo. Falls back to the native file
- * input when the camera isn't available (desktop without webcam, denied perms).
+ * In-app document scanner, CamScanner-style:
+ * 1. Live camera with a light guide frame (visual aid only).
+ * 2. Capture the FULL frame at native resolution.
+ * 3. CornerAdjust: automatic paper detection (opencv.js + jscanify) proposes
+ *    the page's 4 corners; the user can drag-adjust; confirming applies a
+ *    perspective warp that flattens the page into a clean rectangular scan.
+ * Falls back to the native camera input when getUserMedia isn't available.
  */
 export function CameraCapture({
   onCapture,
@@ -22,11 +27,27 @@ export function CameraCapture({
   const fallbackRef = useRef<HTMLInputElement>(null);
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
+  const [captured, setCaptured] = useState<File | null>(null);
+
+  // Start downloading/initializing opencv.js while the user frames the shot,
+  // so detection is (usually) instant by the time they hit capture.
+  useEffect(() => {
+    preloadDocumentScanner();
+  }, []);
 
   useEffect(() => {
+    // Pause the stream while adjusting corners; resume on retake.
+    if (captured) return;
     let active = true;
     navigator.mediaDevices
-      ?.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false })
+      ?.getUserMedia({
+        video: {
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 },
+        },
+        audio: false,
+      })
       .then((stream) => {
         if (!active) {
           stream.getTracks().forEach((t) => t.stop());
@@ -44,39 +65,51 @@ export function CameraCapture({
     return () => {
       active = false;
       streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
     };
-  }, []);
+  }, [captured]);
 
   function capture() {
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
-    const vw = video.videoWidth;
-    const vh = video.videoHeight;
-    // Crop a centered A4-portrait region (the guide frame) ≈ the paper.
-    const frameH = vh * 0.9;
-    const frameW = Math.min(vw * 0.9, frameH / 1.414);
-    const sx = (vw - frameW) / 2;
-    const sy = (vh - frameH) / 2;
+    // Full frame — the auto-detection in CornerAdjust finds the paper, so we
+    // no longer crop to a fixed guide rectangle.
     const canvas = document.createElement("canvas");
-    canvas.width = frameW;
-    canvas.height = frameH;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    ctx.drawImage(video, sx, sy, frameW, frameH, 0, 0, frameW, frameH);
+    ctx.drawImage(video, 0, 0);
     canvas.toBlob(
       (blob) => {
         if (!blob) return;
-        streamRef.current?.getTracks().forEach((t) => t.stop());
-        onCapture(new File([blob], `scan-${Date.now()}.jpg`, { type: "image/jpeg" }));
+        setCaptured(new File([blob], `photo-${Date.now()}.jpg`, { type: "image/jpeg" }));
       },
       "image/jpeg",
-      0.9
+      0.95
     );
   }
 
   function onFallback(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0];
-    if (f) onCapture(f);
+    // Native camera photos also go through detection + corner adjustment.
+    if (f) setCaptured(f);
+  }
+
+  function finish(file: File) {
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    onCapture(file);
+  }
+
+  if (captured) {
+    return (
+      <CornerAdjust
+        file={captured}
+        onDone={finish}
+        onRetake={() => setCaptured(null)}
+        onCancel={onClose}
+      />
+    );
   }
 
   return (
@@ -98,27 +131,18 @@ export function CameraCapture({
               autoPlay
               playsInline
               muted
-              /* contain: the whole frame is visible, so the guide rectangle
-                 matches the centered region we crop on capture */
               className="h-full w-full object-contain"
             />
-            {/* Document guide frame */}
+            {/* Light guide frame — a framing aid; actual page edges are
+                auto-detected after capture. */}
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
               <div
-                className="relative rounded-lg border-2 border-white/80 shadow-[0_0_0_100vmax_rgba(0,0,0,0.45)]"
+                className="relative rounded-lg border-2 border-dashed border-white/50"
                 style={{ width: "86%", maxWidth: 520, aspectRatio: "1 / 1.414" }}
-              >
-                {/* corner accents */}
-                {["-top-0.5 -left-0.5 border-t-4 border-l-4",
-                  "-top-0.5 -right-0.5 border-t-4 border-r-4",
-                  "-bottom-0.5 -left-0.5 border-b-4 border-l-4",
-                  "-bottom-0.5 -right-0.5 border-b-4 border-r-4"].map((c, i) => (
-                  <span key={i} className={`absolute h-6 w-6 border-success ${c}`} />
-                ))}
-              </div>
+              />
             </div>
             <p className="absolute inset-x-0 top-5 text-center text-sm font-medium text-white">
-              Alignez la facture dans le cadre
+              Cadrez la facture — les bords seront détectés automatiquement
             </p>
           </>
         ) : (
@@ -132,7 +156,11 @@ export function CameraCapture({
       </div>
 
       <div className="flex items-center justify-between bg-black px-8 py-5">
-        <button onClick={onClose} className="rounded-full p-3 text-white/80 hover:bg-white/10" aria-label="Fermer">
+        <button
+          onClick={onClose}
+          className="rounded-full p-3 text-white/80 hover:bg-white/10"
+          aria-label="Fermer"
+        >
           <X size={24} />
         </button>
         {!error && (
@@ -146,7 +174,7 @@ export function CameraCapture({
         <button
           onClick={() => fallbackRef.current?.click()}
           className="rounded-full p-3 text-white/80 hover:bg-white/10"
-          aria-label="Reprendre / importer"
+          aria-label="Importer une photo"
         >
           <RotateCcw size={24} />
         </button>
