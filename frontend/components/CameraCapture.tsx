@@ -47,6 +47,7 @@ export function CameraCapture({
   const stableCountRef = useRef(0);
   const armedAtRef = useRef(0); // timestamp when auto-capture became allowed
   const firedRef = useRef(false);
+  const errorStreakRef = useRef(0);
 
   const [error, setError] = useState("");
   const [ready, setReady] = useState(false);
@@ -233,6 +234,16 @@ export function CameraCapture({
           !firedRef.current
         ) {
           capture();
+        }
+        errorStreakRef.current = 0;
+      } catch {
+        // A tick failed (bad frame, cv hiccup). Tolerate transient errors but
+        // stop the live loop if they persist — manual capture still works.
+        errorStreakRef.current += 1;
+        if (errorStreakRef.current >= 5) {
+          setLiveQuad(null);
+          setStableProgress(0);
+          setLiveReady(false);
         }
       } finally {
         busyRef.current = false;

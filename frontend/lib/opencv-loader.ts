@@ -12,6 +12,14 @@
  * scanner — never part of the main app bundle. The browser caches the file
  * long-term (see the Cache-Control header for /opencv/opencv.js in
  * next.config.js), so it's a one-time download per device.
+ *
+ * Robustness notes (learned the hard way):
+ * - emscripten's legacy `Module.then` is a FAKE thenable (no .catch; chaining
+ *   its return value throws). Never treat `cv` as a real Promise.
+ * - Don't depend on the <script> load event: readiness is detected by POLLING
+ *   for `window.cv.Mat` from the moment the script tag is inserted, with one
+ *   global deadline covering download + eval + WASM init. onload/
+ *   onRuntimeInitialized are used only as accelerators when they do fire.
  */
 
 export interface ScannerLibs {
@@ -37,40 +45,65 @@ export interface ScannerLibs {
 let cached: Promise<ScannerLibs> | null = null;
 
 const SCRIPT_ID = "opencv-js";
-const LOAD_TIMEOUT_MS = 20_000;
+// Covers download + parse/eval + WASM init. Generous for slow mobile networks;
+// the UI degrades to manual corners if it expires.
+const TOTAL_DEADLINE_MS = 120_000;
+const POLL_MS = 200;
 
-function waitForCvRuntime(cv: any): Promise<any> {
+function ensureScriptTag(onError: (e: Error) => void) {
+  if (document.getElementById(SCRIPT_ID)) return;
+  const script = document.createElement("script");
+  script.id = SCRIPT_ID;
+  script.src = "/opencv/opencv.js";
+  script.async = true;
+  script.onerror = () => onError(new Error("Impossible de charger opencv.js"));
+  document.body.appendChild(script);
+}
+
+function waitForCv(): Promise<{ cv: any }> {
   return new Promise((resolve, reject) => {
-    if (cv?.Mat) return resolve(cv); // already initialized (rare, fast reload)
-
     let settled = false;
-    const finish = (value: any, err?: unknown) => {
+    const finish = (value: { cv: any } | null, err?: unknown) => {
       if (settled) return;
       settled = true;
       clearInterval(poll);
       clearTimeout(timer);
-      err ? reject(err) : resolve(value);
+      err ? reject(err) : resolve(value!);
     };
 
-    // Newer opencv.js builds export `cv` as a thenable that resolves once the
-    // WASM runtime is ready.
-    if (cv && typeof cv.then === "function") {
-      cv.then((resolved: any) => finish(resolved)).catch((e: unknown) => finish(null, e));
-    }
-    // Classic emscripten callback — must be set even if the promise path
-    // above also fires; whichever resolves first wins via `settled`.
-    try {
-      cv.onRuntimeInitialized = () => finish(cv);
-    } catch {
-      /* cv may be a frozen thenable in some builds; ignore */
-    }
-    // Defensive poll in case neither hook fires (older/newer build mismatch).
-    const poll = setInterval(() => {
-      if ((window as any).cv?.Mat) finish((window as any).cv);
-    }, 150);
+    // Pure polling — deliberately NO onRuntimeInitialized hook. And CRITICAL:
+    // the module's legacy fake `then` must NEVER flow through Promise
+    // resolution — resolving/awaiting a thenable makes JS call value.then()
+    // to assimilate it, and emscripten's fake then returns the module itself,
+    // producing an INFINITE assimilation loop that hard-locks the main thread
+    // (diagnosed via Debugger.pause: stack frozen inside Module.then). So we
+    // delete the fake `then` and resolve with a wrapper object.
+    const check = () => {
+      const g = (window as any).cv;
+      if (g?.Mat) {
+        try {
+          delete g.then;
+        } catch {
+          /* sealed module — the wrapper below still protects us */
+        }
+        finish({ cv: g });
+        return true;
+      }
+      return false;
+    };
+
+    ensureScriptTag((e) => finish(null, e));
+    if (check()) return;
+    const poll = setInterval(check, POLL_MS);
     const timer = setTimeout(
-      () => finish(null, new Error("Délai dépassé lors du chargement d'opencv.js")),
-      LOAD_TIMEOUT_MS
+      () =>
+        finish(
+          null,
+          new Error(
+            "Le moteur de détection n'a pas pu s'initialiser (connexion lente ?). Réessayez."
+          )
+        ),
+      TOTAL_DEADLINE_MS
     );
   });
 }
@@ -78,37 +111,15 @@ function waitForCvRuntime(cv: any): Promise<any> {
 export function loadDocumentScanner(): Promise<ScannerLibs> {
   if (cached) return cached;
 
-  cached = new Promise<ScannerLibs>((resolve, reject) => {
-    const w = window as any;
-
-    function afterCvReady(cv: any) {
-      import("jscanify/client")
-        .then((mod: any) => {
-          const JScanify = mod.default ?? mod;
-          resolve({ cv, JScanify });
-        })
-        .catch(reject);
+  cached = (async () => {
+    const { cv } = await waitForCv(); // wrapped: raw module must not be awaited
+    const mod: any = await import("jscanify/client");
+    const JScanify = mod.default ?? mod;
+    if (typeof JScanify !== "function") {
+      throw new Error("jscanify n'a pas pu être chargé.");
     }
-
-    if (w.cv?.Mat) {
-      afterCvReady(w.cv);
-      return;
-    }
-
-    const existing = document.getElementById(SCRIPT_ID) as HTMLScriptElement | null;
-    if (existing) {
-      waitForCvRuntime(w.cv).then(afterCvReady).catch(reject);
-      return;
-    }
-
-    const script = document.createElement("script");
-    script.id = SCRIPT_ID;
-    script.src = "/opencv/opencv.js";
-    script.async = true;
-    script.onload = () => waitForCvRuntime(w.cv).then(afterCvReady).catch(reject);
-    script.onerror = () => reject(new Error("Impossible de charger opencv.js"));
-    document.body.appendChild(script);
-  }).catch((err) => {
+    return { cv, JScanify };
+  })().catch((err) => {
     // Don't poison the cache on failure — allow a retry on the next call
     // (e.g. transient network issue), and let callers fall back gracefully.
     cached = null;
