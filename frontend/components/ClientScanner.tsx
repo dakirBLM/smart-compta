@@ -11,6 +11,7 @@ import {
   Upload,
 } from "lucide-react";
 import { useRef, useState } from "react";
+import { CameraCapture } from "@/components/CameraCapture";
 import { Button, Card, Spinner } from "@/components/ui";
 import { api, scannerUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
@@ -53,14 +54,13 @@ export function ClientScanner() {
   const [stepDone, setStepDone] = useState(0);
   const [errors, setErrors] = useState<string[]>([]);
   const [result, setResult] = useState<AIExtraction | null>(null);
+  const [showCamera, setShowCamera] = useState(false);
 
   const isPdf =
     !!file &&
     (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
 
-  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
+  function acceptFile(f: File) {
     setFile(f);
     const pdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
     if (pdf) {
@@ -74,6 +74,11 @@ export function ClientScanner() {
     const img = new Image();
     img.onload = () => setQuality(checkQuality(f, img.width, img.height));
     img.src = url;
+  }
+
+  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f) acceptFile(f);
   }
 
   async function send() {
@@ -289,8 +294,11 @@ export function ClientScanner() {
       )}
 
       <div className="flex flex-wrap justify-center gap-2">
+        <Button variant="success" onClick={() => setShowCamera(true)}>
+          <Camera size={16} /> Scanner (caméra guidée)
+        </Button>
         <Button variant="outline" onClick={() => inputRef.current?.click()}>
-          <Camera size={16} /> {t("prendrePhoto")}
+          <Camera size={16} /> Photo
         </Button>
         <Button variant="outline" onClick={() => importRef.current?.click()}>
           <Upload size={16} /> Importer (PDF/Image)
@@ -303,6 +311,16 @@ export function ClientScanner() {
           {t("envoyer")}
         </Button>
       </div>
+
+      {showCamera && (
+        <CameraCapture
+          onCapture={(f) => {
+            setShowCamera(false);
+            acceptFile(f);
+          }}
+          onClose={() => setShowCamera(false)}
+        />
+      )}
     </Card>
   );
 }

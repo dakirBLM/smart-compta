@@ -11,7 +11,7 @@ import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { Facture, Ecriture } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
-import { cn, formatDate, formatDZD } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
 
 const MODE_OPTIONS = [
   { value: "espèces", label: "💵 Espèces (Caisse)", icon: "💵" },
@@ -142,6 +142,7 @@ export default function FacturesAccountantPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-brand text-left text-white">
                     <tr>
+                      <th className="p-3">Image</th>
                       <th className="p-3">{t("factureNo")}</th>
                       <th className="p-3">Client</th>
                       <th className="p-3">{t("date")}</th>
@@ -150,12 +151,23 @@ export default function FacturesAccountantPage() {
                       <th className="p-3 text-right">TTC</th>
                       <th className="p-3">{t("modePaiement")}</th>
                       <th className="p-3">Statut</th>
+                      <th className="p-3">Comptabilisée le</th>
                       <th className="p-3">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
                     {factures.map((f) => (
                       <tr key={f.id} className="border-t hover:bg-gray-50 transition-colors">
+                        <td className="p-3">
+                          {f.image_url && f.image_url.startsWith("http") ? (
+                            <a href={f.image_url} target="_blank" rel="noopener noreferrer">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img src={f.image_url} alt="facture" className="h-12 w-12 rounded object-cover" />
+                            </a>
+                          ) : (
+                            <span className="text-xs text-gray-400">—</span>
+                          )}
+                        </td>
                         <td className="p-3 font-mono text-xs font-semibold text-brand">
                           {f.numero_facture || `#${f.id}`}
                         </td>
@@ -185,6 +197,9 @@ export default function FacturesAccountantPage() {
                         <td className="p-3">
                           <StatusBadge statut={f.statut} />
                         </td>
+                        <td className="p-3 whitespace-nowrap text-xs text-gray-500">
+                          {f.statut === "valide" ? formatDateTime(f.created_at) : "—"}
+                        </td>
                         <td className="p-3">
                           {f.statut === "en_cours" && (
                             <button
@@ -206,7 +221,7 @@ export default function FacturesAccountantPage() {
                     ))}
                     {factures.length === 0 && (
                       <tr>
-                        <td colSpan={9} className="p-8 text-center text-gray-400">
+                        <td colSpan={11} className="p-8 text-center text-gray-400">
                           {t("aucuneDonnee")}
                         </td>
                       </tr>
