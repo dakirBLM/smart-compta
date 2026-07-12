@@ -70,6 +70,18 @@ export interface Fournisseur {
   created_at: string;
 }
 
+/** Client comptable (compte 411) — miroir de Fournisseur (401). */
+export interface ClientComptable {
+  id: number;
+  entreprise: number;
+  nom: string;
+  numero_compte: string;
+  email: string;
+  telephone: string;
+  adresse: string;
+  created_at: string;
+}
+
 export interface Conversation {
   client_id: number;
   nom_client: string;

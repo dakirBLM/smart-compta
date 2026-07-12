@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from .account_helpers import get_or_create_client_comptable
 from .models import (
     ClientAccess,
+    ClientComptable,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
@@ -39,6 +40,7 @@ from .scanner import (
 )
 from .serializers import (
     ClientAccessSerializer,
+    ClientComptableSerializer,
     CreateClientSerializer,
     EcritureSerializer,
     EntrepriseSerializer,
@@ -205,6 +207,52 @@ class FournisseurDetailView(APIView):
 
     def delete(self, request, pk, fournisseur_id):
         self._get(request, pk, fournisseur_id).delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+# --------------------------------------------------------------------------- #
+# Clients comptables (comptes 411) — miroir des fournisseurs (401)
+# --------------------------------------------------------------------------- #
+class ClientComptableListCreateView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        qs = entreprise.clients_comptables.all()
+        q = (request.query_params.get("q") or "").strip()
+        if q:
+            qs = qs.filter(nom__icontains=q)
+        return Response(ClientComptableSerializer(qs, many=True).data)
+
+    def post(self, request, pk):
+        from .account_helpers import next_account_number
+        entreprise = _accountant_entreprise(request, pk)
+        serializer = ClientComptableSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        client = serializer.save(
+            entreprise=entreprise,
+            numero_compte=next_account_number(entreprise, "411"),
+        )
+        return Response(ClientComptableSerializer(client).data,
+                        status=status.HTTP_201_CREATED)
+
+
+class ClientComptableDetailView(APIView):
+    permission_classes = [IsAccountant]
+
+    def _get(self, request, pk, client_id):
+        entreprise = _accountant_entreprise(request, pk)
+        return get_object_or_404(ClientComptable, pk=client_id, entreprise=entreprise)
+
+    def put(self, request, pk, client_id):
+        client = self._get(request, pk, client_id)
+        serializer = ClientComptableSerializer(client, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
+
+    def delete(self, request, pk, client_id):
+        self._get(request, pk, client_id).delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
@@ -707,13 +755,6 @@ class FactureValidateView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Get-or-create the target journal
-        journal, _ = Journal.objects.get_or_create(
-            entreprise=entreprise,
-            annee=annee_obj,
-            type_journal=journal_type,
-        )
-
         client_nom = facture.client.username
         # Résoudre le nom du client portail (nom_client si disponible)
         access = ClientAccess.objects.filter(
@@ -723,7 +764,9 @@ class FactureValidateView(APIView):
         client_comptable = get_or_create_client_comptable(entreprise, display_nom)
         compte_client = client_comptable.numero_compte
 
-        montant = facture.montant_ttc
+        ttc = facture.montant_ttc
+        ht = facture.montant_ht or ttc
+        tva = facture.montant_tva or 0
         date_f = facture.date_facture
         if not date_f:
             return Response(
@@ -732,40 +775,41 @@ class FactureValidateView(APIView):
             )
         numero = facture.numero_facture
 
-        # Build accounting lines depending on payment type
-        if is_cash:
-            # Caisse entry: Debit 530 (Caisse) / Credit 411 (Clients)
-            lignes = [
-                LigneEcriture(
-                    numero_compte="530",
-                    libelle=f"Encaissement espèces {numero} – {client_nom}",
-                    montant_debit=montant,
-                    montant_credit=0,
-                ),
-                LigneEcriture(
-                    numero_compte=compte_client,
-                    libelle=f"Client {display_nom} – Facture {numero}",
-                    montant_debit=0,
-                    montant_credit=montant,
-                ),
-            ]
-        else:
-            # Banque entry: Debit 512 (Banque) / Credit 411 (Clients)
-            lignes = [
-                LigneEcriture(
-                    numero_compte="512",
-                    libelle=f"Encaissement banque {numero} – {client_nom}",
-                    montant_debit=montant,
-                    montant_credit=0,
-                ),
-                LigneEcriture(
-                    numero_compte=compte_client,
-                    libelle=f"Client {display_nom} – Facture {numero}",
-                    montant_debit=0,
-                    montant_credit=montant,
-                ),
-            ]
+        # --- 1) écriture de VENTE dans le journal Ventes (la facture) -------
+        vente_journal, _ = Journal.objects.get_or_create(
+            entreprise=entreprise, annee=annee_obj,
+            type_journal=Journal.Type.VENTE,
+        )
+        vente = Ecriture.objects.create(
+            journal=vente_journal,
+            date_ecriture=date_f,
+            numero_piece=numero,
+            fournisseur_client=display_nom,
+            source=Ecriture.Source.MANUEL,
+            mode_paiement=mode,
+            statut=Ecriture.Statut.VALIDE,
+        )
+        vente_lignes = [
+            (compte_client, f"Client {display_nom} — Facture {numero}", ttc, 0),
+            ("700000", f"Vente de marchandises — {numero}", 0, ht),
+        ]
+        if tva and float(tva) > 0:
+            vente_lignes.append(("445700", f"TVA collectée — {numero}", 0, tva))
+        for compte, libelle, deb, cred in vente_lignes:
+            LigneEcriture.objects.create(
+                ecriture=vente, numero_compte=compte, libelle=libelle,
+                montant_debit=deb, montant_credit=cred,
+            )
 
+        # --- 2) écriture de RÈGLEMENT (TTC, 2 lignes) ------------------------
+        # Caisse (530000) si espèces, Banque (512000) sinon.
+        journal, _ = Journal.objects.get_or_create(
+            entreprise=entreprise,
+            annee=annee_obj,
+            type_journal=journal_type,
+        )
+        compte_tresorerie = "530000" if is_cash else "512000"
+        lib_encaissement = "Encaissement espèces" if is_cash else "Encaissement banque"
         ecriture = Ecriture.objects.create(
             journal=journal,
             date_ecriture=date_f,
@@ -775,13 +819,18 @@ class FactureValidateView(APIView):
             mode_paiement=mode,
             statut=Ecriture.Statut.VALIDE,
         )
-        for ligne in lignes:
-            ligne.ecriture = ecriture
-            ligne.save()
+        for compte, libelle, deb, cred in [
+            (compte_tresorerie, f"{lib_encaissement} {numero} — {display_nom}", ttc, 0),
+            (compte_client, f"Règlement client {display_nom} — {numero}", 0, ttc),
+        ]:
+            LigneEcriture.objects.create(
+                ecriture=ecriture, numero_compte=compte, libelle=libelle,
+                montant_debit=deb, montant_credit=cred,
+            )
 
-        # Update facture
+        # Update facture — liée à l'écriture de vente (la facture elle-même).
         facture.statut = Facture.Statut.VALIDE
-        facture.ecriture = ecriture
+        facture.ecriture = vente
         if mode:
             facture.mode_paiement = mode
         facture.save()
