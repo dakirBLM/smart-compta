@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
+import { CameraCapture } from "@/components/CameraCapture";
 import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 import { api, scannerUpload } from "@/lib/api";
@@ -67,6 +68,7 @@ export function ScannerFlow({
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [journalHint, setJournalHint] = useState("");
+  const [showCamera, setShowCamera] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -74,9 +76,7 @@ export function ScannerFlow({
     !!file &&
     (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
 
-  function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (!f) return;
+  function acceptFile(f: File) {
     if (!isAcceptedFile(f)) {
       setError("Format non supporté. Utilisez PDF, JPG, JPEG ou PNG.");
       return;
@@ -86,6 +86,11 @@ export function ScannerFlow({
     // PDFs can't be shown in an <img>; we show a file card instead.
     const pdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
     setPreview(pdf ? null : URL.createObjectURL(f));
+  }
+
+  function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const f = e.target.files?.[0];
+    if (f) acceptFile(f);
   }
 
   async function send() {
@@ -208,8 +213,11 @@ export function ScannerFlow({
 
         {error && <p className="mb-3 text-sm text-danger">{error}</p>}
         <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="success" onClick={() => setShowCamera(true)}>
+            <Camera size={16} /> Scanner (caméra guidée)
+          </Button>
           <Button variant="outline" onClick={() => inputRef.current?.click()}>
-            <Camera size={16} /> {t("prendrePhoto")}
+            <Camera size={16} /> Photo
           </Button>
           <Button variant="outline" onClick={() => importRef.current?.click()}>
             <Upload size={16} /> Importer (PDF / Image)
@@ -218,6 +226,15 @@ export function ScannerFlow({
             {t("envoyer")}
           </Button>
         </div>
+        {showCamera && (
+          <CameraCapture
+            onCapture={(f) => {
+              setShowCamera(false);
+              acceptFile(f);
+            }}
+            onClose={() => setShowCamera(false)}
+          />
+        )}
       </Card>
     );
 

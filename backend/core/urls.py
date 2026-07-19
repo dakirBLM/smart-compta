@@ -15,6 +15,11 @@ urlpatterns = [
          views.FournisseurListCreateView.as_view()),
     path("entreprises/<int:pk>/fournisseurs/<int:fournisseur_id>/",
          views.FournisseurDetailView.as_view()),
+    # Clients comptables (comptes 411)
+    path("entreprises/<int:pk>/clients-comptables/",
+         views.ClientComptableListCreateView.as_view()),
+    path("entreprises/<int:pk>/clients-comptables/<int:client_id>/",
+         views.ClientComptableDetailView.as_view()),
     # Messages
     path("entreprises/<int:pk>/conversations/",
          views.ConversationListView.as_view()),

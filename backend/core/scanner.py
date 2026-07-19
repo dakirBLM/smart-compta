@@ -311,67 +311,73 @@ def _parse_date(value):
     return datetime.today().date()
 
 
+CAISSE_COMPTE = "530000"
+
+
+def _resolve_exercice(entreprise, date_fact):
+    """Exercice de l'écriture : l'année de la date de facture si elle existe,
+    sinon l'exercice actif, sinon création depuis la date de facture."""
+    ex = entreprise.exercices.filter(annee=date_fact.year).first()
+    if ex:
+        return ex
+    ex = entreprise.exercices.filter(is_active=True).first()
+    if ex:
+        return ex
+    return ExerciceAnnee.objects.create(
+        entreprise=entreprise, annee=date_fact.year, is_active=True
+    )
+
+
 @transaction.atomic
 def persist_extraction(entreprise, data, source="scanner"):
-    """Create an Ecriture (+ lignes) in the right journal from AI data.
+    """Comptabilise une extraction IA.
+
+    - L'écriture de la FACTURE va TOUJOURS dans son journal (Achats/Ventes…),
+      avec le compte tiers résolu (401xxx fournisseur / 411xxx client).
+    - Si le paiement est en ESPÈCES, une DEUXIÈME écriture de règlement est
+      créée dans le journal CAISSE, en TTC et sur 2 lignes seulement :
+        Achat : débit 401xxx (fournisseur) / crédit 530000 (caisse)
+        Vente : débit 530000 (caisse)     / crédit 411xxx (client)
     Blocks only on real accounting/structure errors, not AI explanatory notes."""
     errors = blocking_errors(data)
     if errors:
         raise WebhookError("; ".join(errors))
 
-    annee = (entreprise.exercices.filter(is_active=True).first()
-             or entreprise.exercices.first())
-    if annee is None:
-        date_fact = _parse_date(data["date_facture"])
-        annee = ExerciceAnnee.objects.create(
-            entreprise=entreprise, annee=date_fact.year, is_active=True
-        )
+    date_fact = _parse_date(data["date_facture"])
+    annee = _resolve_exercice(entreprise, date_fact)
 
     base_type = JOURNAL_MAP.get(str(data["journal"]).lower(), Journal.Type.ACHAT)
-
     mode = (data.get("mode_paiement") or "").strip().lower()
     is_cash = any(k in mode for k in ("espèce", "espece", "cash", "comptant", "liquide"))
-    is_bank_cheque = any(k in mode for k in (
-        "chèque", "cheque", "chèque bancaire", "cheque bancaire"
-    ))
 
-    # Cash payments are posted to the CAISSE journal and keep the TTC amount
-    # on the cash account 530000. Cheque payments are posted to the BANQUE journal.
-    if is_cash:
-        type_journal = Journal.Type.CAISSE
-    elif is_bank_cheque:
-        type_journal = Journal.Type.BANQUE
-    else:
-        type_journal = base_type
-
+    # --- 1) écriture de la facture, dans SON journal (achat/vente/...) -------
     journal, _ = Journal.objects.get_or_create(
-        entreprise=entreprise, annee=annee, type_journal=type_journal
+        entreprise=entreprise, annee=annee, type_journal=base_type
     )
 
     fournisseur_nom = (data.get("fournisseur") or "").strip()
+    tiers_compte = None
     lignes_data = list(data["lignes"])
-    if is_cash:
-        # Replace the supplier(401)/client(411) line with Caisse 530000, keeping
-        # its TTC amount — the cash settlement.
-        prefix = "411" if base_type == Journal.Type.VENTE else "401"
-        lignes_data = apply_tiers_account(lignes_data, "530000", prefix)
-    elif base_type == Journal.Type.ACHAT and fournisseur_nom:
+    if base_type == Journal.Type.ACHAT and fournisseur_nom:
         tiers = get_or_create_fournisseur(entreprise, fournisseur_nom)
-        lignes_data = apply_tiers_account(lignes_data, tiers.numero_compte, "401")
+        tiers_compte = tiers.numero_compte
+        lignes_data = apply_tiers_account(lignes_data, tiers_compte, "401")
         fournisseur_nom = tiers.nom
     elif base_type == Journal.Type.VENTE and fournisseur_nom:
         tiers = get_or_create_client_comptable(entreprise, fournisseur_nom)
-        lignes_data = apply_tiers_account(lignes_data, tiers.numero_compte, "411")
+        tiers_compte = tiers.numero_compte
+        lignes_data = apply_tiers_account(lignes_data, tiers_compte, "411")
         fournisseur_nom = tiers.nom
 
     confiance = int(data.get("confiance", 0))
     statut = (Ecriture.Statut.VALIDE if confiance >= 90
               else Ecriture.Statut.EN_COURS)
+    numero = data.get("numero_facture", "")
 
     ecriture = Ecriture.objects.create(
         journal=journal,
-        date_ecriture=_parse_date(data["date_facture"]),
-        numero_piece=data.get("numero_facture", ""),
+        date_ecriture=date_fact,
+        numero_piece=numero,
         fournisseur_client=fournisseur_nom,
         source=source,
         confiance_ia=confiance,
@@ -386,4 +392,44 @@ def persist_extraction(entreprise, data, source="scanner"):
             montant_debit=ligne.get("debit", 0) or 0,
             montant_credit=ligne.get("credit", 0) or 0,
         )
+
+    # --- 2) règlement en espèces → écriture Caisse (TTC, 2 lignes) ----------
+    if is_cash and base_type in (Journal.Type.ACHAT, Journal.Type.VENTE):
+        ttc = float(data.get("montant_ttc") or 0)
+        if ttc > 0:
+            caisse_journal, _ = Journal.objects.get_or_create(
+                entreprise=entreprise, annee=annee,
+                type_journal=Journal.Type.CAISSE,
+            )
+            reglement = Ecriture.objects.create(
+                journal=caisse_journal,
+                date_ecriture=date_fact,
+                numero_piece=numero,
+                fournisseur_client=fournisseur_nom,
+                source=source,
+                confiance_ia=confiance,
+                statut=statut,
+                mode_paiement=data.get("mode_paiement", "") or "",
+            )
+            if base_type == Journal.Type.ACHAT:
+                compte_tiers = tiers_compte or "401000"
+                paires = [
+                    (compte_tiers, f"Règlement fournisseur {fournisseur_nom} — {numero}", ttc, 0),
+                    (CAISSE_COMPTE, f"Paiement espèces — {numero}", 0, ttc),
+                ]
+            else:  # VENTE
+                compte_tiers = tiers_compte or "411000"
+                paires = [
+                    (CAISSE_COMPTE, f"Encaissement espèces — {numero}", ttc, 0),
+                    (compte_tiers, f"Règlement client {fournisseur_nom} — {numero}", 0, ttc),
+                ]
+            for compte, libelle, deb, cred in paires:
+                LigneEcriture.objects.create(
+                    ecriture=reglement,
+                    numero_compte=compte,
+                    libelle=libelle,
+                    montant_debit=deb,
+                    montant_credit=cred,
+                )
+
     return ecriture

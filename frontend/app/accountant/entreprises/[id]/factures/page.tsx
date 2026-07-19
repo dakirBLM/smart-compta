@@ -1,17 +1,16 @@
 "use client";
 
-import { CheckCircle, CreditCard, Banknote, Receipt, ScanLine } from "lucide-react";
+import { CheckCircle, Receipt, ScanLine } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ScannerFlow } from "@/components/ScannerFlow";
-import { StatusBadge } from "@/components/StatusBadge";
 import { Modal } from "@/components/Modal";
 import { Button, Card, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { Facture, Ecriture } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
-import { cn, formatDate, formatDZD } from "@/lib/utils";
+import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
 
 const MODE_OPTIONS = [
   { value: "espèces", label: "💵 Espèces (Caisse)", icon: "💵" },
@@ -80,6 +79,8 @@ export default function FacturesAccountantPage() {
   }
 
   const isCash = modePaiement === "espèces";
+  const pending = factures.filter((f) => f.statut === "en_cours");
+  const comptabilisees = factures.filter((f) => f.statut === "valide");
 
   return (
     <AppShell
@@ -131,106 +132,118 @@ export default function FacturesAccountantPage() {
               <Spinner className="h-8 w-8 text-brand" />
             </div>
           ) : (
-            <Card className="p-0 overflow-hidden">
-              <div className="px-4 py-3 border-b bg-gradient-to-r from-brand/5 to-transparent flex items-center gap-2">
-                <Receipt size={18} className="text-brand" />
-                <span className="font-semibold text-brand">
-                  {factures.length} facture{factures.length !== 1 ? "s" : ""}
-                </span>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-brand text-left text-white">
-                    <tr>
-                      <th className="p-3">Image</th>
-                      <th className="p-3">{t("factureNo")}</th>
-                      <th className="p-3">Client</th>
-                      <th className="p-3">{t("date")}</th>
-                      <th className="p-3 text-right">HT</th>
-                      <th className="p-3 text-right">TVA</th>
-                      <th className="p-3 text-right">TTC</th>
-                      <th className="p-3">{t("modePaiement")}</th>
-                      <th className="p-3">Statut</th>
-                      <th className="p-3">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {factures.map((f) => (
-                      <tr key={f.id} className="border-t hover:bg-gray-50 transition-colors">
-                        <td className="p-3">
-                          {f.image_url ? (
+            <div className="space-y-8">
+              {/* ---- Factures en attente de validation ---- */}
+              {pending.length > 0 && (
+                <Card className="p-0 overflow-hidden">
+                  <div className="px-4 py-3 border-b bg-amber-50 flex items-center gap-2">
+                    <Receipt size={18} className="text-amber-600" />
+                    <span className="font-semibold text-amber-700">
+                      {pending.length} facture{pending.length > 1 ? "s" : ""} à valider
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-brand text-left text-white">
+                        <tr>
+                          <th className="p-3">Image</th>
+                          <th className="p-3">{t("factureNo")}</th>
+                          <th className="p-3">Client</th>
+                          <th className="p-3">{t("date")}</th>
+                          <th className="p-3 text-right">TTC</th>
+                          <th className="p-3">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pending.map((f) => (
+                          <tr key={f.id} className="border-t hover:bg-gray-50">
+                            <td className="p-3">
+                              {f.image_url && f.image_url.startsWith("http") ? (
+                                <a href={f.image_url} target="_blank" rel="noopener noreferrer">
+                                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                                  <img src={f.image_url} alt="facture" className="h-12 w-12 rounded object-cover" />
+                                </a>
+                              ) : (
+                                <span className="text-xs text-gray-400">—</span>
+                              )}
+                            </td>
+                            <td className="p-3 font-mono text-xs font-semibold text-brand">
+                              {f.numero_facture || `#${f.id}`}
+                            </td>
+                            <td className="p-3 text-gray-700">{f.client_nom}</td>
+                            <td className="p-3 text-gray-500">{formatDate(f.date_facture)}</td>
+                            <td className="p-3 text-right font-mono font-bold">{formatDZD(f.montant_ttc)}</td>
+                            <td className="p-3">
+                              <button
+                                onClick={() => openValidate(f)}
+                                className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-600"
+                              >
+                                <CheckCircle size={13} />
+                                Valider
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </Card>
+              )}
+
+              {/* ---- Factures comptabilisées : galerie d'images ---- */}
+              <div>
+                <div className="mb-3 flex items-center gap-2">
+                  <CheckCircle size={18} className="text-emerald-600" />
+                  <span className="font-semibold text-brand">
+                    Factures comptabilisées ({comptabilisees.length})
+                  </span>
+                </div>
+                {comptabilisees.length === 0 ? (
+                  <Card>
+                    <p className="py-6 text-center text-gray-400">
+                      Aucune facture comptabilisée pour le moment.
+                    </p>
+                  </Card>
+                ) : (
+                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                    {comptabilisees.map((f) => (
+                      <Card key={f.id} className="overflow-hidden p-0">
+                        {f.image_url && f.image_url.startsWith("http") ? (
+                          <a href={f.image_url} target="_blank" rel="noopener noreferrer" className="block">
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={f.image_url}
-                              alt="archive facture"
-                              className="h-12 w-12 rounded object-cover"
+                              alt={`Facture ${f.numero_facture || f.id}`}
+                              className="h-44 w-full object-cover transition-transform hover:scale-[1.03]"
                             />
-                          ) : (
-                            <span className="text-gray-400 text-xs">—</span>
-                          )}
-                        </td>
-                        <td className="p-3 font-mono text-xs font-semibold text-brand">
-                          {f.numero_facture || `#${f.id}`}
-                        </td>
-                        <td className="p-3 text-gray-700">{f.client_nom}</td>
-                        <td className="p-3 text-gray-500">{formatDate(f.date_facture)}</td>
-                        <td className="p-3 text-right font-mono">{formatDZD(f.montant_ht)}</td>
-                        <td className="p-3 text-right font-mono text-gray-500">
-                          {formatDZD(f.montant_tva)}
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold">
-                          {formatDZD(f.montant_ttc)}
-                        </td>
-                        <td className="p-3">
-                          {f.mode_paiement ? (
-                            <span className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
-                              {f.mode_paiement === "espèces" ? (
-                                <Banknote size={12} />
-                              ) : (
-                                <CreditCard size={12} />
-                              )}
-                              {f.mode_paiement}
+                          </a>
+                        ) : (
+                          <div className="flex h-44 w-full items-center justify-center bg-gray-100 text-gray-400">
+                            <Receipt size={32} />
+                          </div>
+                        )}
+                        <div className="space-y-0.5 p-3">
+                          <div className="flex items-center justify-between">
+                            <span className="font-mono text-xs font-bold text-brand">
+                              {f.numero_facture || `#${f.id}`}
                             </span>
-                          ) : (
-                            <span className="text-gray-400 text-xs italic">Non défini</span>
-                          )}
-                        </td>
-                        <td className="p-3">
-                          <StatusBadge statut={f.statut} />
-                        </td>
-                        <td className="p-3">
-                          {f.statut === "en_cours" && (
-                            <button
-                              onClick={() => openValidate(f)}
-                              className="inline-flex items-center gap-1 rounded-md bg-emerald-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-600 transition-colors"
-                            >
-                              <CheckCircle size={13} />
-                              Valider
-                            </button>
-                          )}
-                          {f.statut === "valide" && f.ecriture && (
-                            <span className="inline-flex items-center gap-1 text-xs text-emerald-600 font-medium">
-                              <CheckCircle size={13} />
-                              {t("comptabilise")}
-                            </span>
-                          )}
-                        </td>
-                      </tr>
+                            <CheckCircle size={14} className="text-emerald-600" />
+                          </div>
+                          <div className="text-sm font-semibold">{formatDZD(f.montant_ttc)}</div>
+                          <div className="text-xs text-gray-500">{formatDate(f.date_facture)}</div>
+                          <div className="text-[11px] text-gray-400">
+                            Comptabilisée le {formatDateTime(f.created_at)}
+                          </div>
+                        </div>
+                      </Card>
                     ))}
-                    {factures.length === 0 && (
-                      <tr>
-                        <td colSpan={10} className="p-8 text-center text-gray-400">
-                          {t("aucuneDonnee")}
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
+                  </div>
+                )}
               </div>
-            </Card>
+            </div>
           )}
         </>
       )}
-
       <Modal
         open={!!validating}
         onClose={() => setValidating(null)}
@@ -297,16 +310,16 @@ export default function FacturesAccountantPage() {
               </div>
               {isCash ? (
                 <p className="text-xs">
-                  Une écriture sera automatiquement créée dans le <strong>journal Caisse</strong> :
+                  La facture sera comptabilisée dans le <strong>journal Ventes</strong>, et le règlement (TTC) dans le <strong>journal Caisse</strong> :
                   <br />
-                  Débit <code className="bg-white px-1 rounded">530</code> (Caisse) /{" "}
+                  Débit <code className="bg-white px-1 rounded">530000</code> (Caisse) /{" "}
                   Crédit <code className="bg-white px-1 rounded">411xxx</code> (Client)
                 </p>
               ) : (
                 <p className="text-xs">
-                  Une écriture sera automatiquement créée dans le <strong>journal Banque</strong> :
+                  La facture sera comptabilisée dans le <strong>journal Ventes</strong>, et le règlement (TTC) dans le <strong>journal Banque</strong> :
                   <br />
-                  Débit <code className="bg-white px-1 rounded">512</code> (Banque) /{" "}
+                  Débit <code className="bg-white px-1 rounded">512000</code> (Banque) /{" "}
                   Crédit <code className="bg-white px-1 rounded">411xxx</code> (Client)
                 </p>
               )}

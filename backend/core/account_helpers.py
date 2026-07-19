@@ -1,7 +1,7 @@
 """Génération et résolution des numéros de compte tiers (401 / 411)."""
 import re
 
-from .models import ClientComptable, Fournisseur, LigneEcriture
+from .models import ClientComptable, Fournisseur
 
 
 def _normalize_name(name: str) -> str:
@@ -9,32 +9,21 @@ def _normalize_name(name: str) -> str:
 
 
 def _collect_suffixes(entreprise, prefix: str) -> list[int]:
-    """Collecte les suffixes numériques déjà utilisés pour un préfixe (401 ou 411)."""
-    suffixes: list[int] = []
+    """Collecte les suffixes déjà attribués pour un préfixe (401 ou 411).
+
+    IMPORTANT : on ne compte QUE le registre des tiers (Fournisseur pour 401,
+    ClientComptable pour 411) — jamais les lignes d'écritures, sinon les
+    comptes génériques (401000, 4011…) présents dans les écritures polluent
+    la séquence et le premier fournisseur ne reçoit pas 401001."""
+    model = Fournisseur if prefix == "401" else ClientComptable
     pat = re.compile(rf"^{prefix}(\d+)$")
-
-    for num in Fournisseur.objects.filter(entreprise=entreprise).values_list(
+    suffixes: list[int] = []
+    for num in model.objects.filter(entreprise=entreprise).values_list(
         "numero_compte", flat=True
     ):
         m = pat.match(str(num))
         if m:
             suffixes.append(int(m.group(1)))
-
-    for num in ClientComptable.objects.filter(entreprise=entreprise).values_list(
-        "numero_compte", flat=True
-    ):
-        m = pat.match(str(num))
-        if m:
-            suffixes.append(int(m.group(1)))
-
-    for num in LigneEcriture.objects.filter(
-        ecriture__journal__entreprise=entreprise,
-        numero_compte__startswith=prefix,
-    ).values_list("numero_compte", flat=True):
-        m = pat.match(str(num))
-        if m:
-            suffixes.append(int(m.group(1)))
-
     return suffixes
 
 
