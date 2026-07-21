@@ -15,6 +15,7 @@ from .account_helpers import (
     apply_tiers_account,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
+    _normalize_name,
 )
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
@@ -311,9 +312,6 @@ def _parse_date(value):
     return datetime.today().date()
 
 
-CAISSE_COMPTE = "530000"
-
-
 def _resolve_exercice(entreprise, date_fact):
     """Exercice de l'écriture : l'année de la date de facture si elle existe,
     sinon l'exercice actif, sinon création depuis la date de facture."""
@@ -328,17 +326,17 @@ def _resolve_exercice(entreprise, date_fact):
     )
 
 
+CAISSE_COMPTE = "530000"
+
+
 @transaction.atomic
 def persist_extraction(entreprise, data, source="scanner"):
     """Comptabilise une extraction IA.
 
     - L'écriture de la FACTURE va TOUJOURS dans son journal (Achats/Ventes…),
       avec le compte tiers résolu (401xxx fournisseur / 411xxx client).
-    - Si le paiement est en ESPÈCES, une DEUXIÈME écriture de règlement est
-      créée dans le journal CAISSE, en TTC et sur 2 lignes seulement :
-        Achat : débit 401xxx (fournisseur) / crédit 530000 (caisse)
-        Vente : débit 530000 (caisse)     / crédit 411xxx (client)
-    Blocks only on real accounting/structure errors, not AI explanatory notes."""
+    - L'écriture de règlement (espèces / caisse / banque) est créée automatiquement
+      si un mode de paiement valide est détecté."""
     errors = blocking_errors(data)
     if errors:
         raise WebhookError("; ".join(errors))
@@ -348,7 +346,15 @@ def persist_extraction(entreprise, data, source="scanner"):
 
     base_type = JOURNAL_MAP.get(str(data["journal"]).lower(), Journal.Type.ACHAT)
     mode = (data.get("mode_paiement") or "").strip().lower()
-    is_cash = any(k in mode for k in ("espèce", "espece", "cash", "comptant", "liquide"))
+
+    CASH_MODES = {"espèce", "espèces", "espece", "especes", "cash", "caisse", "liquide"}
+    BANK_MODES = {
+        "chèque", "cheque", "virement", "transfer", "transfert",
+        "carte", "carte bancaire", "cb", "cheque bancaire", "banque"
+    }
+
+    is_cash = any(k in mode for k in CASH_MODES)
+    is_bank = any(k in mode for k in BANK_MODES)
 
     # --- 1) écriture de la facture, dans SON journal (achat/vente/...) -------
     journal, _ = Journal.objects.get_or_create(
@@ -356,6 +362,9 @@ def persist_extraction(entreprise, data, source="scanner"):
     )
 
     fournisseur_nom = (data.get("fournisseur") or "").strip()
+    if _normalize_name(fournisseur_nom) == _normalize_name(entreprise.nom):
+        fournisseur_nom = "Client Divers" if base_type == Journal.Type.VENTE else "Fournisseur Divers"
+
     tiers_compte = None
     lignes_data = list(data["lignes"])
     if base_type == Journal.Type.ACHAT and fournisseur_nom:
@@ -393,16 +402,20 @@ def persist_extraction(entreprise, data, source="scanner"):
             montant_credit=ligne.get("credit", 0) or 0,
         )
 
-    # --- 2) règlement en espèces → écriture Caisse (TTC, 2 lignes) ----------
-    if is_cash and base_type in (Journal.Type.ACHAT, Journal.Type.VENTE):
+    # --- 2) règlement espèces ou banque → écriture correspondante (TTC, 2 lignes) ----------
+    if (is_cash or is_bank) and base_type in (Journal.Type.ACHAT, Journal.Type.VENTE):
         ttc = float(data.get("montant_ttc") or 0)
         if ttc > 0:
-            caisse_journal, _ = Journal.objects.get_or_create(
+            reg_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
+            compte_tresorerie = CAISSE_COMPTE if is_cash else "512000"
+            lib_reglement = "Règlement espèces" if is_cash else "Règlement banque"
+
+            reg_journal, _ = Journal.objects.get_or_create(
                 entreprise=entreprise, annee=annee,
-                type_journal=Journal.Type.CAISSE,
+                type_journal=reg_type,
             )
             reglement = Ecriture.objects.create(
-                journal=caisse_journal,
+                journal=reg_journal,
                 date_ecriture=date_fact,
                 numero_piece=numero,
                 fournisseur_client=fournisseur_nom,
@@ -415,12 +428,12 @@ def persist_extraction(entreprise, data, source="scanner"):
                 compte_tiers = tiers_compte or "401000"
                 paires = [
                     (compte_tiers, f"Règlement fournisseur {fournisseur_nom} — {numero}", ttc, 0),
-                    (CAISSE_COMPTE, f"Paiement espèces — {numero}", 0, ttc),
+                    (compte_tresorerie, f"{lib_reglement} — {numero}", 0, ttc),
                 ]
             else:  # VENTE
                 compte_tiers = tiers_compte or "411000"
                 paires = [
-                    (CAISSE_COMPTE, f"Encaissement espèces — {numero}", ttc, 0),
+                    (compte_tresorerie, f"{lib_reglement} — {numero}", ttc, 0),
                     (compte_tiers, f"Règlement client {fournisseur_nom} — {numero}", 0, ttc),
                 ]
             for compte, libelle, deb, cred in paires:

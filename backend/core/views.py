@@ -610,6 +610,9 @@ class ScannerConfirmView(APIView):
                 statut=Facture.Statut.VALIDE,
                 confiance_ia=int(data.get("confiance", 0) or 0),
                 ecriture=ecriture,
+                fournisseur_client=data.get("fournisseur", "") or "",
+                type_facture="vente" if "vente" in str(data.get("journal")).lower() else "achat",
+                mode_paiement=data.get("mode_paiement", "") or "",
             )
         except Exception:
             pass  # never fail the écriture because of facture archiving
@@ -634,15 +637,20 @@ class FactureListCreateView(APIView):
             qs = Facture.objects.filter(client=request.user)
         return Response(FactureSerializer(qs, many=True).data)
 
+    @transaction.atomic
     def post(self, request):
-        # A client uploads a facture against the entreprise they have access to.
+        # A client or accountant uploads a facture
         access = ClientAccess.objects.filter(client=request.user).first()
-        entreprise_id = request.data.get("entreprise") or (
-            access.entreprise_id if access else None
-        )
+        if request.user.role == "accountant":
+            entreprise_id = request.data.get("entreprise")
+        else:
+            entreprise_id = access.entreprise_id if access else None
+
         if not entreprise_id:
             return Response({"error": "Aucune entreprise associée."},
                             status=status.HTTP_400_BAD_REQUEST)
+
+        entreprise = get_object_or_404(Entreprise, id=entreprise_id)
 
         # Duplicate invoice number guard (per entreprise).
         numero = (request.data.get("numero_facture") or "").strip()
@@ -655,7 +663,6 @@ class FactureListCreateView(APIView):
             )
 
         # Keep the invoice as an image: upload the file to storage and store URL.
-        # Non-blocking — if storage isn't available the facture still saves.
         image_url = request.data.get("image_url") or ""
         if "file" in request.FILES:
             try:
@@ -663,11 +670,57 @@ class FactureListCreateView(APIView):
             except WebhookError:
                 pass
 
-        serializer = FactureSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(client=request.user, entreprise_id=entreprise_id,
-                        image_url=image_url)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        # Parse the AI extracted data
+        import json as _json
+        lignes_raw = request.data.get("lignes") or "[]"
+        if isinstance(lignes_raw, str):
+            try:
+                lignes = _json.loads(lignes_raw)
+            except ValueError:
+                lignes = []
+        else:
+            lignes = lignes_raw
+
+        extraction_data = {
+            "fournisseur": request.data.get("fournisseur_client") or "",
+            "date_facture": request.data.get("date_facture") or "",
+            "numero_facture": numero,
+            "montant_ht": float(request.data.get("montant_ht") or 0),
+            "tva_pourcentage": float(request.data.get("tva_pourcentage") or 19),
+            "montant_tva": float(request.data.get("montant_tva") or 0),
+            "montant_ttc": float(request.data.get("montant_ttc") or 0),
+            "journal": "Ventes" if request.data.get("type_facture") == "vente" else "Achats",
+            "confiance": int(request.data.get("confiance_ia") or 95),
+            "mode_paiement": request.data.get("mode_paiement") or "",
+            "lignes": lignes,
+        }
+
+        try:
+            ecriture = persist_extraction(entreprise, extraction_data, source="import")
+        except Exception as exc:
+            return Response({"error": f"Erreur lors de la comptabilisation: {str(exc)}"},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        # Create the Facture as VALIDE immediately
+        facture = Facture.objects.create(
+            entreprise=entreprise,
+            client=request.user,
+            numero_facture=numero,
+            date_facture=ecriture.date_ecriture,
+            montant_ht=extraction_data["montant_ht"],
+            tva_pourcentage=extraction_data["tva_pourcentage"],
+            montant_tva=extraction_data["montant_tva"],
+            montant_ttc=extraction_data["montant_ttc"],
+            image_url=image_url,
+            statut=Facture.Statut.VALIDE,
+            confiance_ia=extraction_data["confiance"],
+            ecriture=ecriture,
+            fournisseur_client=extraction_data["fournisseur"],
+            type_facture=request.data.get("type_facture") or "achat",
+            mode_paiement=extraction_data["mode_paiement"],
+        )
+
+        return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
 
 
 class FactureDetailView(APIView):
@@ -686,10 +739,7 @@ class FactureDetailView(APIView):
 # Facture – Validate & auto-post to Banque / Caisse
 # --------------------------------------------------------------------------- #
 class FactureValidateView(APIView):
-    """Validate a client facture and auto-create the matching Ecriture in the
-    Banque journal (cheque / virement) or Caisse journal (espèces).
-    For cash payments (espèces) the system also creates an entry in the
-    Caisse journal automatically."""
+    """Validate a client facture manually (legacy / fallback)"""
 
     permission_classes = [IsAccountant]
 
@@ -704,135 +754,56 @@ class FactureValidateView(APIView):
                 status=status.HTTP_409_CONFLICT,
             )
 
-        # Normalize incoming mode_paiement and prefer explicit request value,
-        # then existing facture value. Require a non-empty, supported mode.
         mode = (request.data.get("mode_paiement") or facture.mode_paiement or "").lower().strip()
-        if not mode:
-            return Response(
-                {"error": "Le mode de paiement est obligatoire pour valider la facture."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Whitelist known cash vs bank payment modes. Reject unknown values.
-        CASH_MODES = {"espèce", "espèces", "espece", "especes", "cash"}
-        BANK_MODES = {
-            "chèque", "cheque", "virement", "transfer", "transfert",
-            "carte", "carte bancaire", "cb", "cheque bancaire"
-        }
-
-        if mode in CASH_MODES:
-            is_cash = True
-        elif mode in BANK_MODES:
-            is_cash = False
-        else:
-            return Response(
-                {"error": f"Mode de paiement non supporté: '{mode}'. Valeurs acceptées: {sorted(list(CASH_MODES | BANK_MODES))}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        # Determine which journal to post to.
-        journal_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
-
         entreprise = facture.entreprise
 
-        # Find active exercise year
-        annee_obj = None
-        if facture.date_facture:
-            try:
-                year = facture.date_facture.year
-                annee_obj = ExerciceAnnee.objects.filter(
-                    entreprise=entreprise, annee=year
-                ).first()
-            except Exception:
-                pass
-        if not annee_obj:
-            annee_obj = ExerciceAnnee.objects.filter(
-                entreprise=entreprise, is_active=True
-            ).first()
-        if not annee_obj:
-            return Response(
-                {"error": "Aucun exercice comptable actif trouvé."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        # Determine which journal to post to
+        is_vente = facture.type_facture == "vente"
+        journal_name = "Ventes" if is_vente else "Achats"
 
-        client_nom = facture.client.username
-        # Résoudre le nom du client portail (nom_client si disponible)
-        access = ClientAccess.objects.filter(
-            entreprise=entreprise, client=facture.client
-        ).first()
-        display_nom = access.nom_client if access else client_nom
-        client_comptable = get_or_create_client_comptable(entreprise, display_nom)
-        compte_client = client_comptable.numero_compte
+        # Re-run automated accounting using updated persist_extraction
+        extraction_data = {
+            "fournisseur": facture.fournisseur_client or "Tiers Divers",
+            "date_facture": str(facture.date_facture) if facture.date_facture else "",
+            "numero_facture": facture.numero_facture,
+            "montant_ht": float(facture.montant_ht),
+            "tva_pourcentage": float(facture.tva_pourcentage),
+            "montant_tva": float(facture.montant_tva),
+            "montant_ttc": float(facture.montant_ttc),
+            "journal": journal_name,
+            "confiance": int(facture.confiance_ia or 95),
+            "mode_paiement": mode,
+            "lignes": [
+                {
+                    "compte": "411" if is_vente else "401",
+                    "libelle": facture.fournisseur_client or "Tiers Divers",
+                    "debit": float(facture.montant_ttc) if is_vente else 0,
+                    "credit": 0 if is_vente else float(facture.montant_ttc),
+                },
+                {
+                    "compte": "700000" if is_vente else "6011",
+                    "libelle": "Vente de marchandises" if is_vente else "Achats de marchandises",
+                    "debit": 0 if is_vente else float(facture.montant_ht),
+                    "credit": float(facture.montant_ht) if is_vente else 0,
+                }
+            ]
+        }
+        if float(facture.montant_tva) > 0:
+            extraction_data["lignes"].append({
+                "compte": "445700" if is_vente else "44566",
+                "libelle": "TVA collectée" if is_vente else "TVA déductible",
+                "debit": 0 if is_vente else float(facture.montant_tva),
+                "credit": float(facture.montant_tva) if is_vente else 0,
+            })
 
-        ttc = facture.montant_ttc
-        ht = facture.montant_ht or ttc
-        tva = facture.montant_tva or 0
-        date_f = facture.date_facture
-        if not date_f:
-            return Response(
-                 {"error": "La date de facture est obligatoire pour valider."},
-                 status=status.HTTP_400_BAD_REQUEST,
-            )
-        numero = facture.numero_facture
+        try:
+            ecriture = persist_extraction(entreprise, extraction_data, source="import")
+        except Exception as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # --- 1) écriture de VENTE dans le journal Ventes (la facture) -------
-        vente_journal, _ = Journal.objects.get_or_create(
-            entreprise=entreprise, annee=annee_obj,
-            type_journal=Journal.Type.VENTE,
-        )
-        vente = Ecriture.objects.create(
-            journal=vente_journal,
-            date_ecriture=date_f,
-            numero_piece=numero,
-            fournisseur_client=display_nom,
-            source=Ecriture.Source.MANUEL,
-            mode_paiement=mode,
-            statut=Ecriture.Statut.VALIDE,
-        )
-        vente_lignes = [
-            (compte_client, f"Client {display_nom} — Facture {numero}", ttc, 0),
-            ("700000", f"Vente de marchandises — {numero}", 0, ht),
-        ]
-        if tva and float(tva) > 0:
-            vente_lignes.append(("445700", f"TVA collectée — {numero}", 0, tva))
-        for compte, libelle, deb, cred in vente_lignes:
-            LigneEcriture.objects.create(
-                ecriture=vente, numero_compte=compte, libelle=libelle,
-                montant_debit=deb, montant_credit=cred,
-            )
-
-        # --- 2) écriture de RÈGLEMENT (TTC, 2 lignes) ------------------------
-        # Caisse (530000) si espèces, Banque (512000) sinon.
-        journal, _ = Journal.objects.get_or_create(
-            entreprise=entreprise,
-            annee=annee_obj,
-            type_journal=journal_type,
-        )
-        compte_tresorerie = "530000" if is_cash else "512000"
-        lib_encaissement = "Encaissement espèces" if is_cash else "Encaissement banque"
-        ecriture = Ecriture.objects.create(
-            journal=journal,
-            date_ecriture=date_f,
-            numero_piece=numero,
-            fournisseur_client=display_nom,
-            source=Ecriture.Source.MANUEL,
-            mode_paiement=mode,
-            statut=Ecriture.Statut.VALIDE,
-        )
-        for compte, libelle, deb, cred in [
-            (compte_tresorerie, f"{lib_encaissement} {numero} — {display_nom}", ttc, 0),
-            (compte_client, f"Règlement client {display_nom} — {numero}", 0, ttc),
-        ]:
-            LigneEcriture.objects.create(
-                ecriture=ecriture, numero_compte=compte, libelle=libelle,
-                montant_debit=deb, montant_credit=cred,
-            )
-
-        # Update facture — liée à l'écriture de vente (la facture elle-même).
         facture.statut = Facture.Statut.VALIDE
-        facture.ecriture = vente
-        if mode:
-            facture.mode_paiement = mode
+        facture.ecriture = ecriture
+        facture.mode_paiement = mode
         facture.save()
 
         return Response(
@@ -900,24 +871,52 @@ class MockWebhookView(APIView):
     authentication_classes = []
 
     def post(self, request):
-        return Response({
-            "fournisseur": "SARL ABC",
-            "date_facture": "15/05/2024",
-            "numero_facture": "F2024-0158",
-            "montant_ht": 100000.00,
-            "tva_pourcentage": 19,
-            "montant_tva": 19000.00,
-            "montant_ttc": 119000.00,
-            "journal": "Achats",
-            "confiance": 95,
-            "lignes": [
-                {"compte": "6011", "libelle": "Achats de marchandises",
-                 "debit": 100000.00, "credit": 0.00},
-                {"compte": "44566", "libelle": "TVA déductible",
-                 "debit": 19000.00, "credit": 0.00},
-                {"compte": "4011", "libelle": "Fournisseurs",
-                 "debit": 0.00, "credit": 119000.00},
-            ],
-            "statut": "en_cours",
-            "erreurs": [],
-        })
+        hint = str(request.data.get("journal_hint") or request.data.get("journal") or "").lower()
+        is_vente = "vente" in hint
+        mode_paiement = "espèces"
+        if "banque" in hint or "virement" in hint or "chèque" in hint:
+            mode_paiement = "chèque"
+
+        if is_vente:
+            return Response({
+                "fournisseur": "Client Durable",
+                "date_facture": "15/05/2024",
+                "numero_facture": "V2024-0012",
+                "montant_ht": 100000.00,
+                "tva_pourcentage": 19,
+                "montant_tva": 19000.00,
+                "montant_ttc": 119000.00,
+                "journal": "Ventes",
+                "mode_paiement": mode_paiement,
+                "confiance": 95,
+                "lignes": [
+                    {"compte": "411", "libelle": "Client Durable", "debit": 119000.00, "credit": 0.00},
+                    {"compte": "700000", "libelle": "Vente de marchandises", "debit": 0.00, "credit": 100000.00},
+                    {"compte": "445700", "libelle": "TVA collectée", "debit": 0.00, "credit": 19000.00}
+                ],
+                "statut": "en_cours",
+                "erreurs": [],
+            })
+        else:
+            return Response({
+                "fournisseur": "SARL ABC",
+                "date_facture": "15/05/2024",
+                "numero_facture": "F2024-0158",
+                "montant_ht": 100000.00,
+                "tva_pourcentage": 19,
+                "montant_tva": 19000.00,
+                "montant_ttc": 119000.00,
+                "journal": "Achats",
+                "mode_paiement": mode_paiement,
+                "confiance": 95,
+                "lignes": [
+                    {"compte": "6011", "libelle": "Achats de marchandises",
+                     "debit": 100000.00, "credit": 0.00},
+                    {"compte": "44566", "libelle": "TVA déductible",
+                     "debit": 19000.00, "credit": 0.00},
+                    {"compte": "4011", "libelle": "Fournisseurs",
+                     "debit": 0.00, "credit": 119000.00},
+                ],
+                "statut": "en_cours",
+                "erreurs": [],
+            })

@@ -41,6 +41,8 @@ def get_or_create_fournisseur(entreprise, nom: str) -> Fournisseur:
     clean = (nom or "").strip()
     if not clean:
         clean = "Fournisseur inconnu"
+    if _normalize_name(clean) == _normalize_name(entreprise.nom):
+        clean = "Fournisseur Divers"
     norm = _normalize_name(clean)
     for f in Fournisseur.objects.filter(entreprise=entreprise):
         if _normalize_name(f.nom) == norm:
@@ -57,6 +59,8 @@ def get_or_create_client_comptable(entreprise, nom: str) -> ClientComptable:
     clean = (nom or "").strip()
     if not clean:
         clean = "Client inconnu"
+    if _normalize_name(clean) == _normalize_name(entreprise.nom):
+        clean = "Client Divers"
     norm = _normalize_name(clean)
     for c in ClientComptable.objects.filter(entreprise=entreprise):
         if _normalize_name(c.nom) == norm:
