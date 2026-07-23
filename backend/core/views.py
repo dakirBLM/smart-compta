@@ -6,6 +6,7 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.permissions import AllowAny
 
 from .account_helpers import get_or_create_client_comptable
 from .models import (
@@ -20,8 +21,6 @@ from .models import (
     LigneEcriture,
     Message,
 )
-from rest_framework.permissions import AllowAny
-
 from .permissions import IsAccountant, IsClient
 from .reports import (
     build_balance,
@@ -123,7 +122,7 @@ class EntrepriseDetailView(APIView):
 
 
 # --------------------------------------------------------------------------- #
-# Clients
+# Clients (portail)
 # --------------------------------------------------------------------------- #
 class ClientListCreateView(APIView):
     permission_classes = [IsAccountant]
@@ -165,7 +164,7 @@ class ClientDeleteView(APIView):
 
 
 # --------------------------------------------------------------------------- #
-# Fournisseurs
+# Fournisseurs (401)
 # --------------------------------------------------------------------------- #
 class FournisseurListCreateView(APIView):
     permission_classes = [IsAccountant]
@@ -179,10 +178,21 @@ class FournisseurListCreateView(APIView):
         return Response(FournisseurSerializer(qs, many=True).data)
 
     def post(self, request, pk):
-        from .account_helpers import next_account_number
+        from .account_helpers import next_account_number, _validate_not_self
+        from django.core.exceptions import ValidationError
+        
         entreprise = _accountant_entreprise(request, pk)
         serializer = FournisseurSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        
+        # Vérification : l'entreprise ne peut pas être son propre fournisseur
+        nom = serializer.validated_data.get("nom", "").strip()
+        if nom:
+            try:
+                _validate_not_self(entreprise, nom, "fournisseur")
+            except ValidationError as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
         fournisseur = serializer.save(
             entreprise=entreprise,
             numero_compte=next_account_number(entreprise, "401"),
@@ -192,11 +202,16 @@ class FournisseurListCreateView(APIView):
 
 
 class FournisseurDetailView(APIView):
+    """Détail, modification et suppression d'un fournisseur."""
     permission_classes = [IsAccountant]
 
     def _get(self, request, pk, fournisseur_id):
         entreprise = _accountant_entreprise(request, pk)
         return get_object_or_404(Fournisseur, pk=fournisseur_id, entreprise=entreprise)
+
+    def get(self, request, pk, fournisseur_id):
+        fournisseur = self._get(request, pk, fournisseur_id)
+        return Response(FournisseurSerializer(fournisseur).data)
 
     def put(self, request, pk, fournisseur_id):
         fournisseur = self._get(request, pk, fournisseur_id)
@@ -211,7 +226,7 @@ class FournisseurDetailView(APIView):
 
 
 # --------------------------------------------------------------------------- #
-# Clients comptables (comptes 411) — miroir des fournisseurs (401)
+# Clients comptables (411)
 # --------------------------------------------------------------------------- #
 class ClientComptableListCreateView(APIView):
     permission_classes = [IsAccountant]
@@ -225,10 +240,21 @@ class ClientComptableListCreateView(APIView):
         return Response(ClientComptableSerializer(qs, many=True).data)
 
     def post(self, request, pk):
-        from .account_helpers import next_account_number
+        from .account_helpers import next_account_number, _validate_not_self
+        from django.core.exceptions import ValidationError
+        
         entreprise = _accountant_entreprise(request, pk)
         serializer = ClientComptableSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        
+        # Vérification : l'entreprise ne peut pas être son propre client
+        nom = serializer.validated_data.get("nom", "").strip()
+        if nom:
+            try:
+                _validate_not_self(entreprise, nom, "client")
+            except ValidationError as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        
         client = serializer.save(
             entreprise=entreprise,
             numero_compte=next_account_number(entreprise, "411"),
@@ -238,11 +264,16 @@ class ClientComptableListCreateView(APIView):
 
 
 class ClientComptableDetailView(APIView):
+    """Détail, modification et suppression d'un client comptable."""
     permission_classes = [IsAccountant]
 
     def _get(self, request, pk, client_id):
         entreprise = _accountant_entreprise(request, pk)
         return get_object_or_404(ClientComptable, pk=client_id, entreprise=entreprise)
+
+    def get(self, request, pk, client_id):
+        client = self._get(request, pk, client_id)
+        return Response(ClientComptableSerializer(client).data)
 
     def put(self, request, pk, client_id):
         client = self._get(request, pk, client_id)
@@ -739,12 +770,18 @@ class FactureDetailView(APIView):
 # Facture – Validate & auto-post to Banque / Caisse
 # --------------------------------------------------------------------------- #
 class FactureValidateView(APIView):
-    """Validate a client facture manually (legacy / fallback)"""
+    """Validate a client facture manually (legacy / fallback)
+    
+    CORRECTION : L'entreprise ne peut pas être son propre client/fournisseur.
+    """
 
     permission_classes = [IsAccountant]
 
     @transaction.atomic
     def post(self, request, pk):
+        from django.core.exceptions import ValidationError
+        from .account_helpers import _validate_not_self
+        
         facture = get_object_or_404(
             Facture, pk=pk, entreprise__accountant=request.user
         )
@@ -760,10 +797,23 @@ class FactureValidateView(APIView):
         # Determine which journal to post to
         is_vente = facture.type_facture == "vente"
         journal_name = "Ventes" if is_vente else "Achats"
+        
+        # Vérification : le tiers ne peut pas être l'entreprise elle-même
+        tiers_nom = facture.fournisseur_client or ""
+        if tiers_nom:
+            try:
+                _validate_not_self(entreprise, tiers_nom, "client" if is_vente else "fournisseur")
+            except ValidationError as e:
+                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+        else:
+            return Response(
+                {"error": "Le nom du client/fournisseur est obligatoire pour valider la facture."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
 
         # Re-run automated accounting using updated persist_extraction
         extraction_data = {
-            "fournisseur": facture.fournisseur_client or "Tiers Divers",
+            "fournisseur": tiers_nom,
             "date_facture": str(facture.date_facture) if facture.date_facture else "",
             "numero_facture": facture.numero_facture,
             "montant_ht": float(facture.montant_ht),
@@ -776,7 +826,7 @@ class FactureValidateView(APIView):
             "lignes": [
                 {
                     "compte": "411" if is_vente else "401",
-                    "libelle": facture.fournisseur_client or "Tiers Divers",
+                    "libelle": tiers_nom,
                     "debit": float(facture.montant_ttc) if is_vente else 0,
                     "credit": 0 if is_vente else float(facture.montant_ttc),
                 },
