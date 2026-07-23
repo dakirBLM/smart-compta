@@ -186,6 +186,8 @@ export interface AIExtraction {
   montant_ttc: number;
   journal: string;
   confiance: number;
+  /** Mode de paiement détecté sur la facture (espèces, chèque, virement…). */
+  mode_paiement?: string;
   lignes: AILigne[];
   statut: string;
   erreurs: string[];
