@@ -1,6 +1,7 @@
 """Génération et résolution des numéros de compte tiers (401 / 411)."""
 import re
 
+from django.core.exceptions import ValidationError
 from .models import ClientComptable, Fournisseur
 
 
@@ -36,11 +37,35 @@ def next_account_number(entreprise, prefix: str) -> str:
     return f"{prefix}{next_suffix:03d}"
 
 
+def _validate_not_self(entreprise, nom: str, type_tiers: str):
+    """Vérifie que le tiers n'est pas l'entreprise elle-même.
+    
+    En comptabilité, une entreprise ne peut pas être son propre client ou fournisseur.
+    Si le nom correspond, on lève une erreur claire.
+    """
+    clean_nom = _normalize_name(nom)
+    clean_entreprise = _normalize_name(entreprise.nom)
+    
+    if clean_nom == clean_entreprise:
+        raise ValidationError(
+            f"Impossible d'ajouter l'entreprise elle-même comme {type_tiers}. "
+            f"Veuillez vérifier le nom du tiers sur la facture."
+        )
+
+
 def get_or_create_fournisseur(entreprise, nom: str) -> Fournisseur:
-    """Retourne le fournisseur existant (par nom) ou crée un nouveau compte 401."""
+    """Retourne le fournisseur existant (par nom) ou crée un nouveau compte 401.
+    
+    IMPORTANT : L'entreprise ne peut pas être son propre fournisseur.
+    Si le nom correspond à celui de l'entreprise, une erreur est levée.
+    """
     clean = (nom or "").strip()
     if not clean:
-        clean = "Fournisseur inconnu"
+        raise ValidationError("Le nom du fournisseur est obligatoire.")
+    
+    # Vérification : l'entreprise ne peut pas être son propre fournisseur
+    _validate_not_self(entreprise, clean, "fournisseur")
+    
     norm = _normalize_name(clean)
     for f in Fournisseur.objects.filter(entreprise=entreprise):
         if _normalize_name(f.nom) == norm:
@@ -53,10 +78,18 @@ def get_or_create_fournisseur(entreprise, nom: str) -> Fournisseur:
 
 
 def get_or_create_client_comptable(entreprise, nom: str) -> ClientComptable:
-    """Retourne le client comptable existant (par nom) ou crée un nouveau compte 411."""
+    """Retourne le client comptable existant (par nom) ou crée un nouveau compte 411.
+    
+    IMPORTANT : L'entreprise ne peut pas être son propre client.
+    Si le nom correspond à celui de l'entreprise, une erreur est levée.
+    """
     clean = (nom or "").strip()
     if not clean:
-        clean = "Client inconnu"
+        raise ValidationError("Le nom du client est obligatoire.")
+    
+    # Vérification : l'entreprise ne peut pas être son propre client
+    _validate_not_self(entreprise, clean, "client")
+    
     norm = _normalize_name(clean)
     for c in ClientComptable.objects.filter(entreprise=entreprise):
         if _normalize_name(c.nom) == norm:

@@ -256,7 +256,7 @@ class FactureSerializer(serializers.ModelSerializer):
             "id", "entreprise", "client", "client_nom", "numero_facture",
             "date_facture", "montant_ht", "tva_pourcentage", "montant_tva",
             "montant_ttc", "image_url", "statut", "confiance_ia", "ecriture",
-            "mode_paiement", "created_at",
+            "mode_paiement", "created_at", "fournisseur_client", "type_facture",
         ]
         # entreprise is resolved server-side (from the client's ClientAccess),
         # so it must not be required in the request payload.

@@ -240,6 +240,12 @@ class Facture(models.Model):
         Ecriture, on_delete=models.SET_NULL, null=True, blank=True, related_name="factures"
     )
     mode_paiement = models.CharField(max_length=50, blank=True, default="")
+    fournisseur_client = models.CharField(max_length=255, blank=True, default="")
+    type_facture = models.CharField(
+        max_length=20,
+        choices=[("achat", "Achat"), ("vente", "Vente")],
+        default="achat",
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

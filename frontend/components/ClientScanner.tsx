@@ -142,7 +142,7 @@ export function ClientScanner() {
         return;
       }
 
-      // 4) Good result → persist the facture WITH its image (archived), then
+      // 4) Good result → persist the facture WITH its image (archived) and auto-comptabilise, then
       //    show success. Multipart so the backend can store the photo.
       const fd = new FormData();
       fd.append("file", file); // archived as an image
@@ -153,7 +153,11 @@ export function ClientScanner() {
       fd.append("montant_tva", String(data.montant_tva ?? 0));
       fd.append("montant_ttc", String(data.montant_ttc ?? 0));
       fd.append("confiance_ia", String(confiance));
-      fd.append("statut", "en_cours");
+      fd.append("statut", "valide");
+      fd.append("fournisseur_client", data.fournisseur ?? "");
+      fd.append("type_facture", String(data.journal).toLowerCase().includes("vente") ? "vente" : "achat");
+      fd.append("mode_paiement", data.mode_paiement ?? "");
+      fd.append("lignes", JSON.stringify(data.lignes ?? []));
       await api.post("/api/factures/", fd);
       setResult(data);
       setPhase("success");
