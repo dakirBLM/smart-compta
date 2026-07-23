@@ -338,9 +338,10 @@ def persist_extraction(entreprise, data, source="scanner"):
       avec le compte tiers résolu (401xxx fournisseur / 411xxx client).
     - L'écriture de règlement (espèces / caisse / banque) est créée automatiquement
       si un mode de paiement valide est détecté.
-    - CORRECTION : 
-      * Si l'IA détecte le nom de l'entreprise comme FOURNISSEUR → c'est une VENTE (client = autre)
-      * Si l'IA détecte le nom de l'entreprise comme CLIENT → c'est un ACHAT (fournisseur = autre)
+    - LOGIQUE GÉNÉRIQUE : 
+      * Le champ "fournisseur" peut contenir soit le nom de l'entreprise (auto-facturation)
+        soit le nom du vrai tiers (client ou fournisseur)
+      * Si c'est le nom de l'entreprise, on extrait le vrai tiers depuis les libellés
       * L'entreprise n'est JAMAIS enregistrée comme client ou fournisseur dans ses propres listes
     """
     errors = blocking_errors(data)
@@ -407,7 +408,6 @@ def persist_extraction(entreprise, data, source="scanner"):
     
     if base_type == Journal.Type.ACHAT:
         # C'est un achat → on crée un fournisseur (401)
-        # Le fournisseur est le tiers (l'entreprise achète à ce fournisseur)
         try:
             tiers = get_or_create_fournisseur(entreprise, tiers_nom)
             tiers_compte = tiers.numero_compte
@@ -417,7 +417,6 @@ def persist_extraction(entreprise, data, source="scanner"):
             raise WebhookError(str(e))
     else:  # VENTE
         # C'est une vente → on crée un client (411)
-        # Le client est le tiers (l'entreprise vend à ce client)
         try:
             tiers = get_or_create_client_comptable(entreprise, tiers_nom)
             tiers_compte = tiers.numero_compte
