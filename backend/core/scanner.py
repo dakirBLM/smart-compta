@@ -338,9 +338,10 @@ def persist_extraction(entreprise, data, source="scanner"):
       avec le compte tiers résolu (401xxx fournisseur / 411xxx client).
     - L'écriture de règlement (espèces / caisse / banque) est créée automatiquement
       si un mode de paiement valide est détecté.
-    - CORRECTION : 
-      * Si l'IA détecte le nom de l'entreprise comme FOURNISSEUR → c'est une VENTE (client = autre)
-      * Si l'IA détecte le nom de l'entreprise comme CLIENT → c'est un ACHAT (fournisseur = autre)
+    - LOGIQUE GÉNÉRIQUE : 
+      * Le champ "fournisseur" peut contenir soit le nom de l'entreprise (auto-facturation)
+        soit le nom du vrai tiers (client ou fournisseur)
+      * Si c'est le nom de l'entreprise, on extrait le vrai tiers depuis les libellés
       * L'entreprise n'est JAMAIS enregistrée comme client ou fournisseur dans ses propres listes
     """
     errors = blocking_errors(data)
@@ -375,48 +376,80 @@ def persist_extraction(entreprise, data, source="scanner"):
             "Veuillez vérifier que le document est lisible."
         )
     
-    # 🔥 LOGIQUE CORRIGÉE :
-    # 1. Si le nom détecté est l'ENTREPRISE et qu'on est en ACHAT → l'entreprise est le CLIENT
-    #    → c'est une facture d'achat (l'entreprise achète à un fournisseur)
-    # 2. Si le nom détecté est l'ENTREPRISE et qu'on est en VENTE → l'entreprise est le FOURNISSEUR
-    #    → c'est une facture de vente (l'entreprise vend à un client)
-    # 3. Si le nom détecté n'est PAS l'entreprise → c'est le tiers (client ou fournisseur)
-    
+    # 🔥 LOGIQUE GÉNÉRIQUE D'AUTO-FACTURATION :
+    # Si le nom détecté est l'ENTREPRISE, on doit trouver le VRAI tiers externe
     nom_entreprise_normalise = _normalize_name(entreprise.nom)
     tiers_nom_normalise = _normalize_name(tiers_nom)
-    
-    # Déterminer si le nom détecté est celui de l'entreprise
     est_auto_facturation = (tiers_nom_normalise == nom_entreprise_normalise)
     
-    # Si c'est le nom de l'entreprise, on doit déterminer le vrai tiers
     if est_auto_facturation:
-        # C'est une auto-facturation : l'entreprise est à la fois l'émetteur et le destinataire
-        # Mais en comptabilité, on doit identifier le VRAI tiers externe
+        # L'IA a détecté l'entreprise comme tiers
+        # On doit extraire le vrai tiers depuis les libellés des lignes
+        vrai_tiers = None
         
-        # Pour une VENTE (journal Ventes) : l'entreprise est le fournisseur
-        # Le client est le tiers externe (mais l'IA n'a pas détecté de nom externe)
-        # On va utiliser le libellé de la facture ou un nom par défaut
-        if base_type == Journal.Type.VENTE:
-            # L'entreprise vend → le client est le tiers externe
-            # On utilise le nom du client qui devrait être dans la facture
-            # Mais si l'IA a mal détecté, on utilise un nom par défaut
-            client_nom = "Client à identifier"
-            # On tente de récupérer le nom du client depuis les lignes
+        # Méthode 1 : Chercher dans les libellés des lignes
+        for ligne in data.get("lignes", []):
+            libelle = ligne.get("libelle", "")
+            if libelle:
+                # Nettoyer le libellé
+                libelle_clean = libelle.strip()
+                
+                # Si le libellé contient "Client" ou "Fournisseur"
+                if "client" in libelle_clean.lower() or "fournisseur" in libelle_clean.lower():
+                    # Extraire le nom après le préfixe
+                    import re
+                    # Pattern pour capturer le nom après "Client" ou "Fournisseur"
+                    match = re.search(r'(?:Client|Fournisseur)\s+([A-Za-zÀ-ÿ\s]+)', libelle_clean, re.IGNORECASE)
+                    if match:
+                        vrai_tiers = match.group(1).strip()
+                        break
+                
+                # Si le libellé contient le nom de l'entreprise, ignorer
+                if _normalize_name(libelle_clean) == nom_entreprise_normalise:
+                    continue
+                
+                # Sinon, prendre le premier nom qui n'est pas l'entreprise
+                # On vérifie si le libellé contient un nom de personne/entreprise
+                # (au moins 2 mots, avec des majuscules)
+                mots = libelle_clean.split()
+                if len(mots) >= 2:
+                    # Vérifier si c'est un nom propre (majuscule)
+                    if any(mot[0].isupper() for mot in mots):
+                        vrai_tiers = libelle_clean
+                        break
+        
+        # Méthode 2 : Chercher dans le champ "fournisseur" des lignes
+        if not vrai_tiers:
             for ligne in data.get("lignes", []):
-                libelle = ligne.get("libelle", "")
-                if "client" in libelle.lower() or tiers_nom in libelle:
-                    # Si le libellé contient le nom détecté, c'est probablement le vrai client
-                    pass
-            # Dans le cas de la facture exemple, le client est DERKAOUI KHALED
-            # On va utiliser le nom depuis la facture
-            tiers_nom = "DERKAOUI KHALED"  # À remplacer par une vraie détection
+                fournisseur_ligne = ligne.get("fournisseur", "").strip()
+                if fournisseur_ligne and _normalize_name(fournisseur_ligne) != nom_entreprise_normalise:
+                    vrai_tiers = fournisseur_ligne
+                    break
+        
+        # Méthode 3 : Utiliser le nom de la facture si disponible
+        if not vrai_tiers:
+            # Certaines factures ont un champ "client" ou "fournisseur" dédié
+            vrai_tiers = data.get("client") or data.get("nom_tiers") or None
+            if vrai_tiers and _normalize_name(vrai_tiers) == nom_entreprise_normalise:
+                vrai_tiers = None
+        
+        # Méthode 4 : Si on a trouvé un tiers, l'utiliser
+        if vrai_tiers:
+            tiers_nom = vrai_tiers
         else:
-            # L'entreprise achète → le fournisseur est le tiers externe
-            tiers_nom = "Fournisseur à identifier"
-    else:
-        # Le nom détecté n'est pas l'entreprise → c'est le vrai tiers
-        # On garde le nom tel quel
-        pass
+            # Si on n'a pas trouvé de tiers, utiliser un nom générique
+            # mais avec le contexte du type de journal
+            if base_type == Journal.Type.VENTE:
+                tiers_nom = "Client à identifier"
+            else:
+                tiers_nom = "Fournisseur à identifier"
+    
+    # Vérification finale : le tiers ne doit PAS être l'entreprise
+    if _normalize_name(tiers_nom) == _normalize_name(entreprise.nom):
+        raise WebhookError(
+            f"Erreur : le tiers détecté ({tiers_nom}) est l'entreprise elle-même. "
+            f"Veuillez vérifier que la facture contient un vrai client/fournisseur."
+        )
     
     # Maintenant, on enregistre le tiers dans le bon compte
     tiers_compte = None
@@ -424,7 +457,6 @@ def persist_extraction(entreprise, data, source="scanner"):
     
     if base_type == Journal.Type.ACHAT:
         # C'est un achat → on crée un fournisseur (401)
-        # Le fournisseur est le tiers (l'entreprise achète à ce fournisseur)
         try:
             tiers = get_or_create_fournisseur(entreprise, tiers_nom)
             tiers_compte = tiers.numero_compte
@@ -434,7 +466,6 @@ def persist_extraction(entreprise, data, source="scanner"):
             raise WebhookError(str(e))
     else:  # VENTE
         # C'est une vente → on crée un client (411)
-        # Le client est le tiers (l'entreprise vend à ce client)
         try:
             tiers = get_or_create_client_comptable(entreprise, tiers_nom)
             tiers_compte = tiers.numero_compte
