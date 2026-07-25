@@ -14,9 +14,10 @@ from django.core.exceptions import ValidationError
 
 from .account_helpers import (
     apply_tiers_account,
+    auto_balance_lines,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
-    _normalize_name,  # ← AJOUT : import de _normalize_name
+    _normalize_name,
 )
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
@@ -344,14 +345,18 @@ def persist_extraction(entreprise, data, source="scanner"):
       * Si c'est le nom de l'entreprise, on extrait le vrai tiers depuis les libellés
       * L'entreprise n'est JAMAIS enregistrée comme client ou fournisseur dans ses propres listes
     """
+    base_type = JOURNAL_MAP.get(str(data.get("journal", "")).lower(), Journal.Type.ACHAT)
+
+    # Auto-équilibrage des débits et crédits (droits de timbre, frais annexes, régularisations)
+    if data.get("lignes"):
+        data["lignes"] = auto_balance_lines(data["lignes"], is_vente=(base_type == Journal.Type.VENTE))
+
     errors = blocking_errors(data)
     if errors:
         raise WebhookError("; ".join(errors))
 
     date_fact = _parse_date(data["date_facture"])
     annee = _resolve_exercice(entreprise, date_fact)
-
-    base_type = JOURNAL_MAP.get(str(data["journal"]).lower(), Journal.Type.ACHAT)
     mode = (data.get("mode_paiement") or "").strip().lower()
 
     CASH_MODES = {"espèce", "espèces", "espece", "especes", "cash", "caisse", "liquide"}

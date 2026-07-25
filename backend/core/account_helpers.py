@@ -111,3 +111,57 @@ def apply_tiers_account(lignes: list, account_num: str, prefix: str) -> list:
             ligne["compte"] = account_num
         out.append(ligne)
     return out
+
+
+def auto_balance_lines(lignes: list, is_vente: bool) -> list:
+    """S'assure que le total des débits est exactement égal au total des crédits.
+    S'il existe une différence (ex: timbre fiscal, frais annexes, remises),
+    ajoute automatiquement la ligne d'équilibrage correspondante."""
+    if not lignes:
+        return []
+    out = [dict(l) for l in lignes]
+    total_debit = round(sum(float(l.get("debit", 0) or 0) for l in out), 2)
+    total_credit = round(sum(float(l.get("credit", 0) or 0) for l in out), 2)
+    diff = round(total_debit - total_credit, 2)
+
+    if abs(diff) <= 0.01:
+        return out
+
+    if diff > 0:
+        # Total Débit > Total Crédit (manque de crédit)
+        if is_vente:
+            # Pour une vente : droits de timbre / frais annexes (compte 445800)
+            out.append({
+                "compte": "445800",
+                "libelle": "Droits de timbre / Frais annexes",
+                "debit": 0,
+                "credit": diff,
+            })
+        else:
+            # Pour un achat : escompte / régularisation
+            out.append({
+                "compte": "609000",
+                "libelle": "Rabais, remises et ristournes / Régularisation",
+                "debit": 0,
+                "credit": diff,
+            })
+    else:
+        # Total Crédit > Total Débit (manque de débit)
+        missing_debit = abs(diff)
+        if is_vente:
+            out.append({
+                "compte": "709000",
+                "libelle": "Rabais, remises et ristournes accordés",
+                "debit": missing_debit,
+                "credit": 0,
+            })
+        else:
+            # Pour un achat : droits de timbre / frais généraux (compte 645800)
+            out.append({
+                "compte": "645800",
+                "libelle": "Droits de timbre / Frais annexes",
+                "debit": missing_debit,
+                "credit": 0,
+            })
+
+    return out

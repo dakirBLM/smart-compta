@@ -233,8 +233,8 @@ export function ClientScanner() {
   if (phase === "success")
     return (
       <Card className="mx-auto max-w-md text-center">
-        <CheckCircle2 className="mx-auto mb-3 text-success" size={56} />
-        <p className="mb-4 font-semibold text-success">{t("operationValidee")}</p>
+        <p className="mb-1 font-semibold text-success">{t("operationValidee")}</p>
+        <p className="mb-4 text-xs text-gray-500">Facture transmise à votre comptable pour validation et comptabilisation.</p>
         {result && (
           <div className="mx-auto mb-5 max-w-xs space-y-1 text-left text-sm">
             <Info label={t("fournisseur")} value={result.fournisseur} />

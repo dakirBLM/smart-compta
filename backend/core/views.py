@@ -713,7 +713,7 @@ class FactureListCreateView(APIView):
             lignes = lignes_raw
 
         extraction_data = {
-            "fournisseur": request.data.get("fournisseur_client") or "",
+            "fournisseur": request.data.get("fournisseur_client") or request.data.get("fournisseur") or "",
             "date_facture": request.data.get("date_facture") or "",
             "numero_facture": numero,
             "montant_ht": float(request.data.get("montant_ht") or 0),
@@ -726,6 +726,35 @@ class FactureListCreateView(APIView):
             "lignes": lignes,
         }
 
+        fournisseur_client = extraction_data["fournisseur"]
+        type_facture = request.data.get("type_facture") or "achat"
+        mode_paiement = extraction_data["mode_paiement"]
+
+        # Si l'utilisateur est un CLIENT (role != "accountant"), la facture est enregistrée
+        # en statut "EN_COURS" dans "Mes factures". Le comptable la validera manuellement.
+        if request.user.role != "accountant":
+            from .scanner import _parse_date
+            date_fact = _parse_date(extraction_data["date_facture"]) if extraction_data["date_facture"] else None
+            facture = Facture.objects.create(
+                entreprise=entreprise,
+                client=request.user,
+                numero_facture=numero,
+                date_facture=date_fact,
+                montant_ht=extraction_data["montant_ht"],
+                tva_pourcentage=extraction_data["tva_pourcentage"],
+                montant_tva=extraction_data["montant_tva"],
+                montant_ttc=extraction_data["montant_ttc"],
+                image_url=image_url,
+                statut=Facture.Statut.EN_COURS,
+                confiance_ia=extraction_data["confiance"],
+                ecriture=None,
+                fournisseur_client=fournisseur_client,
+                type_facture=type_facture,
+                mode_paiement=mode_paiement,
+            )
+            return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
+
+        # Si l'utilisateur est un COMPTABLE, comptabilisation automatique directe
         try:
             ecriture = persist_extraction(entreprise, extraction_data, source="import")
         except Exception as exc:
@@ -746,9 +775,9 @@ class FactureListCreateView(APIView):
             statut=Facture.Statut.VALIDE,
             confiance_ia=extraction_data["confiance"],
             ecriture=ecriture,
-            fournisseur_client=extraction_data["fournisseur"],
-            type_facture=request.data.get("type_facture") or "achat",
-            mode_paiement=extraction_data["mode_paiement"],
+            fournisseur_client=fournisseur_client,
+            type_facture=type_facture,
+            mode_paiement=mode_paiement,
         )
 
         return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
