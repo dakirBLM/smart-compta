@@ -165,6 +165,8 @@ export interface Facture {
   confiance_ia: number | null;
   ecriture: number | null;
   mode_paiement: string;
+  fournisseur_client?: string;
+  type_facture?: string;
   created_at: string;
 }
 
