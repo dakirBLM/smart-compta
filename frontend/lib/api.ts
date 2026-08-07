@@ -1,6 +1,6 @@
 "use client";
 
-import { AIExtraction } from "./types";
+import { AIExtraction, BankStatementExtraction, BankStatementImportResult } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const TOKEN_KEY = "sc_token";
@@ -161,4 +161,40 @@ export async function scannerUpload(
   if (journalHint) form.append("journal_hint", journalHint);
   // Vision extraction can take a while — wait up to ~5 minutes.
   return api.post("/api/scanner/upload/", form, { timeoutMs: 320_000 });
+}
+
+/** Upload a bank statement (image or PDF) for AI extraction. The backend
+ * rejects it up front (400) if the account on the statement doesn't match
+ * the entreprise's registered bank account. */
+export async function bankStatementUpload(
+  file: File,
+  entrepriseId: number
+): Promise<{ data: BankStatementExtraction; numero_compte_valide: boolean }> {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    const mb = (file.size / 1024 / 1024).toFixed(1);
+    throw new ApiError(
+      413,
+      `Fichier trop volumineux (${mb} Mo). La taille maximale est de 5 Mo — ` +
+        "veuillez utiliser une photo ou un fichier plus léger."
+    );
+  }
+  const form = new FormData();
+  form.append("file", file);
+  return api.post(
+    `/api/entreprises/${entrepriseId}/releves-bancaires/upload/`,
+    form,
+    { timeoutMs: 320_000 }
+  );
+}
+
+/** Persist a reviewed bank statement extraction as chronological, balanced
+ * double entries (one Banque écriture per transaction line). */
+export async function bankStatementImport(
+  entrepriseId: number,
+  data: BankStatementExtraction
+): Promise<BankStatementImportResult> {
+  return api.post(
+    `/api/entreprises/${entrepriseId}/releves-bancaires/import/`,
+    { data }
+  );
 }

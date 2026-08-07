@@ -8,6 +8,7 @@ import {
   ChevronRight,
   FileText,
   FolderOpen,
+  Landmark,
   LayoutDashboard,
   LogOut,
   MessageSquare,
@@ -389,6 +390,13 @@ export function Sidebar({
               icon={<FolderOpen size={20} />}
               label={t("mesFactures")}
               active={is(`${base}/factures`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/releves-bancaires`}
+              icon={<Landmark size={20} />}
+              label={t("releveBancaire")}
+              active={is(`${base}/releves-bancaires`)}
               onNavigate={nav}
             />
           </>

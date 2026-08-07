@@ -195,6 +195,31 @@ export interface AIExtraction {
   erreurs: string[];
 }
 
+/** One transaction line extracted from a bank statement (relevé bancaire). */
+export interface BankStatementLigne {
+  date: string;
+  libelle: string;
+  reference: string;
+  /** Sens de l'écriture pour le compte 512000 (Banque) — pas la colonne
+   * brute du relevé : "debit" = encaissement, "credit" = décaissement. */
+  sens: "debit" | "credit";
+  montant: number | string;
+  compte_contrepartie: string;
+  tiers: string;
+  confiance?: number;
+}
+
+export interface BankStatementExtraction {
+  numero_compte: string;
+  lignes: BankStatementLigne[];
+}
+
+export interface BankStatementImportResult {
+  numero_compte_valide: boolean;
+  ecritures_creees: number;
+  ecritures: Ecriture[];
+}
+
 export interface DashboardData {
   kpis: {
     chiffre_affaires: number;

@@ -9,6 +9,11 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
 from .account_helpers import get_or_create_client_comptable
+from .bank_statements import (
+    BankStatementError,
+    import_bank_statement,
+    validate_statement_account,
+)
 from .models import (
     ClientAccess,
     ClientComptable,
@@ -653,6 +658,78 @@ class ScannerConfirmView(APIView):
 
 
 # --------------------------------------------------------------------------- #
+# Bank statements
+# --------------------------------------------------------------------------- #
+class BankStatementUploadView(APIView):
+    """Extract a bank statement with Make, but reject a wrong account early."""
+
+    permission_classes = [IsAccountant]
+
+    def post(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        if "file" not in request.FILES:
+            return Response({"error": "Aucun relevé bancaire fourni."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        f = request.FILES["file"]
+        raw = f.read()
+        name = (f.name or "releve-bancaire").lower()
+        is_pdf = (
+            f.content_type == "application/pdf" or name.endswith(".pdf") or raw[:5] == b"%PDF-"
+        )
+        is_image = f.content_type in ("image/jpeg", "image/png") or name.endswith((".jpg", ".jpeg", ".png"))
+        if not is_pdf and not is_image:
+            return Response(
+                {"error": "Format non supporté. Utilisez PDF, JPG, JPEG ou PNG."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        try:
+            if is_pdf:
+                raw = pdf_to_jpeg(raw)
+                name = "releve-bancaire.jpg"
+            data = call_webhook(
+                image_bytes=raw,
+                filename=name,
+                context={"document_type": "releve_bancaire", "entreprise_nom": entreprise.nom},
+            )
+            account = data.get("numero_compte") or data.get("account_number") or data.get("compte_bancaire")
+            validate_statement_account(entreprise, account)
+        except (WebhookError, BankStatementError) as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response({"data": data, "numero_compte_valide": True})
+
+
+class BankStatementImportView(APIView):
+    """Persist a reviewed Make extraction as chronological double entries."""
+
+    permission_classes = [IsAccountant]
+
+    def post(self, request, pk):
+        import json as _json
+
+        entreprise = _accountant_entreprise(request, pk)
+        data = request.data.get("data", request.data)
+        if isinstance(data, str):
+            try:
+                data = _json.loads(data)
+            except ValueError:
+                return Response({"error": "Les données du relevé ne sont pas un JSON valide."},
+                                status=status.HTTP_400_BAD_REQUEST)
+        if not isinstance(data, dict):
+            return Response({"error": "Les données du relevé sont invalides."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            entries = import_bank_statement(entreprise, data)
+        except BankStatementError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response({
+            "numero_compte_valide": True,
+            "ecritures_creees": len(entries),
+            "ecritures": EcritureSerializer(entries, many=True).data,
+        }, status=status.HTTP_201_CREATED)
+
+
+# --------------------------------------------------------------------------- #
 # Factures (client side)
 # --------------------------------------------------------------------------- #
 class FactureListCreateView(APIView):
@@ -950,6 +1027,49 @@ class MockWebhookView(APIView):
     authentication_classes = []
 
     def post(self, request):
+        if str(request.data.get("document_type") or "") == "releve_bancaire":
+            # Echo the real entreprise's own account so the demo passes the
+            # step-1 account check out of the box (a real AI reads it off
+            # the statement image; here we just look the entreprise up).
+            nom = request.data.get("entreprise_nom") or ""
+            entreprise = Entreprise.objects.filter(nom=nom).first()
+            numero_compte = (entreprise.numero_compte if entreprise else "") or "00123456"
+            return Response({
+                "numero_compte": numero_compte,
+                "lignes": [
+                    {
+                        "date": "04/02/2026",
+                        "libelle": "Chèque retour fournisseur",
+                        "reference": "CHQ-1042",
+                        "sens": "credit",
+                        "montant": "866041.72",
+                        "compte_contrepartie": "401000",
+                        "tiers": "SARL ABC",
+                        "confiance": 92,
+                    },
+                    {
+                        "date": "05/02/2026",
+                        "libelle": "Virement reçu client",
+                        "reference": "VIR-2201",
+                        "sens": "debit",
+                        "montant": "150000.00",
+                        "compte_contrepartie": "411000",
+                        "tiers": "Client Durable",
+                        "confiance": 96,
+                    },
+                    {
+                        "date": "06/02/2026",
+                        "libelle": "Frais de tenue de compte",
+                        "reference": "",
+                        "sens": "credit",
+                        "montant": "500.00",
+                        "compte_contrepartie": "627000",
+                        "tiers": "",
+                        "confiance": 88,
+                    },
+                ],
+            })
+
         hint = str(request.data.get("journal_hint") or request.data.get("journal") or "").lower()
         is_vente = "vente" in hint
         mode_paiement = "espèces"

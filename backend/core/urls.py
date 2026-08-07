@@ -36,6 +36,11 @@ urlpatterns = [
     # Scanner bridge
     path("scanner/upload/", views.ScannerUploadView.as_view()),
     path("scanner/confirm/", views.ScannerConfirmView.as_view()),
+    # Bank statement: extraction through Make, then reviewed double-entry import.
+    path("entreprises/<int:pk>/releves-bancaires/upload/",
+         views.BankStatementUploadView.as_view()),
+    path("entreprises/<int:pk>/releves-bancaires/import/",
+         views.BankStatementImportView.as_view()),
     # Local mock AI webhook (dev only) — set WEBHOOK_URL to this to demo.
     path("scanner/mock-webhook/", views.MockWebhookView.as_view()),
     # Factures
