@@ -183,12 +183,14 @@ class EcritureSerializer(serializers.ModelSerializer):
     lignes = LigneEcritureSerializer(many=True)
     total_debit = serializers.SerializerMethodField()
     total_credit = serializers.SerializerMethodField()
+    journal_nom = serializers.SerializerMethodField()
 
     class Meta:
         model = Ecriture
         fields = [
-            "id", "journal", "date_ecriture", "numero_piece", "fournisseur_client",
-            "source", "confiance_ia", "statut", "mode_paiement", "created_at", "lignes",
+            "id", "journal", "journal_nom", "date_ecriture", "numero_piece",
+            "fournisseur_client", "source", "confiance_ia", "statut",
+            "mode_paiement", "created_at", "lignes",
             "total_debit", "total_credit",
         ]
         read_only_fields = ["journal", "created_at"]
@@ -198,6 +200,12 @@ class EcritureSerializer(serializers.ModelSerializer):
 
     def get_total_credit(self, obj):
         return obj.total_credit
+
+    def get_journal_nom(self, obj):
+        try:
+            return obj.journal.nom or obj.journal.get_type_journal_display()
+        except Exception:
+            return ""
 
     def validate(self, attrs):
         lignes = attrs.get("lignes", getattr(self.instance, "lignes", None))
@@ -247,8 +255,37 @@ class JournalSerializer(serializers.ModelSerializer):
         return obj.ecritures.count()
 
 
+class EcritureInlineSerializer(serializers.ModelSerializer):
+    """Lightweight read-only ecriture snapshot embedded inside FactureSerializer."""
+    lignes = LigneEcritureSerializer(many=True, read_only=True)
+    total_debit = serializers.SerializerMethodField()
+    total_credit = serializers.SerializerMethodField()
+    journal_nom = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Ecriture
+        fields = [
+            "id", "journal", "journal_nom", "date_ecriture", "numero_piece",
+            "fournisseur_client", "source", "statut", "mode_paiement",
+            "created_at", "lignes", "total_debit", "total_credit",
+        ]
+
+    def get_total_debit(self, obj):
+        return obj.total_debit
+
+    def get_total_credit(self, obj):
+        return obj.total_credit
+
+    def get_journal_nom(self, obj):
+        try:
+            return obj.journal.nom or obj.journal.get_type_journal_display()
+        except Exception:
+            return ""
+
+
 class FactureSerializer(serializers.ModelSerializer):
     client_nom = serializers.CharField(source="client.username", read_only=True)
+    ecriture_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = Facture
@@ -256,8 +293,14 @@ class FactureSerializer(serializers.ModelSerializer):
             "id", "entreprise", "client", "client_nom", "numero_facture",
             "date_facture", "montant_ht", "tva_pourcentage", "montant_tva",
             "montant_ttc", "image_url", "statut", "confiance_ia", "ecriture",
-            "mode_paiement", "created_at", "fournisseur_client", "type_facture",
+            "ecriture_detail", "mode_paiement", "created_at",
+            "fournisseur_client", "type_facture",
         ]
         # entreprise is resolved server-side (from the client's ClientAccess),
         # so it must not be required in the request payload.
-        read_only_fields = ["client", "entreprise", "created_at", "ecriture"]
+        read_only_fields = ["client", "entreprise", "created_at", "ecriture", "ecriture_detail"]
+
+    def get_ecriture_detail(self, obj):
+        if obj.ecriture_id:
+            return EcritureInlineSerializer(obj.ecriture).data
+        return None

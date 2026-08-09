@@ -136,6 +136,7 @@ export type Statut = "en_cours" | "valide" | "rejete";
 export interface Ecriture {
   id: number;
   journal: number;
+  journal_nom?: string;
   date_ecriture: string;
   numero_piece: string;
   fournisseur_client: string;
@@ -148,6 +149,9 @@ export interface Ecriture {
   total_debit: number;
   total_credit: number;
 }
+
+/** Ecriture complète imbriquée dans une facture (renvoyée par ecriture_detail). */
+export type EcritureDetail = Ecriture;
 
 export interface Facture {
   id: number;
@@ -164,6 +168,7 @@ export interface Facture {
   statut: Statut;
   confiance_ia: number | null;
   ecriture: number | null;
+  ecriture_detail?: EcritureDetail | null;
   mode_paiement: string;
   fournisseur_client?: string;
   type_facture?: string;
