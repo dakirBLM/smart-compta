@@ -12,6 +12,7 @@ from .account_helpers import get_or_create_client_comptable
 from .bank_statements import (
     BankStatementError,
     import_bank_statement,
+    preview_entries,
     validate_statement_account,
 )
 from .models import (
@@ -94,14 +95,14 @@ class EntrepriseListCreateView(APIView):
         serializer = EntrepriseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         entreprise = serializer.save(accountant=request.user)
-        # Seed the first fiscal year from exercice_comptable if it is a year.
+        # Seed the first fiscal year from exercice_comptable if it is a year, or current year.
         try:
             annee = int(str(entreprise.exercice_comptable)[:4])
-            ExerciceAnnee.objects.create(
-                entreprise=entreprise, annee=annee, is_active=True
-            )
         except (ValueError, TypeError):
-            pass
+            annee = timezone.now().year
+        ExerciceAnnee.objects.get_or_create(
+            entreprise=entreprise, annee=annee, defaults={"is_active": True}
+        )
         return Response(EntrepriseSerializer(entreprise).data,
                         status=status.HTTP_201_CREATED)
 
@@ -479,7 +480,23 @@ class JournalEcrituresView(APIView):
     def get(self, request, pk, journal_id):
         entreprise = _accountant_entreprise(request, pk)
         journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
-        qs = journal.ecritures.prefetch_related("lignes")
+        
+        # For Banque journal, retrieve all bank ecritures of the entreprise
+        # so entries are always visible regardless of header fiscal year selection.
+        if journal.type_journal == Journal.Type.BANQUE:
+            qs = Ecriture.objects.filter(
+                journal__entreprise=entreprise,
+                journal__type_journal=Journal.Type.BANQUE,
+            ).prefetch_related("lignes").order_by("-date_ecriture", "-id")
+        elif journal.type_journal in (Journal.Type.CAISSE, Journal.Type.ACHAT, Journal.Type.VENTE, Journal.Type.OD):
+            qs = Ecriture.objects.filter(
+                journal__entreprise=entreprise,
+                journal__type_journal=journal.type_journal,
+                journal__annee=journal.annee,
+            ).prefetch_related("lignes").order_by("-date_ecriture", "-id")
+        else:
+            qs = journal.ecritures.prefetch_related("lignes").order_by("-date_ecriture", "-id")
+
         # Optional filters: ?compte=... &date=YYYY-MM-DD
         compte = request.query_params.get("compte")
         date_filter = request.query_params.get("date")
@@ -686,20 +703,59 @@ class BankStatementUploadView(APIView):
             if is_pdf:
                 raw = pdf_to_jpeg(raw)
                 name = "releve-bancaire.jpg"
+            # Rich context so the AI can auto-classify counterpart accounts.
+            ai_context = {
+                "document_type": "releve_bancaire",
+                "entreprise_nom": entreprise.nom,
+                "numero_compte_bancaire": entreprise.numero_compte or "",
+                "banque": entreprise.banque or "",
+                "activite": ", ".join(filter(None, [entreprise.activite, entreprise.activite2])),
+                "marchandise": entreprise.marchandise or "",
+                "releve_schema": (
+                    "Tu es un assistant comptable IA expert en comptabilité SCF algérienne. "
+                    "Analyse ce relevé bancaire (quelle que soit la banque, le format, la mise en page ou les entêtes de colonnes). "
+                    "Extrais un objet JSON avec : "
+                    "numero_compte (str: le numéro de compte bancaire figurant sur le relevé), "
+                    "lignes (liste d'opérations bancaires individuelles, une par ligne d'opération). "
+                    "Chaque objet d'opération contient : "
+                    "date (str au format JJ/MM/AAAA ou YYYY-MM-DD), "
+                    "libelle (str: la description de l'opération), "
+                    "reference (str: numéro de chèque, virement ou référence si présent), "
+                    "sens ('debit' si la banque est créditée/encaissement, 'credit' si la banque est débitée/décaissement), "
+                    "montant (nombre positif), "
+                    "compte_contrepartie (str: numéro de compte SCF 3 à 6 chiffres adapté au libellé ex. 401000 pour fournisseur, 411000 pour client, 581000 pour virement/dépôt, 627000 pour frais bancaires, 6xx pour charges, 7xx pour produits), "
+                    "tiers (str: nom du tiers, client ou fournisseur si présent), "
+                    "confiance (int: 0 à 100). "
+                    "Traite toutes les opérations ligne par ligne sans les regrouper."
+                ),
+            }
             data = call_webhook(
                 image_bytes=raw,
                 filename=name,
-                context={"document_type": "releve_bancaire", "entreprise_nom": entreprise.nom},
+                context=ai_context,
             )
             account = data.get("numero_compte") or data.get("account_number") or data.get("compte_bancaire")
             validate_statement_account(entreprise, account)
         except (WebhookError, BankStatementError) as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response({"data": data, "numero_compte_valide": True})
+
+        # Compute accounting preview so the frontend can show the double-entry
+        # table before the accountant confirms (no DB writes at this stage).
+        ecritures_preview = preview_entries(data)
+
+        return Response({
+            "data": data,
+            "numero_compte_valide": True,
+            "ecritures_preview": ecritures_preview,
+        })
 
 
 class BankStatementImportView(APIView):
-    """Persist a reviewed Make extraction as chronological double entries."""
+    """Persist a reviewed AI extraction as chronological double entries.
+
+    Called after the accountant has reviewed the extraction in the frontend
+    and clicked the confirm button. Every created Ecriture is marked VALIDE.
+    """
 
     permission_classes = [IsAccountant]
 
@@ -721,11 +777,19 @@ class BankStatementImportView(APIView):
             entries = import_bank_statement(entreprise, data)
         except BankStatementError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            # Catch unexpected DB or validation errors and surface them clearly
+            # rather than returning an opaque 500 or losing the result silently.
+            return Response(
+                {"error": f"Erreur lors de l'enregistrement des écritures : {exc}"},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 
+        serialized = EcritureSerializer(entries, many=True).data
         return Response({
             "numero_compte_valide": True,
             "ecritures_creees": len(entries),
-            "ecritures": EcritureSerializer(entries, many=True).data,
+            "ecritures": serialized,
         }, status=status.HTTP_201_CREATED)
 
 
@@ -1038,34 +1102,60 @@ class MockWebhookView(APIView):
                 "numero_compte": numero_compte,
                 "lignes": [
                     {
+                        # CHQ RETOUR: chèque fournisseur impayé revient → débit 401 / crédit 512
+                        # Direction 512: credit (argent sort — le chèque est retourné impayé)
                         "date": "04/02/2026",
-                        "libelle": "Chèque retour fournisseur",
-                        "reference": "CHQ-1042",
+                        "libelle": "CHQ RETOUR 8042359",
+                        "reference": "CHQ-8042359",
                         "sens": "credit",
                         "montant": "866041.72",
                         "compte_contrepartie": "401000",
-                        "tiers": "SARL ABC",
+                        "tiers": "SARL FOURNISSEUR",
                         "confiance": 92,
                     },
                     {
-                        "date": "05/02/2026",
-                        "libelle": "Virement reçu client",
-                        "reference": "VIR-2201",
+                        # VERSEMENT: dépôt d'espèces sur le compte → débit 512 / crédit 581
+                        "date": "08/02/2026",
+                        "libelle": "VERSEMENT ESPECES",
+                        "reference": "",
                         "sens": "debit",
-                        "montant": "150000.00",
-                        "compte_contrepartie": "411000",
-                        "tiers": "Client Durable",
-                        "confiance": 96,
+                        "montant": "8000000.00",
+                        "compte_contrepartie": "581000",
+                        "tiers": "",
+                        "confiance": 95,
                     },
                     {
-                        "date": "06/02/2026",
-                        "libelle": "Frais de tenue de compte",
-                        "reference": "",
+                        # SORT CHQ: paiement par chèque fournisseur → crédit 512 / débit 401
+                        "date": "09/02/2026",
+                        "libelle": "SORT CHQ 2228966",
+                        "reference": "CHQ-2228966",
                         "sens": "credit",
-                        "montant": "500.00",
+                        "montant": "142.80",
                         "compte_contrepartie": "627000",
                         "tiers": "",
                         "confiance": 88,
+                    },
+                    {
+                        # SORT CHQ: règlement client encaissé → débit 512 / crédit 411
+                        "date": "09/02/2026",
+                        "libelle": "SORT CHQ 9611823",
+                        "reference": "CHQ-9611823",
+                        "sens": "debit",
+                        "montant": "1185556.08",
+                        "compte_contrepartie": "411000",
+                        "tiers": "CLIENT SPA",
+                        "confiance": 91,
+                    },
+                    {
+                        # CHQ RETOUR: frais bancaires → débit 627 / crédit 512
+                        "date": "09/02/2026",
+                        "libelle": "CH NOS CLT 5548099",
+                        "reference": "CLT-5548099",
+                        "sens": "credit",
+                        "montant": "147194.69",
+                        "compte_contrepartie": "411000",
+                        "tiers": "CLIENT NORD",
+                        "confiance": 89,
                     },
                 ],
             })

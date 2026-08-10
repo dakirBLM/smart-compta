@@ -25,10 +25,11 @@ export function useEntreprise() {
   const annee = (() => {
     const q = searchParams.get("annee");
     if (q) return Number(q);
-    if (!entreprise) return undefined;
+    if (!entreprise) return new Date().getFullYear();
     return (
-      entreprise.exercices.find((x) => x.is_active)?.annee ??
-      entreprise.exercices[0]?.annee
+      entreprise.exercices?.find((x) => x.is_active)?.annee ??
+      entreprise.exercices?.[0]?.annee ??
+      new Date().getFullYear()
     );
   })();
 

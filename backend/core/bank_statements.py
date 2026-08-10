@@ -7,6 +7,7 @@ account and builds both sides of every entry itself.
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
+import unicodedata
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -16,6 +17,52 @@ from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
 
 BANK_ACCOUNT = "512000"
+
+# Compte d'attente used when the AI cannot determine the counterpart account.
+# The accountant can correct it in the journal afterwards.
+HOLDING_ACCOUNT = "471000"
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Mots-clés pour la classification des opérations bancaires
+# ──────────────────────────────────────────────────────────────────────────────
+
+_KW_VERSEMENT = ("VERSEMENT",)
+
+_KW_CHQ_RETOUR = ("CHQ RETOUR", "CHEQUE RETOUR")
+
+_KW_SORT_CHQ = ("SORT CHQ", "SORTIE CHQ")
+
+_KW_FOURNISSEUR = (
+    "CHQ FOUR", "CHEQUE FOUR",
+    "VIR FOUR", "VIREMENT FOUR", "PAIEMENT FOUR", "PAI FOUR",
+    "REG FOUR", "REGLEMENT FOUR", "OV FOUR",
+    "VIR FOURNISSEUR", "PAIEMENT FOURNISSEUR", "REGLEMENT FOURNISSEUR",
+)
+
+_KW_CLIENT = (
+    "REMISE CHQ", "REM CHQ", "REMISE CHEQUE",
+    "ENCAISSEMENT", "REGLEMENT CLIENT", "REG CLIENT",
+    "VIR CLIENT", "VIREMENT CLIENT",
+)
+
+_KW_FRAIS = (
+    "FRAIS", "COMMISSION", "AGIOS",
+    "TENUE DE COMPTE", "TENUE COMPTE", "FRAIS DE TENUE",
+    "COTISATION CB", "COTISATION CARTE",
+    "FRAIS BANCAIRES", "INTERETS DEBITEURS",
+)
+
+
+def _normalize_label(label):
+    """Normalise un libellé pour la comparaison : majuscules + suppression des accents."""
+    nfkd = unicodedata.normalize("NFKD", str(label or ""))
+    return "".join(c for c in nfkd if not unicodedata.combining(c)).upper()
+
+
+def _label_contains_any(label_norm, keywords):
+    """Retourne True si le libellé normalisé contient l'un des mots-clés."""
+    return any(kw in label_norm for kw in keywords)
 
 
 class BankStatementError(Exception):
@@ -75,7 +122,7 @@ def _decimal(value, field):
     except (InvalidOperation, ValueError):
         raise BankStatementError(f"Montant invalide pour la ligne « {field} ».")
     if amount <= 0:
-        raise BankStatementError("Chaque montant du relevé doit être strictement positif.")
+        raise BankStatementError("Chaque montant du relevé doit être strictly positif.")
     return amount
 
 
@@ -102,9 +149,15 @@ def _direction(row):
     def nonzero(v):
         if v in (None, "", 0, "0", "0.00", "0,00"):
             return False
-        return _decimal(v, "débit/crédit") > 0
-    if nonzero(debit) != nonzero(credit):
-        return "debit" if nonzero(debit) else "credit"
+        try:
+            return _decimal(v, "débit/crédit") > 0
+        except BankStatementError:
+            return False
+
+    if nonzero(debit) and not nonzero(credit):
+        return "debit"
+    if nonzero(credit) and not nonzero(debit):
+        return "credit"
     raise BankStatementError(
         "Le sens de chaque ligne doit être « debit » ou « credit » "
         "(ou une seule colonne débit/crédit renseignée)."
@@ -123,20 +176,133 @@ def _amount(row):
     )
 
 
-def _counterpart(row):
+def _raw_counterpart(row):
+    """Extrait le compte de contrepartie brut fourni par l'IA (chiffres uniquement).
+
+    Retourne une chaîne vide si le compte est absent, invalide ou égal au
+    compte bancaire.  La classification complète est effectuée par
+    classify_operation().
+    """
     account = str(_value(row, "compte_contrepartie", "compte", "counterpart_account") or "").strip()
-    if not re.fullmatch(r"\d{3,20}", account):
-        raise BankStatementError(
-            "Chaque ligne doit contenir un compte de contrepartie numérique "
-            "(ex. 401000 ou 411000)."
-        )
-    if account == BANK_ACCOUNT:
-        raise BankStatementError("Le compte de contrepartie ne peut pas être 512000.")
-    return account
+    account = re.split(r"\s", account)[0]
+    if re.fullmatch(r"\d{3,20}", account) and account != BANK_ACCOUNT:
+        return account
+    return ""
+
+
+def classify_operation(label, direction, raw_counterpart, tiers="", entreprise=None):
+    """Détermine (compte_debit, compte_credit) à partir de la nature de l'opération.
+
+    Règles de priorité (ordre décroissant) :
+
+    1.  Libellé contient VERSEMENT           → (512000, 581000)
+    2.  Libellé contient CHQ RETOUR          → (401xxx, 512000)
+    3.  Libellé contient mot-clé fournisseur → (401xxx, 512000)
+    4.  Libellé contient mot-clé client      → (512000, 411xxx)
+    5.  Libellé contient mot-clé frais       → (627000, 512000)
+    6.  Contrepartie IA commence par 401     → (401xxx, 512000)
+    7.  Contrepartie IA commence par 411     → (512000, 411xxx)
+    8.  Contrepartie IA valide + sortie      → (contrepartie, 512000)
+    9.  Contrepartie IA valide + entrée      → (512000, contrepartie)
+    10. Tiers renseigné + sortie bancaire    → (401xxx, 512000)  [heuristique]
+    11. Tiers renseigné + entrée bancaire    → (512000, 411xxx)  [heuristique]
+    12. Fallback par direction               → (HOLDING, 512000) ou (512000, HOLDING)
+
+    ``direction == "credit"`` signifie que le compte bancaire est crédité (sortie).
+    ``direction == "debit"``  signifie que le compte bancaire est débité (entrée).
+    """
+    lib = _normalize_label(label)
+    raw = (raw_counterpart or "").strip()
+    tiers = (tiers or "").strip()
+
+    def resolve_fourn(fallback="401000"):
+        """Retourne le sous-compte fournisseur 401xxx."""
+        if entreprise and tiers:
+            try:
+                return get_or_create_fournisseur(entreprise, tiers).numero_compte
+            except ValidationError:
+                pass
+        if re.fullmatch(r"401\d+", raw):
+            return raw
+        return fallback
+
+    def resolve_client(fallback="411000"):
+        """Retourne le sous-compte client 411xxx."""
+        if entreprise and tiers:
+            try:
+                return get_or_create_client_comptable(entreprise, tiers).numero_compte
+            except ValidationError:
+                pass
+        if re.fullmatch(r"411\d+", raw):
+            return raw
+        return fallback
+
+    # Règle 1 – Versement d'espèces en banque
+    if _label_contains_any(lib, _KW_VERSEMENT):
+        return (BANK_ACCOUNT, "581000")
+
+    # Règle 2 – Chèque retour
+    if _label_contains_any(lib, _KW_CHQ_RETOUR):
+        return (resolve_fourn("401000"), BANK_ACCOUNT)
+
+    # Règle SORT CHQ / SORTIE CHQ : analyse contextuelle (ne JAMAIS imposer 401000 automatiquement)
+    if _label_contains_any(lib, _KW_SORT_CHQ):
+        # 1. Frais bancaires ?
+        if _label_contains_any(lib, _KW_FRAIS) or raw.startswith("6"):
+            return ("627000", BANK_ACCOUNT)
+        # 2. Opération client ?
+        if _label_contains_any(lib, _KW_CLIENT) or raw.startswith("411") or direction == "debit":
+            return (BANK_ACCOUNT, resolve_client())
+        # 3. Opération fournisseur explicite ?
+        if _label_contains_any(lib, _KW_FOURNISSEUR) or raw.startswith("401") or tiers:
+            return (resolve_fourn(), BANK_ACCOUNT)
+        # 4. Compte de contrepartie IA spécifique
+        if re.fullmatch(r"\d{3,20}", raw) and raw != BANK_ACCOUNT:
+            if direction == "credit":
+                return (raw, BANK_ACCOUNT)
+            return (BANK_ACCOUNT, raw)
+        # 5. Par défaut : pas d'attribution 401000 automatique -> compte d'attente
+        if direction == "credit":
+            return (HOLDING_ACCOUNT, BANK_ACCOUNT)
+        return (BANK_ACCOUNT, HOLDING_ACCOUNT)
+
+    # Règle 3 – Paiement fournisseur (sortie bancaire)
+    if _label_contains_any(lib, _KW_FOURNISSEUR):
+        return (resolve_fourn(), BANK_ACCOUNT)
+
+    # Règle 4 – Encaissement / règlement client (entrée bancaire)
+    if _label_contains_any(lib, _KW_CLIENT):
+        return (BANK_ACCOUNT, resolve_client())
+
+    # Règle 5 – Frais bancaires (sortie bancaire)
+    if _label_contains_any(lib, _KW_FRAIS):
+        return ("627000", BANK_ACCOUNT)
+
+    # Règles 6–9 – Contrepartie fournie par l'IA
+    if re.fullmatch(r"\d{3,20}", raw) and raw != BANK_ACCOUNT:
+        if raw.startswith("401"):
+            return (resolve_fourn(raw), BANK_ACCOUNT)
+        if raw.startswith("411"):
+            return (BANK_ACCOUNT, resolve_client(raw))
+        # Autre compte valide : sens déterminé par la direction
+        if direction == "credit":   # sortie bancaire
+            return (raw, BANK_ACCOUNT)
+        return (BANK_ACCOUNT, raw)  # entrée bancaire
+
+    # Règles 10–11 – Tiers renseigné sans mot-clé : heuristique par direction
+    if tiers:
+        if direction == "credit":   # sortie → probablement fournisseur
+            return (resolve_fourn(), BANK_ACCOUNT)
+        return (BANK_ACCOUNT, resolve_client())  # entrée → probablement client
+
+    # Règle 12 – Fallback compte d'attente
+    if direction == "credit":
+        return (HOLDING_ACCOUNT, BANK_ACCOUNT)
+    return (BANK_ACCOUNT, HOLDING_ACCOUNT)
 
 
 def validated_lines(data):
-    """Normalize the Make payload before any database mutation occurs."""
+    """Normalize the AI payload before any database mutation occurs."""
     rows = data.get("lignes") or data.get("transactions") or []
     if not isinstance(rows, list) or not rows:
         raise BankStatementError("Le relevé ne contient aucune ligne à importer.")
@@ -154,7 +320,7 @@ def validated_lines(data):
             "reference": str(_value(row, "reference", "numero_piece", "id") or "").strip()[:60],
             "direction": _direction(row),
             "amount": _amount(row),
-            "counterpart": _counterpart(row),
+            "counterpart": _raw_counterpart(row),
             "tiers": str(_value(row, "tiers", "fournisseur_client", "counterparty") or "").strip()[:255],
             "confidence": _value(row, "confiance", "confidence"),
             "position": index,
@@ -163,40 +329,84 @@ def validated_lines(data):
     return sorted(result, key=lambda row: (row["date"], row["position"]))
 
 
-def resolve_counterpart_account(entreprise, raw_account, tiers_nom):
-    """Resolve a generic 401/411 range to the named tiers' own dedicated
-    sub-account (e.g. 401000 -> 401007), the same registry the invoice
-    scanner uses. Without this, every "chèque retour" line would post to the
-    same generic 401000/411000 account instead of the actual fournisseur/
-    client, and pollute the account_helpers suffix sequence (see its
-    docstring). Falls back to the AI-provided account when there's no tiers
-    name or the account isn't in the 401/411 range."""
-    tiers_nom = (tiers_nom or "").strip()
-    if not tiers_nom:
-        return raw_account
+def preview_entries(data):
+    """Return a list of preview accounting rows (no DB writes) from an AI payload.
+
+    Utilise classify_operation() pour produire directement les bons comptes
+    Débit et Crédit selon la nature de l'opération.  Aucune écriture en base.
+    Les sous-comptes 401xxx/411xxx sont laissés au compte générique (401000/411000)
+    car l'entreprise n'est pas disponible ici.
+    """
     try:
-        if raw_account.startswith("401"):
-            return get_or_create_fournisseur(entreprise, tiers_nom).numero_compte
-        if raw_account.startswith("411"):
-            return get_or_create_client_comptable(entreprise, tiers_nom).numero_compte
-    except ValidationError:
-        return raw_account
-    return raw_account
+        lines = validated_lines(data)
+    except BankStatementError:
+        return []
+
+    rows = []
+    for row in lines:
+        compte_debit, compte_credit = classify_operation(
+            row["libelle"],
+            row["direction"],
+            row["counterpart"],
+            row["tiers"],
+            entreprise=None,
+        )
+        rows.append({
+            "date": str(row["date"]),
+            "libelle": row["libelle"],
+            "ligne_num": row["position"],
+            "compte_debit": compte_debit,
+            "compte_credit": compte_credit,
+            "montant": str(row["amount"]),
+            "counterpart": row["counterpart"],
+            "tiers": row["tiers"],
+            "sens": row["direction"],
+        })
+    return rows
+
+
+def resolve_counterpart_account(entreprise, raw_account, tiers_nom, libelle="", direction="credit"):
+    """Compatibilité ascendante – délègue à classify_operation().
+
+    Retourne uniquement le compte de contrepartie (celui qui n'est pas 512000).
+    Préférer classify_operation() dans tout nouveau code.
+    """
+    compte_debit, compte_credit = classify_operation(
+        libelle, direction, raw_account, tiers_nom, entreprise
+    )
+    # La contrepartie est le compte qui n'est pas la banque.
+    if compte_debit != BANK_ACCOUNT:
+        return compte_debit
+    return compte_credit
 
 
 def _resolve_exercice(entreprise, date):
     exercice = entreprise.exercices.filter(annee=date.year).first()
     if exercice:
         return exercice
-    return ExerciceAnnee.objects.create(entreprise=entreprise, annee=date.year, is_active=False)
+    active = entreprise.exercices.filter(is_active=True).first()
+    if active and active.annee == date.year:
+        return active
+    has_active = entreprise.exercices.filter(is_active=True).exists()
+    return ExerciceAnnee.objects.create(
+        entreprise=entreprise,
+        annee=date.year,
+        is_active=not has_active,
+    )
 
 
 @transaction.atomic
 def import_bank_statement(entreprise, data):
-    """Create one balanced two-line Banque entry per statement transaction."""
+    """Create one balanced two-line Banque entry per statement transaction.
+
+    The accountant has explicitly reviewed and confirmed the extraction, so
+    every created Ecriture is saved to Journal Banque and marked VALIDE immediately.
+    """
     statement_account = _value(data, "numero_compte", "account_number", "compte_bancaire")
     validate_statement_account(entreprise, statement_account)
     lines = validated_lines(data)
+
+    statement_ref = str(_value(data, "numero_piece", "numero_releve", "reference") or "").strip()
 
     journals = {}
     created = []
@@ -213,29 +423,35 @@ def import_bank_statement(entreprise, data):
             confidence = int(row["confidence"]) if row["confidence"] is not None else None
         except (TypeError, ValueError):
             confidence = None
+
+        ref = row["reference"] or statement_ref or f"RELEV-{row['date'].strftime('%Y%m%d')}"
+
         entry = Ecriture.objects.create(
             journal=journal,
             date_ecriture=row["date"],
-            numero_piece=row["reference"],
+            numero_piece=ref,
             fournisseur_client=row["tiers"],
             source=Ecriture.Source.IMPORT,
             confiance_ia=confidence,
-            statut=Ecriture.Statut.EN_COURS,
+            statut=Ecriture.Statut.VALIDE,
             mode_paiement="relevé bancaire",
         )
-        # The direction describes account 512000, as stipulated by the import contract.
-        bank_debit = row["amount"] if row["direction"] == "debit" else Decimal("0")
-        bank_credit = row["amount"] if row["direction"] == "credit" else Decimal("0")
-        counterpart = resolve_counterpart_account(entreprise, row["counterpart"], row["tiers"])
-        LigneEcriture.objects.bulk_create([
-            LigneEcriture(
-                ecriture=entry, numero_compte=BANK_ACCOUNT, libelle=row["libelle"],
-                montant_debit=bank_debit, montant_credit=bank_credit,
-            ),
-            LigneEcriture(
-                ecriture=entry, numero_compte=counterpart, libelle=row["libelle"],
-                montant_debit=bank_credit, montant_credit=bank_debit,
-            ),
-        ])
+        compte_debit, compte_credit = classify_operation(
+            row["libelle"], row["direction"], row["counterpart"], row["tiers"], entreprise
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=compte_debit,
+            libelle=row["libelle"],
+            montant_debit=row["amount"],
+            montant_credit=Decimal("0"),
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=compte_credit,
+            libelle=row["libelle"],
+            montant_debit=Decimal("0"),
+            montant_credit=row["amount"],
+        )
         created.append(entry)
     return created
