@@ -225,6 +225,19 @@ export interface BankStatementImportResult {
   ecritures: Ecriture[];
 }
 
+/** One row from the backend preview (ecritures_preview). */
+export interface EcrituresPreviewRow {
+  date: string;
+  libelle: string;
+  compte_debit: string;
+  compte_credit: string;
+  montant: string;
+  counterpart: string;
+  tiers: string;
+  ligne_num: number;
+  sens: string;
+}
+
 export interface DashboardData {
   kpis: {
     chiffre_affaires: number;

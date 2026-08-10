@@ -18,7 +18,7 @@ import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { ApiError, bankStatementImport, bankStatementUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { BankStatementExtraction, BankStatementLigne, Ecriture } from "@/lib/types";
+import { BankStatementExtraction, BankStatementLigne, Ecriture, EcrituresPreviewRow } from "@/lib/types";
 import { formatDZD } from "@/lib/utils";
 
 type Phase = "capture" | "loading" | "review" | "success";
@@ -128,35 +128,117 @@ export function BankStatementFlow({
       clearInterval(timer);
       setStepDone(4);
       setNumeroCompte(res.data.numero_compte || "");
-      
-      // Convert raw AI extracted lines into single accounting operation rows
-      const initialRows: AccountingOperationRow[] = (res.data.lignes || []).map((l: BankStatementLigne) => {
-        const libUpper = (l.libelle || "").toUpperCase();
-        let contrepartie = (l.compte_contrepartie || "").trim();
 
-        if (libUpper.includes("VERSEMENT") && (!contrepartie || contrepartie === "471000" || contrepartie === "512000")) {
-          contrepartie = "581000";
-        } else if ((libUpper.includes("CHQ RETOUR") || libUpper.includes("CHEQUE RETOUR")) && (!contrepartie || contrepartie === "471000" || contrepartie === "512000")) {
-          contrepartie = "401000";
-        } else if (!contrepartie) {
-          contrepartie = "471000";
-        }
+      // Prefer the backend-computed accounting preview (ecritures_preview) which
+      // already applies classify_operation() rules correctly.
+      // Fall back to local reconstruction only when the backend didn't return it.
+      const preview: EcrituresPreviewRow[] | undefined = res.ecritures_preview;
 
-        let isDebit = l.sens === "debit";
-        if (libUpper.includes("VERSEMENT")) isDebit = true;
-        if (libUpper.includes("CHQ RETOUR") || libUpper.includes("CHEQUE RETOUR")) isDebit = false;
+      const initialRows: AccountingOperationRow[] = preview && preview.length > 0
+        // ── Case 1: backend returned the classified preview ──────────────────
+        ? preview.map((p, idx) => {
+            const rawLigne: BankStatementLigne = (res.data.lignes || [])[idx] || {};
+            const row: AccountingOperationRow = {
+              date: p.date || rawLigne.date || "",
+              compte_debit: p.compte_debit,
+              compte_credit: p.compte_credit,
+              libelle: p.libelle || rawLigne.libelle || "",
+              montant: rawLigne.montant || 0,
+              tiers: rawLigne.tiers || "",
+              reference: rawLigne.reference || "",
+              confiance: rawLigne.confiance,
+            };
+            return row;
+          })
+        // ── Case 2: fallback local reconstruction (mirrors classify_operation) ─
+        : (res.data.lignes || []).map((l: BankStatementLigne) => {
+            const libNorm = (l.libelle || "")
+              .normalize("NFKD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .toUpperCase();
+            let contrepartie = (l.compte_contrepartie || "").trim();
+            let compteDebit = "471000";
+            let compteCredit = "512000";
 
-        return {
-          date: l.date || "",
-          compte_debit: isDebit ? "512000" : contrepartie,
-          compte_credit: isDebit ? contrepartie : "512000",
-          libelle: l.libelle || "",
-          montant: l.montant || 0,
-          tiers: l.tiers || "",
-          reference: l.reference || "",
-          confiance: l.confiance,
-        };
-      });
+            // Mirror of classify_operation() priority rules
+            if (libNorm.includes("VERSEMENT")) {
+              compteDebit = "512000"; compteCredit = "581000";
+            } else if (libNorm.includes("CHQ RETOUR") || libNorm.includes("CHEQUE RETOUR")) {
+              compteDebit = contrepartie.startsWith("401") ? contrepartie : "401000";
+              compteCredit = "512000";
+            } else if (libNorm.includes("SORT CHQ") || libNorm.includes("SORTIE CHQ")) {
+              if (
+                ["FRAIS","COMMISSION","AGIOS","TENUE DE COMPTE","TENUE COMPTE","FRAIS DE TENUE",
+                 "COTISATION CB","COTISATION CARTE","FRAIS BANCAIRES","INTERETS DEBITEURS"].some(k => libNorm.includes(k)) ||
+                contrepartie.startsWith("6")
+              ) {
+                compteDebit = "627000"; compteCredit = "512000";
+              } else if (
+                ["REMISE CHQ","REM CHQ","REMISE CHEQUE","ENCAISSEMENT","REGLEMENT CLIENT",
+                 "REG CLIENT","VIR CLIENT","VIREMENT CLIENT","CLIENT"].some(k => libNorm.includes(k)) ||
+                contrepartie.startsWith("411") || l.sens === "debit"
+              ) {
+                compteDebit = "512000";
+                compteCredit = contrepartie.startsWith("411") ? contrepartie : "411000";
+              } else if (
+                ["CHQ FOUR","CHEQUE FOUR","VIR FOUR","VIREMENT FOUR","PAIEMENT FOUR",
+                 "PAI FOUR","REG FOUR","REGLEMENT FOUR","VIR FOURNISSEUR",
+                 "PAIEMENT FOURNISSEUR","REGLEMENT FOURNISSEUR","FOURNISSEUR"].some(k => libNorm.includes(k)) ||
+                contrepartie.startsWith("401") || (l.tiers || "").trim() !== ""
+              ) {
+                compteDebit = contrepartie.startsWith("401") ? contrepartie : "401000";
+                compteCredit = "512000";
+              } else if (l.sens === "credit") {
+                compteDebit = "471000"; compteCredit = "512000";
+              } else {
+                compteDebit = "512000"; compteCredit = "471000";
+              }
+            } else if (
+              ["CHQ FOUR","CHEQUE FOUR","VIR FOUR","VIREMENT FOUR",
+               "PAIEMENT FOUR","PAI FOUR","REG FOUR","REGLEMENT FOUR","VIR FOURNISSEUR",
+               "PAIEMENT FOURNISSEUR","REGLEMENT FOURNISSEUR"].some(k => libNorm.includes(k))
+            ) {
+              compteDebit = contrepartie.startsWith("401") ? contrepartie : "401000";
+              compteCredit = "512000";
+            } else if (
+              ["REMISE CHQ","REM CHQ","REMISE CHEQUE","ENCAISSEMENT","REGLEMENT CLIENT",
+               "REG CLIENT","VIR CLIENT","VIREMENT CLIENT"].some(k => libNorm.includes(k))
+            ) {
+              compteDebit = "512000";
+              compteCredit = contrepartie.startsWith("411") ? contrepartie : "411000";
+            } else if (
+              ["FRAIS","COMMISSION","AGIOS","TENUE DE COMPTE","TENUE COMPTE",
+               "FRAIS DE TENUE","COTISATION CB","COTISATION CARTE","FRAIS BANCAIRES",
+               "INTERETS DEBITEURS"].some(k => libNorm.includes(k))
+            ) {
+              compteDebit = "627000"; compteCredit = "512000";
+            } else if (contrepartie && contrepartie !== "512000" && /^\d{3,20}$/.test(contrepartie)) {
+              if (contrepartie.startsWith("401")) {
+                compteDebit = contrepartie; compteCredit = "512000";
+              } else if (contrepartie.startsWith("411")) {
+                compteDebit = "512000"; compteCredit = contrepartie;
+              } else if (l.sens === "credit") {
+                compteDebit = contrepartie; compteCredit = "512000";
+              } else {
+                compteDebit = "512000"; compteCredit = contrepartie;
+              }
+            } else if (l.sens === "credit") {
+              compteDebit = "471000"; compteCredit = "512000";
+            } else {
+              compteDebit = "512000"; compteCredit = "471000";
+            }
+
+            return {
+              date: l.date || "",
+              compte_debit: compteDebit,
+              compte_credit: compteCredit,
+              libelle: l.libelle || "",
+              montant: l.montant || 0,
+              tiers: l.tiers || "",
+              reference: l.reference || "",
+              confiance: l.confiance,
+            };
+          });
 
       setRows(initialRows);
       setPhase("review");

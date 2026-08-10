@@ -1,6 +1,6 @@
 "use client";
 
-import { AIExtraction, BankStatementExtraction, BankStatementImportResult } from "./types";
+import { AIExtraction, BankStatementExtraction, BankStatementImportResult, EcrituresPreviewRow } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const TOKEN_KEY = "sc_token";
@@ -169,7 +169,7 @@ export async function scannerUpload(
 export async function bankStatementUpload(
   file: File,
   entrepriseId: number
-): Promise<{ data: BankStatementExtraction; numero_compte_valide: boolean }> {
+): Promise<{ data: BankStatementExtraction; numero_compte_valide: boolean; ecritures_preview?: EcrituresPreviewRow[] }> {
   if (file.size > MAX_UPLOAD_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(1);
     throw new ApiError(

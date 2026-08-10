@@ -1,7 +1,10 @@
 from datetime import date
 from django.test import TestCase
 from core.models import Entreprise, Journal, Ecriture, LigneEcriture, ExerciceAnnee
-from core.bank_statements import import_bank_statement, BankStatementError, validate_statement_account
+from core.bank_statements import (
+    import_bank_statement, BankStatementError, validate_statement_account,
+    classify_operation, BANK_ACCOUNT, HOLDING_ACCOUNT,
+)
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
@@ -174,3 +177,199 @@ class BankStatementTestCase(TestCase):
         ec = entries[0]
         l_credit = ec.lignes.filter(montant_credit__gt=0).first()
         self.assertEqual(l_credit.numero_compte, "471000")
+        # La ligne de débit doit être 512000 (compte d'attente en crédit, banque en débit)
+        l_debit = ec.lignes.filter(montant_debit__gt=0).first()
+        self.assertEqual(l_debit.numero_compte, "512000")
+
+
+class ClassifyOperationTestCase(TestCase):
+    """Tests unitaires de classify_operation() pour chaque règle comptable."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username="cpt2", password="pw", role="accountant")
+        self.entreprise = None  # pas nécessaire pour les tests sans tiers
+
+    # ── Règle 1 : VERSEMENT → Débit 512000 / Crédit 581000 ──────────────────
+    def test_versement(self):
+        d, c = classify_operation("VERSEMENT ESPECES", "debit", "", "")
+        self.assertEqual(d, BANK_ACCOUNT)   # 512000
+        self.assertEqual(c, "581000")
+
+    def test_versement_credit_direction_ignored(self):
+        """La direction n'a pas d'importance : VERSEMENT impose toujours 512/581."""
+        d, c = classify_operation("versement", "credit", "", "")
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, "581000")
+
+    # ── Règle 2 : CHQ RETOUR → Débit 401000 / Crédit 512000 ──────────────────
+    def test_chq_retour(self):
+        d, c = classify_operation("CHQ RETOUR 000123", "debit", "", "")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)   # 512000
+
+    def test_cheque_retour_alias(self):
+        d, c = classify_operation("CHEQUE RETOUR IMPAYE", "credit", "", "")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    # ── Règle SORT CHQ : analyse du contexte (jamais 401000 automatique) ───────
+    def test_sort_chq_frais_context(self):
+        """SORT CHQ avec contexte de frais → Débit 627000 / Crédit 512000."""
+        d, c = classify_operation("SORT CHQ FRAIS TENUE COMPTE", "credit", "", "")
+        self.assertEqual(d, "627000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_sort_chq_client_context(self):
+        """SORT CHQ avec contexte client → Débit 512000 / Crédit 411000."""
+        d, c = classify_operation("SORT CHQ ENCAISSEMENT CLIENT", "debit", "", "")
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, "411000")
+
+    def test_sort_chq_fournisseur_explicite(self):
+        """SORT CHQ avec fournisseur explicite dans tiers → Débit 401000 / Crédit 512000."""
+        d, c = classify_operation("SORT CHQ 00056", "credit", "", tiers="CONDOR ELECTRONICS")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_sort_chq_sans_contexte_holding(self):
+        """SORT CHQ sans contexte ni tiers → Ne jamais mettre 401000 automatiquement → 471000."""
+        d, c = classify_operation("SORT CHQ 00056", "credit", "", "")
+        self.assertEqual(d, HOLDING_ACCOUNT)  # 471000
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_virement_fournisseur_keyword(self):
+        d, c = classify_operation("VIREMENT FOURNISSEUR SAMSUNG", "credit", "", "")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    # ── Règle 4 : Encaissement client → Débit 512000 / Crédit 411xxx ──────────
+    def test_encaissement_client(self):
+        d, c = classify_operation("ENCAISSEMENT VIR CLIENT", "debit", "", "")
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, "411000")
+
+    def test_remise_cheque_accent(self):
+        """Le libellé avec accents doit être normalisé avant comparaison."""
+        d, c = classify_operation("Rem\u00eese Ch\u00e8que Client SPA", "debit", "", "")
+        # après normalisation : REMISE CHEQUE CLIENT SPA → règle 4
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, "411000")
+
+    # ── Règle 5 : Frais bancaires → Débit 627000 / Crédit 512000 ──────────────
+    def test_frais_bancaires(self):
+        d, c = classify_operation("Frais de tenue de compte", "credit", "", "")
+        self.assertEqual(d, "627000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_commission_bancaire(self):
+        d, c = classify_operation("COMMISSION SUR VIREMENT", "credit", "", "")
+        self.assertEqual(d, "627000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    # ── Règles 6-7 : Contrepartie IA 401/411 ───────────────────────────────────
+    def test_ia_counterpart_401(self):
+        d, c = classify_operation("Paiement", "credit", "401000", "")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_ia_counterpart_411(self):
+        d, c = classify_operation("Virement entrant", "debit", "411000", "")
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, "411000")
+
+    # ── Règles 8-9 : Contrepartie IA autre compte valide ───────────────────────
+    def test_ia_counterpart_autre_sortie(self):
+        """Sortie bancaire avec contrepartie inconnue → (contrepartie, 512000)."""
+        d, c = classify_operation("Opération diverse", "credit", "658000", "")
+        self.assertEqual(d, "658000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_ia_counterpart_autre_entree(self):
+        """Entrée bancaire avec contrepartie inconnue → (512000, contrepartie)."""
+        d, c = classify_operation("Opération diverse", "debit", "747000", "")
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, "747000")
+
+    # ── Règle 12 : Fallback compte d'attente ───────────────────────────────────
+    def test_fallback_sortie_holding(self):
+        """Libellé inconnu + sortie + sans tiers → (HOLDING, 512000)."""
+        d, c = classify_operation("Virement indéterminé", "credit", "", "")
+        self.assertEqual(d, HOLDING_ACCOUNT)   # 471000
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_fallback_entree_holding(self):
+        """Libellé inconnu + entrée + sans tiers → (512000, HOLDING)."""
+        d, c = classify_operation("Virement indéterminé", "debit", "", "")
+        self.assertEqual(d, BANK_ACCOUNT)
+        self.assertEqual(c, HOLDING_ACCOUNT)   # 471000
+
+
+class BankStatementIntegrationRulesTestCase(TestCase):
+    """Tests d'intégration complets : import + vérification Débit/Crédit en base."""
+
+    def setUp(self):
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username="cpt3", password="pw", role="accountant")
+        self.entreprise = Entreprise.objects.create(
+            nom="EURL INTEGRATION",
+            nif="111111111111111",
+            nis="222222222222222",
+            date_creation=date(2025, 1, 1),
+            exercice_comptable="janvier-decembre",
+            banque="CPA",
+            numero_compte="002000999999999",
+            rib="00200099999999901234",
+            accountant=self.user,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+
+    def _import(self, libelle, sens, montant, compte_contrepartie="", tiers=""):
+        data = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": libelle,
+                "sens": sens,
+                "montant": montant,
+                "compte_contrepartie": compte_contrepartie,
+                "tiers": tiers,
+            }],
+        }
+        entries = import_bank_statement(self.entreprise, data)
+        ec = entries[0]
+        l_d = ec.lignes.filter(montant_debit__gt=0).first()
+        l_c = ec.lignes.filter(montant_credit__gt=0).first()
+        return l_d.numero_compte, l_c.numero_compte
+
+    def test_integration_versement(self):
+        d, c = self._import("VERSEMENT ESPECES AU GUICHET", "debit", 50000)
+        self.assertEqual(d, "512000")
+        self.assertEqual(c, "581000")
+
+    def test_integration_sort_chq_fournisseur(self):
+        d, c = self._import("SORT CHQ 00089 FOURNISSEUR", "credit", 30000, tiers="FOURNISSEUR ABC")
+        self.assertTrue(d.startswith("401"))
+        self.assertEqual(c, "512000")
+
+    def test_integration_encaissement_client(self):
+        d, c = self._import("REMISE CHEQUE CLIENT DURAND", "debit", 80000, tiers="CLIENT DURAND")
+        self.assertEqual(d, "512000")
+        self.assertTrue(c.startswith("411"))
+
+    def test_integration_frais_bancaires(self):
+        d, c = self._import("COMMISSION SUR VIREMENT EMIS", "credit", 500)
+        self.assertEqual(d, "627000")
+        self.assertEqual(c, "512000")
+
+    def test_integration_unknown_sortie_holding(self):
+        d, c = self._import("OP DIVERSE NON IDENTIFIEE", "credit", 1000)
+        self.assertEqual(d, HOLDING_ACCOUNT)
+        self.assertEqual(c, "512000")
+
+    def test_integration_unknown_entree_holding(self):
+        d, c = self._import("OP DIVERSE NON IDENTIFIEE", "debit", 1000)
+        self.assertEqual(d, "512000")
+        self.assertEqual(c, HOLDING_ACCOUNT)
