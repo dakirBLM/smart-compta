@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  AlertTriangle,
   Camera,
   CheckCircle2,
   Circle,
@@ -11,14 +12,13 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { CameraCapture } from "@/components/CameraCapture";
 import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { ApiError, bankStatementImport, bankStatementUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { BankStatementExtraction, BankStatementLigne } from "@/lib/types";
+import { BankStatementExtraction, BankStatementLigne, Ecriture } from "@/lib/types";
 import { formatDZD } from "@/lib/utils";
 
 type Phase = "capture" | "loading" | "review" | "success";
@@ -43,20 +43,31 @@ function isAcceptedFile(f: File): boolean {
   );
 }
 
-function emptyLigne(): BankStatementLigne {
+/** Single Accounting Row structure for the review screen. */
+export interface AccountingOperationRow {
+  date: string;
+  compte_debit: string;
+  compte_credit: string;
+  libelle: string;
+  montant: number | string;
+  tiers: string;
+  reference: string;
+  confiance?: number;
+}
+
+function emptyOperationRow(): AccountingOperationRow {
   return {
-    date: "",
+    date: new Date().toISOString().split("T")[0],
+    compte_debit: "401000",
+    compte_credit: "512000",
     libelle: "",
-    reference: "",
-    sens: "debit",
     montant: 0,
-    compte_contrepartie: "",
     tiers: "",
-    confiance: undefined,
+    reference: "",
   };
 }
 
-function lowestConfidence(lignes: BankStatementLigne[]): number {
+function lowestConfidence(lignes: AccountingOperationRow[]): number {
   const scores = lignes
     .map((l) => Number(l.confiance))
     .filter((n) => Number.isFinite(n));
@@ -76,12 +87,13 @@ export function BankStatementFlow({
   const [phase, setPhase] = useState<Phase>("capture");
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
-  const [extraction, setExtraction] = useState<BankStatementExtraction | null>(null);
+  const [numeroCompte, setNumeroCompte] = useState("");
+  const [rows, setRows] = useState<AccountingOperationRow[]>([]);
   const [stepDone, setStepDone] = useState(0);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
-  const [ecrituresCreees, setEcrituresCreees] = useState(0);
+  const [savedEcritures, setSavedEcritures] = useState<Ecriture[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -115,7 +127,38 @@ export function BankStatementFlow({
       const res = await bankStatementUpload(file, entrepriseId);
       clearInterval(timer);
       setStepDone(4);
-      setExtraction(res.data);
+      setNumeroCompte(res.data.numero_compte || "");
+      
+      // Convert raw AI extracted lines into single accounting operation rows
+      const initialRows: AccountingOperationRow[] = (res.data.lignes || []).map((l: BankStatementLigne) => {
+        const libUpper = (l.libelle || "").toUpperCase();
+        let contrepartie = (l.compte_contrepartie || "").trim();
+
+        if (libUpper.includes("VERSEMENT") && (!contrepartie || contrepartie === "471000" || contrepartie === "512000")) {
+          contrepartie = "581000";
+        } else if ((libUpper.includes("CHQ RETOUR") || libUpper.includes("CHEQUE RETOUR")) && (!contrepartie || contrepartie === "471000" || contrepartie === "512000")) {
+          contrepartie = "401000";
+        } else if (!contrepartie) {
+          contrepartie = "471000";
+        }
+
+        let isDebit = l.sens === "debit";
+        if (libUpper.includes("VERSEMENT")) isDebit = true;
+        if (libUpper.includes("CHQ RETOUR") || libUpper.includes("CHEQUE RETOUR")) isDebit = false;
+
+        return {
+          date: l.date || "",
+          compte_debit: isDebit ? "512000" : contrepartie,
+          compte_credit: isDebit ? contrepartie : "512000",
+          libelle: l.libelle || "",
+          montant: l.montant || 0,
+          tiers: l.tiers || "",
+          reference: l.reference || "",
+          confiance: l.confiance,
+        };
+      });
+
+      setRows(initialRows);
       setPhase("review");
     } catch (e) {
       clearInterval(timer);
@@ -125,12 +168,30 @@ export function BankStatementFlow({
   }
 
   async function confirm() {
-    if (!extraction || submitting) return;
+    if (!rows.length || submitting) return;
     setSubmitting(true);
     setError("");
     try {
-      const res = await bankStatementImport(entrepriseId, extraction);
-      setEcrituresCreees(res.ecritures_creees);
+      // Reconstruct payload for backend import
+      const payload: BankStatementExtraction = {
+        numero_compte: numeroCompte,
+        lignes: rows.map((r) => {
+          const isDebit = r.compte_debit.trim().startsWith("512");
+          return {
+            date: r.date,
+            libelle: r.libelle,
+            reference: r.reference,
+            sens: isDebit ? "debit" : "credit",
+            montant: Number(r.montant) || 0,
+            compte_contrepartie: isDebit ? r.compte_credit : r.compte_debit,
+            tiers: r.tiers,
+            confiance: r.confiance,
+          };
+        }),
+      };
+
+      const res = await bankStatementImport(entrepriseId, payload);
+      setSavedEcritures(res.ecritures || []);
       setPhase("success");
       onImported?.();
     } catch (e) {
@@ -139,7 +200,7 @@ export function BankStatementFlow({
           ? e.message
           : e instanceof Error
           ? e.message
-          : "Erreur lors de l'enregistrement."
+          : "Erreur lors de l'enregistrement. Vérifiez la connexion et réessayez."
       );
     } finally {
       setSubmitting(false);
@@ -150,8 +211,10 @@ export function BankStatementFlow({
     setPhase("capture");
     setPreview(null);
     setFile(null);
-    setExtraction(null);
+    setNumeroCompte("");
+    setRows([]);
     setError("");
+    setSavedEcritures([]);
     setRedirectIn(5);
   }
 
@@ -258,62 +321,98 @@ export function BankStatementFlow({
     );
 
   // ---- SUCCESS ----
-  if (phase === "success")
+  if (phase === "success") {
     return (
-      <Card className="mx-auto max-w-xl text-center">
-        <CheckCircle2 className="mx-auto mb-3 text-success" size={56} />
-        <h2 className="mb-1 text-xl font-bold text-success">{t("releveImporteAvecSucces")}</h2>
-        <p className="mb-1 text-sm text-gray-600">
-          {ecrituresCreees} {t("ecrituresGenerees")}
-        </p>
-        <p className="mb-4 text-sm text-gray-500">Nouveau relevé dans {redirectIn}s…</p>
-        <Button variant="outline" onClick={reset}>
-          <RotateCcw size={16} /> {t("scannerAutre")}
-        </Button>
+      <Card className="mx-auto max-w-5xl">
+        <div className="mb-4 flex flex-col items-center">
+          <CheckCircle2 className="mb-2 text-success" size={48} />
+          <h2 className="text-xl font-bold text-success">{t("releveImporteAvecSucces")}</h2>
+          <p className="text-sm text-gray-600">
+            {savedEcritures.length} {t("ecrituresGenerees")} enregistrées dans le Journal Banque.
+          </p>
+          <p className="text-xs text-gray-400">Nouveau relevé dans {redirectIn}s…</p>
+        </div>
+
+        {/* Single accounting table of saved entries */}
+        <div className="mb-4 overflow-x-auto rounded-lg border">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="bg-brand text-white">
+                <th className="p-2 text-left">{t("date")}</th>
+                <th className="p-2 text-left">Compte Débit</th>
+                <th className="p-2 text-left">Compte Crédit</th>
+                <th className="p-2 text-left">{t("libelle")}</th>
+                <th className="p-2 text-right">Montant (DZD)</th>
+                <th className="p-2 text-left">Tiers</th>
+              </tr>
+            </thead>
+            <tbody>
+              {savedEcritures.map((e) => {
+                const lDebit = e.lignes.find((l) => Number(l.montant_debit) > 0);
+                const lCredit = e.lignes.find((l) => Number(l.montant_credit) > 0);
+                const montant = lDebit ? lDebit.montant_debit : lCredit?.montant_credit || 0;
+                return (
+                  <tr key={e.id} className="border-t">
+                    <td className="p-2 font-mono text-xs">{e.date_ecriture}</td>
+                    <td className="p-2 font-mono font-bold text-blue-700">{lDebit?.numero_compte || "—"}</td>
+                    <td className="p-2 font-mono font-bold text-green-700">{lCredit?.numero_compte || "—"}</td>
+                    <td className="p-2">{lDebit?.libelle || lCredit?.libelle}</td>
+                    <td className="p-2 text-right font-mono font-bold">{formatDZD(Number(montant))}</td>
+                    <td className="p-2 text-gray-600">{e.fournisseur_client || "—"}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="flex justify-center">
+          <Button variant="outline" onClick={reset}>
+            <RotateCcw size={16} /> {t("scannerAutre")}
+          </Button>
+        </div>
       </Card>
     );
+  }
 
   // ---- REVIEW ----
-  if (!extraction) return null;
-  const level = confidenceLevel(lowestConfidence(extraction.lignes));
-  const hasLignes = extraction.lignes.length > 0;
-  const invalidLignes = extraction.lignes.filter(
-    (l) =>
-      !l.date ||
-      !l.libelle.trim() ||
-      !l.compte_contrepartie.trim() ||
-      l.compte_contrepartie.trim() === "512000" ||
-      !(Number(l.montant) > 0)
-  );
-  const canConfirm = hasLignes && invalidLignes.length === 0;
+  if (phase !== "review") return null;
 
-  const updateLigne = (i: number, patch: Partial<BankStatementLigne>) =>
-    setExtraction({
-      ...extraction,
-      lignes: extraction.lignes.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
-    });
-  const addLigne = () =>
-    setExtraction({ ...extraction, lignes: [...extraction.lignes, emptyLigne()] });
-  const removeLigne = (i: number) =>
-    setExtraction({
-      ...extraction,
-      lignes: extraction.lignes.filter((_, idx) => idx !== i),
-    });
+  const level = confidenceLevel(lowestConfidence(rows));
+  const hasRows = rows.length > 0;
+  const invalidRows = rows.filter(
+    (r) =>
+      !r.date ||
+      !r.libelle.trim() ||
+      !r.compte_debit.trim() ||
+      !r.compte_credit.trim() ||
+      !(Number(r.montant) > 0)
+  );
+
+  const missingCompte = rows.filter(
+    (r) => r.compte_debit.trim() === "471000" || r.compte_credit.trim() === "471000"
+  );
+  const canConfirm = hasRows && invalidRows.length === 0;
+
+  const updateRow = (i: number, patch: Partial<AccountingOperationRow>) =>
+    setRows(rows.map((r, idx) => (idx === i ? { ...r, ...patch } : r)));
+  const addRow = () => setRows([...rows, emptyOperationRow()]);
+  const removeRow = (i: number) => setRows(rows.filter((_, idx) => idx !== i));
 
   return (
-    <div className="mx-auto max-w-4xl space-y-4">
+    <div className="mx-auto max-w-5xl space-y-4">
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
           <h2 className="text-lg font-bold text-brand">{t("propositionEcriture")}</h2>
-          <ConfidenceBadge score={lowestConfidence(extraction.lignes)} />
+          <ConfidenceBadge score={lowestConfidence(rows)} />
         </div>
         <div className="flex items-center justify-between gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">
           <span>{t("numeroCompteReleve")}</span>
-          <span className="font-mono font-semibold">{extraction.numero_compte}</span>
+          <span className="font-mono font-semibold">{numeroCompte}</span>
         </div>
         {level === "yellow" && (
           <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-warning">
-            ⚠ {t("confiance")} moyenne — vérifiez les lignes avant de confirmer.
+            ⚠ {t("confiance")} moyenne — vérifiez les comptes et les montants avant de confirmer.
           </p>
         )}
         {level === "red" && (
@@ -321,64 +420,102 @@ export function BankStatementFlow({
             ⛔ {t("confiance")} faible — révision manuelle complète requise.
           </p>
         )}
+        {missingCompte.length > 0 && (
+          <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-700">
+            <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+            <span>
+              {missingCompte.length} ligne(s) utilise(nt) le compte d'attente{" "}
+              <strong>471000</strong>. Corrigez le compte si nécessaire.
+            </span>
+          </div>
+        )}
       </Card>
 
+      {/* ─── SINGLE ACCOUNTING TABLE ONLY ─── */}
       <Card className="overflow-x-auto p-0">
+        <div className="bg-brand/5 px-4 py-3 border-b">
+          <h3 className="text-sm font-bold text-brand">
+            Tableau d'écritures comptables — Relevé bancaire
+          </h3>
+          <p className="text-xs text-gray-500">
+            Une ligne par opération bancaire. Compte 512000 = banque.
+          </p>
+        </div>
         <table className="w-full text-sm">
           <thead className="bg-brand text-left text-white">
             <tr>
               <th className="p-2">{t("date")}</th>
+              <th className="p-2">Compte Débit</th>
+              <th className="p-2">Compte Crédit</th>
               <th className="p-2">{t("libelle")}</th>
-              <th className="p-2">{t("numeroPiece")}</th>
-              <th className="p-2">{t("sens")}</th>
-              <th className="p-2 text-right">{t("montant")}</th>
-              <th className="p-2">{t("compteContrepartie")}</th>
-              <th className="p-2">{t("tiers")}</th>
+              <th className="p-2 text-right">Montant (DZD)</th>
+              <th className="p-2">Tiers / Réf</th>
               <th className="p-2"></th>
             </tr>
           </thead>
           <tbody>
-            {extraction.lignes.map((l, i) => {
-              const invalid = invalidLignes.includes(l);
+            {rows.map((r, i) => {
+              const invalid = invalidRows.includes(r);
+              const isHolding = missingCompte.includes(r);
               return (
-                <tr key={i} className={invalid ? "border-t bg-red-50" : "border-t"}>
-                  <td className="p-2">
-                    <Input value={l.date} placeholder="JJ/MM/AAAA" onChange={(e) => updateLigne(i, { date: e.target.value })} />
+                <tr
+                  key={i}
+                  className={
+                    invalid
+                      ? "border-t bg-red-50"
+                      : isHolding
+                      ? "border-t bg-amber-50"
+                      : "border-t hover:bg-gray-50"
+                  }
+                >
+                  <td className="p-2 w-32">
+                    <Input
+                      value={r.date}
+                      placeholder="JJ/MM/AAAA"
+                      onChange={(e) => updateRow(i, { date: e.target.value })}
+                    />
+                  </td>
+                  <td className="p-2 w-32">
+                    <Input
+                      value={r.compte_debit}
+                      className="font-mono font-bold text-blue-700"
+                      onChange={(e) => updateRow(i, { compte_debit: e.target.value })}
+                    />
+                  </td>
+                  <td className="p-2 w-32">
+                    <Input
+                      value={r.compte_credit}
+                      className="font-mono font-bold text-green-700"
+                      onChange={(e) => updateRow(i, { compte_credit: e.target.value })}
+                    />
                   </td>
                   <td className="p-2">
-                    <Input value={l.libelle} onChange={(e) => updateLigne(i, { libelle: e.target.value })} />
+                    <Input
+                      value={r.libelle}
+                      onChange={(e) => updateRow(i, { libelle: e.target.value })}
+                    />
                   </td>
-                  <td className="p-2">
-                    <Input value={l.reference} onChange={(e) => updateLigne(i, { reference: e.target.value })} />
-                  </td>
-                  <td className="p-2">
-                    <select
-                      value={l.sens}
-                      onChange={(e) => updateLigne(i, { sens: e.target.value as "debit" | "credit" })}
-                      className="h-10 w-full rounded-lg border border-gray-300 px-2 text-sm"
-                    >
-                      <option value="debit">{t("debit")}</option>
-                      <option value="credit">{t("credit")}</option>
-                    </select>
-                  </td>
-                  <td className="p-2 text-right">
+                  <td className="p-2 w-36 text-right">
                     <Input
                       type="number"
-                      value={l.montant}
-                      onChange={(e) => updateLigne(i, { montant: e.target.value })}
+                      value={r.montant}
+                      className="text-right font-mono font-semibold"
+                      onChange={(e) => updateRow(i, { montant: e.target.value })}
                     />
                   </td>
-                  <td className="p-2">
+                  <td className="p-2 w-36">
                     <Input
-                      value={l.compte_contrepartie}
-                      onChange={(e) => updateLigne(i, { compte_contrepartie: e.target.value })}
+                      value={r.tiers}
+                      placeholder="Tiers (ex: Fournisseur)"
+                      onChange={(e) => updateRow(i, { tiers: e.target.value })}
                     />
-                  </td>
-                  <td className="p-2">
-                    <Input value={l.tiers} onChange={(e) => updateLigne(i, { tiers: e.target.value })} />
                   </td>
                   <td className="p-2 text-center">
-                    <button onClick={() => removeLigne(i)} className="text-danger" aria-label="Supprimer">
+                    <button
+                      onClick={() => removeRow(i)}
+                      className="text-danger hover:opacity-70"
+                      aria-label="Supprimer"
+                    >
                       <Trash2 size={15} />
                     </button>
                   </td>
@@ -387,32 +524,41 @@ export function BankStatementFlow({
             })}
           </tbody>
         </table>
-        <div className="flex items-center justify-between p-3">
-          <Button variant="ghost" size="sm" onClick={addLigne}>
-            <Plus size={15} /> Ligne
+        <div className="flex items-center justify-between p-3 border-t bg-gray-50">
+          <Button variant="ghost" size="sm" onClick={addRow}>
+            <Plus size={15} /> Ajouter une opération
           </Button>
-          <span className="text-sm text-gray-500">
-            {extraction.lignes.length} ligne(s) ·{" "}
+          <span className="text-sm font-semibold text-brand">
+            {rows.length} opération(s) · Total :{" "}
             {formatDZD(
-              extraction.lignes.reduce((s, l) => s + Number(l.montant || 0), 0)
+              rows.reduce((s, r) => s + Number(r.montant || 0), 0)
             )}
           </span>
         </div>
       </Card>
 
-      {!canConfirm && hasLignes && (
+      {!canConfirm && hasRows && (
         <p className="text-sm font-semibold text-danger">
-          Corrigez les lignes en rouge (date, libellé, compte de contrepartie ≠
-          512000, montant &gt; 0) avant de confirmer.
+          Corrigez les opérations en rouge (date, comptes non vides, montant &gt; 0) avant de confirmer.
         </p>
       )}
-      {error && <p className="text-sm text-danger">{error}</p>}
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-danger">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="flex justify-between">
         <Button variant="ghost" onClick={reset}>
           <RotateCcw size={16} /> {t("scannerAutre")}
         </Button>
-        <Button variant={canConfirm ? "success" : "warning"} onClick={confirm} disabled={!canConfirm || submitting}>
+        <Button
+          variant={canConfirm ? "success" : "warning"}
+          onClick={confirm}
+          disabled={!canConfirm || submitting}
+          id="btn-confirmer-releve"
+        >
           {submitting ? <Spinner /> : t("importerCeReleve")}
         </Button>
       </div>

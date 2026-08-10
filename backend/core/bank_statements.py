@@ -17,6 +17,10 @@ from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
 BANK_ACCOUNT = "512000"
 
+# Compte d'attente used when the AI cannot determine the counterpart account.
+# The accountant can correct it in the journal afterwards.
+HOLDING_ACCOUNT = "471000"
+
 
 class BankStatementError(Exception):
     """A statement cannot be safely imported."""
@@ -75,7 +79,7 @@ def _decimal(value, field):
     except (InvalidOperation, ValueError):
         raise BankStatementError(f"Montant invalide pour la ligne « {field} ».")
     if amount <= 0:
-        raise BankStatementError("Chaque montant du relevé doit être strictement positif.")
+        raise BankStatementError("Chaque montant du relevé doit être strictly positif.")
     return amount
 
 
@@ -102,9 +106,15 @@ def _direction(row):
     def nonzero(v):
         if v in (None, "", 0, "0", "0.00", "0,00"):
             return False
-        return _decimal(v, "débit/crédit") > 0
-    if nonzero(debit) != nonzero(credit):
-        return "debit" if nonzero(debit) else "credit"
+        try:
+            return _decimal(v, "débit/crédit") > 0
+        except BankStatementError:
+            return False
+
+    if nonzero(debit) and not nonzero(credit):
+        return "debit"
+    if nonzero(credit) and not nonzero(debit):
+        return "credit"
     raise BankStatementError(
         "Le sens de chaque ligne doit être « debit » ou « credit » "
         "(ou une seule colonne débit/crédit renseignée)."
@@ -124,19 +134,29 @@ def _amount(row):
 
 
 def _counterpart(row):
+    """Return the counterpart account for this bank transaction line.
+
+    If the AI provided a valid numeric account (3–20 digits) that is not the
+    bank account itself, use it.  Otherwise infer from the libellé or default
+    to holding account (471000).
+    """
     account = str(_value(row, "compte_contrepartie", "compte", "counterpart_account") or "").strip()
-    if not re.fullmatch(r"\d{3,20}", account):
-        raise BankStatementError(
-            "Chaque ligne doit contenir un compte de contrepartie numérique "
-            "(ex. 401000 ou 411000)."
-        )
-    if account == BANK_ACCOUNT:
-        raise BankStatementError("Le compte de contrepartie ne peut pas être 512000.")
-    return account
+    account = re.split(r"\s", account)[0]
+    if re.fullmatch(r"\d{3,20}", account) and account != BANK_ACCOUNT:
+        return account
+
+    # Heuristic rules based on libellé:
+    label = str(_value(row, "libelle", "label", "description") or "").upper()
+    if "VERSEMENT" in label:
+        return "581000"
+    if "CHQ RETOUR" in label or "CHEQUE RETOUR" in label:
+        return "401000"
+
+    return HOLDING_ACCOUNT
 
 
 def validated_lines(data):
-    """Normalize the Make payload before any database mutation occurs."""
+    """Normalize the AI payload before any database mutation occurs."""
     rows = data.get("lignes") or data.get("transactions") or []
     if not isinstance(rows, list) or not rows:
         raise BankStatementError("Le relevé ne contient aucune ligne à importer.")
@@ -163,17 +183,50 @@ def validated_lines(data):
     return sorted(result, key=lambda row: (row["date"], row["position"]))
 
 
-def resolve_counterpart_account(entreprise, raw_account, tiers_nom):
-    """Resolve a generic 401/411 range to the named tiers' own dedicated
-    sub-account (e.g. 401000 -> 401007), the same registry the invoice
-    scanner uses. Without this, every "chèque retour" line would post to the
-    same generic 401000/411000 account instead of the actual fournisseur/
-    client, and pollute the account_helpers suffix sequence (see its
-    docstring). Falls back to the AI-provided account when there's no tiers
-    name or the account isn't in the 401/411 range."""
+def preview_entries(data):
+    """Return a list of preview accounting rows (no DB writes) from an AI payload."""
+    try:
+        lines = validated_lines(data)
+    except BankStatementError:
+        return []
+
+    rows = []
+    for row in lines:
+        if row["direction"] == "debit":
+            compte_debit = BANK_ACCOUNT
+            compte_credit = row["counterpart"]
+        else:
+            compte_debit = row["counterpart"]
+            compte_credit = BANK_ACCOUNT
+
+        rows.append({
+            "date": str(row["date"]),
+            "libelle": row["libelle"],
+            "ligne_num": row["position"],
+            "compte_debit": compte_debit,
+            "compte_credit": compte_credit,
+            "montant": str(row["amount"]),
+            "counterpart": row["counterpart"],
+            "tiers": row["tiers"],
+            "sens": row["direction"],
+        })
+    return rows
+
+
+def resolve_counterpart_account(entreprise, raw_account, tiers_nom, libelle=""):
+    lib_upper = (libelle or "").upper()
+    raw_account = (raw_account or "").strip()
+
+    if "VERSEMENT" in lib_upper and (not raw_account or raw_account == HOLDING_ACCOUNT or raw_account == BANK_ACCOUNT):
+        return "581000"
+
+    if ("CHQ RETOUR" in lib_upper or "CHEQUE RETOUR" in lib_upper) and (not raw_account or raw_account == HOLDING_ACCOUNT or raw_account == BANK_ACCOUNT):
+        raw_account = "401000"
+
     tiers_nom = (tiers_nom or "").strip()
     if not tiers_nom:
-        return raw_account
+        return raw_account or ("581000" if "VERSEMENT" in lib_upper else "401000" if "CHQ RETOUR" in lib_upper else HOLDING_ACCOUNT)
+
     try:
         if raw_account.startswith("401"):
             return get_or_create_fournisseur(entreprise, tiers_nom).numero_compte
@@ -188,15 +241,29 @@ def _resolve_exercice(entreprise, date):
     exercice = entreprise.exercices.filter(annee=date.year).first()
     if exercice:
         return exercice
-    return ExerciceAnnee.objects.create(entreprise=entreprise, annee=date.year, is_active=False)
+    active = entreprise.exercices.filter(is_active=True).first()
+    if active and active.annee == date.year:
+        return active
+    has_active = entreprise.exercices.filter(is_active=True).exists()
+    return ExerciceAnnee.objects.create(
+        entreprise=entreprise,
+        annee=date.year,
+        is_active=not has_active,
+    )
 
 
 @transaction.atomic
 def import_bank_statement(entreprise, data):
-    """Create one balanced two-line Banque entry per statement transaction."""
+    """Create one balanced two-line Banque entry per statement transaction.
+
+    The accountant has explicitly reviewed and confirmed the extraction, so
+    every created Ecriture is saved to Journal Banque and marked VALIDE immediately.
+    """
     statement_account = _value(data, "numero_compte", "account_number", "compte_bancaire")
     validate_statement_account(entreprise, statement_account)
     lines = validated_lines(data)
+
+    statement_ref = str(_value(data, "numero_piece", "numero_releve", "reference") or "").strip()
 
     journals = {}
     created = []
@@ -213,29 +280,36 @@ def import_bank_statement(entreprise, data):
             confidence = int(row["confidence"]) if row["confidence"] is not None else None
         except (TypeError, ValueError):
             confidence = None
+
+        ref = row["reference"] or statement_ref or f"RELEV-{row['date'].strftime('%Y%m%d')}"
+
         entry = Ecriture.objects.create(
             journal=journal,
             date_ecriture=row["date"],
-            numero_piece=row["reference"],
+            numero_piece=ref,
             fournisseur_client=row["tiers"],
             source=Ecriture.Source.IMPORT,
             confiance_ia=confidence,
-            statut=Ecriture.Statut.EN_COURS,
+            statut=Ecriture.Statut.VALIDE,
             mode_paiement="relevé bancaire",
         )
-        # The direction describes account 512000, as stipulated by the import contract.
         bank_debit = row["amount"] if row["direction"] == "debit" else Decimal("0")
         bank_credit = row["amount"] if row["direction"] == "credit" else Decimal("0")
-        counterpart = resolve_counterpart_account(entreprise, row["counterpart"], row["tiers"])
-        LigneEcriture.objects.bulk_create([
-            LigneEcriture(
-                ecriture=entry, numero_compte=BANK_ACCOUNT, libelle=row["libelle"],
-                montant_debit=bank_debit, montant_credit=bank_credit,
-            ),
-            LigneEcriture(
-                ecriture=entry, numero_compte=counterpart, libelle=row["libelle"],
-                montant_debit=bank_credit, montant_credit=bank_debit,
-            ),
-        ])
+        counterpart = resolve_counterpart_account(entreprise, row["counterpart"], row["tiers"], row["libelle"])
+        
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=BANK_ACCOUNT,
+            libelle=row["libelle"],
+            montant_debit=bank_debit,
+            montant_credit=bank_credit,
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=counterpart,
+            libelle=row["libelle"],
+            montant_debit=bank_credit,
+            montant_credit=bank_debit,
+        )
         created.append(entry)
     return created
