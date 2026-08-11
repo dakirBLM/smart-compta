@@ -64,12 +64,70 @@ def _accountant_entreprise(request, pk):
     return get_object_or_404(Entreprise, pk=pk, accountant=request.user)
 
 
-def _assert_unique_piece(entreprise, numero, exclude_id=None):
-    """Reject a duplicate invoice number within the same entreprise."""
+def _assert_unique_piece(entreprise, numero, exclude_id=None, date_ecriture=None, 
+                         libelle=None, montant=None):
+    """Check for duplicate operations only if ALL 4 criteria match:
+    1. Date (date_ecriture)
+    2. N° de pièce (numero_piece) 
+    3. Libellé
+    4. Montant
+    
+    All four must match to be considered a duplicate.
+    If date_ecriture, libelle, or montant are not provided, perform legacy 
+    numero_piece uniqueness check.
+    """
     from rest_framework.exceptions import ValidationError
+    from decimal import Decimal, InvalidOperation
+    from datetime import date
+    
     numero = (numero or "").strip()
     if not numero:
         return
+    
+    # If all 4 criteria are provided, check for a complete match
+    if date_ecriture is not None and libelle is not None and montant is not None:
+        try:
+            # Convert montant to Decimal if needed
+            if isinstance(montant, str):
+                montant = Decimal(montant)
+            elif not isinstance(montant, Decimal):
+                montant = Decimal(str(montant))
+            
+            # Ensure date_ecriture is a date object
+            if not isinstance(date_ecriture, date):
+                return  # Skip duplicate check if date is invalid
+            
+            # Search for existing ecriture with the same date, numero_piece, and libelle
+            from django.db.models import Q
+            
+            existing = Ecriture.objects.filter(
+                journal__entreprise=entreprise,
+                date_ecriture=date_ecriture,
+                numero_piece=numero,
+            ).exclude(pk=exclude_id) if exclude_id else Ecriture.objects.filter(
+                journal__entreprise=entreprise,
+                date_ecriture=date_ecriture,
+                numero_piece=numero,
+            )
+            
+            for ecriture in existing:
+                # Check if any ligne has matching libelle and montant (as debit or credit)
+                if ecriture.lignes.filter(
+                    libelle=libelle
+                ).filter(
+                    Q(montant_debit=montant) | Q(montant_credit=montant)
+                ).exists():
+                    date_str = date_ecriture.strftime('%d/%m/%Y') if hasattr(date_ecriture, 'strftime') else str(date_ecriture)
+                    raise ValidationError({
+                        "numero_piece": f"Doublon détecté : Une écriture du {date_str} "
+                        f"avec la référence « {numero} », le libellé « {libelle} » "
+                        f"et le montant {montant} DZD existe déjà."
+                    })
+            return
+        except (InvalidOperation, ValueError):
+            return  # Skip duplicate check if montant is invalid
+    
+    # Legacy behavior: if not all 4 criteria provided, just check numero_piece uniqueness
     qs = Ecriture.objects.filter(
         journal__entreprise=entreprise, numero_piece=numero
     )
@@ -507,13 +565,91 @@ class JournalEcrituresView(APIView):
         return Response(EcritureSerializer(qs, many=True).data)
 
     def post(self, request, pk, journal_id):
-        entreprise = _accountant_entreprise(request, pk)
-        journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
-        _assert_unique_piece(entreprise, request.data.get("numero_piece"))
-        serializer = EcritureSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        serializer.save(journal=journal)
-        return Response(serializer.data, status=status.HTTP_201_CREATED)
+        from datetime import datetime
+        from decimal import Decimal
+        import logging
+        
+        logger = logging.getLogger(__name__)
+        
+        try:
+            entreprise = _accountant_entreprise(request, pk)
+            journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
+            
+            # Extract the 4 criteria for duplicate detection
+            numero_piece = request.data.get("numero_piece", "").strip()
+            
+            # Parse date_ecriture (convert string to date object if needed)
+            date_ecriture = None
+            date_str = request.data.get("date_ecriture")
+            if date_str:
+                try:
+                    if isinstance(date_str, str):
+                        # Try different date formats
+                        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+                            try:
+                                date_ecriture = datetime.strptime(date_str, fmt).date()
+                                break
+                            except ValueError:
+                                continue
+                    else:
+                        # Already a date object
+                        date_ecriture = date_str
+                except Exception as e:
+                    logger.warning(f"Error parsing date: {e}")
+                    date_ecriture = None
+            
+            # Get libelle from the first ligne (or use fournisseur_client as fallback)
+            libelle = ""
+            lignes_data = request.data.get("lignes", [])
+            if lignes_data and isinstance(lignes_data, list) and len(lignes_data) > 0:
+                libelle = (lignes_data[0].get("libelle") or "").strip()
+            if not libelle:
+                libelle = (request.data.get("fournisseur_client") or "").strip()
+            
+            # Calculate total montant from lignes
+            montant_total = None
+            if lignes_data:
+                for ligne in lignes_data:
+                    try:
+                        debit = ligne.get("montant_debit")
+                        credit = ligne.get("montant_credit")
+                        if debit and debit != "0" and debit != 0:
+                            montant_total = Decimal(str(debit))
+                            break
+                        elif credit and credit != "0" and credit != 0:
+                            montant_total = Decimal(str(credit))
+                            break
+                    except (ValueError, TypeError, AttributeError) as e:
+                        logger.warning(f"Error parsing montant: {e}")
+                        pass
+            
+            # Check for duplicates using all 4 criteria
+            if numero_piece and date_ecriture and libelle and montant_total is not None:
+                _assert_unique_piece(
+                    entreprise, 
+                    numero_piece,
+                    date_ecriture=date_ecriture,
+                    libelle=libelle,
+                    montant=montant_total
+                )
+            
+            serializer = EcritureSerializer(data=request.data)
+            if not serializer.is_valid():
+                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+            
+            ecriture = serializer.save(journal=journal)
+            
+            return Response({
+                "message": "Écriture ajoutée avec succès",
+                "ecriture": EcritureSerializer(ecriture).data
+            }, status=status.HTTP_201_CREATED)
+        
+        except Exception as e:
+            logger.error(f"Error in JournalEcrituresView.post: {str(e)}", exc_info=True)
+            return Response(
+                {"error": f"Erreur serveur: {str(e)}"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class EcritureDetailView(APIView):
@@ -625,6 +761,9 @@ class ScannerConfirmView(APIView):
 
     def post(self, request):
         import json as _json
+        from datetime import datetime
+        from decimal import Decimal
+        
         entreprise_id = request.data.get("entreprise")
         raw = request.data.get("data")
         if isinstance(raw, str):
@@ -634,8 +773,51 @@ class ScannerConfirmView(APIView):
                 data = {}
         else:
             data = raw or request.data
+        
         entreprise = _accountant_entreprise(request, entreprise_id)
-        _assert_unique_piece(entreprise, data.get("numero_facture") or data.get("numero_piece"))
+        
+        # Extract the 4 criteria for duplicate detection on factures
+        numero_facture = data.get("numero_facture") or data.get("numero_piece", "")
+        
+        # Try to parse the date
+        date_facture = None
+        try:
+            date_str = data.get("date_facture")
+            if date_str:
+                # Handle various date formats
+                for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+                    try:
+                        date_facture = datetime.strptime(str(date_str), fmt).date()
+                        break
+                    except (ValueError, TypeError):
+                        continue
+        except Exception:
+            pass
+        
+        # Get libelle from fournisseur or description
+        libelle = (data.get("fournisseur") or data.get("description") or "").strip()
+        
+        # Get montant (use montant_ttc or montant_ht)
+        montant_total = None
+        try:
+            montant_ttc = data.get("montant_ttc")
+            montant_ht = data.get("montant_ht")
+            if montant_ttc:
+                montant_total = Decimal(str(montant_ttc))
+            elif montant_ht:
+                montant_total = Decimal(str(montant_ht))
+        except (ValueError, TypeError, AttributeError):
+            pass
+        
+        # Check for duplicates using all 4 criteria if we have them
+        _assert_unique_piece(
+            entreprise, 
+            numero_facture,
+            date_ecriture=date_facture if date_facture else None,
+            libelle=libelle if libelle else None,
+            montant=montant_total
+        )
+        
         try:
             ecriture = persist_extraction(entreprise, data, source="scanner")
         except WebhookError as exc:
