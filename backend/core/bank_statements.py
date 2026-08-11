@@ -395,6 +395,43 @@ def _resolve_exercice(entreprise, date):
     )
 
 
+def check_bank_operation_duplicate(entreprise, operation_date, reference, label, amount):
+    """Vérifie si une opération bancaire identique existe déjà.
+    
+    Compare selon les 4 critères :
+    1. Date de l'opération
+    2. N° de pièce (référence)
+    3. Libellé
+    4. Montant
+    
+    Retourne l'Ecriture existante si un doublon est trouvé, None sinon.
+    """
+    from django.db.models import Q
+    
+    # Chercher une ecriture bancaire avec la même date, référence
+    duplicate = Ecriture.objects.filter(
+        journal__entreprise=entreprise,
+        journal__type_journal=Journal.Type.BANQUE,
+        date_ecriture=operation_date,
+        numero_piece=reference,
+    ).first()
+    
+    if not duplicate:
+        return None
+    
+    # Vérifier que au moins une ligne a le même libellé ET montant
+    matching_line = duplicate.lignes.filter(
+        libelle=label
+    ).filter(
+        Q(montant_debit=amount) | Q(montant_credit=amount)
+    ).first()
+    
+    if matching_line:
+        return duplicate
+    
+    return None
+
+
 @transaction.atomic
 def import_bank_statement(entreprise, data):
     """Create one balanced two-line Banque entry per statement transaction.
@@ -425,6 +462,17 @@ def import_bank_statement(entreprise, data):
             confidence = None
 
         ref = row["reference"] or statement_ref or f"RELEV-{row['date'].strftime('%Y%m%d')}"
+
+        # ── Vérifier les doublons avant création ──────────────────────────────────
+        duplicate_ecriture = check_bank_operation_duplicate(
+            entreprise, row["date"], ref, row["libelle"], row["amount"]
+        )
+        if duplicate_ecriture:
+            raise BankStatementError(
+                f"Doublon détecté : l'opération du {row['date'].strftime('%d/%m/%Y')} "
+                f"avec la référence « {ref} », le libellé « {row['libelle']} » "
+                f"et le montant {row['amount']} DZD existe déjà (Écriture #{duplicate_ecriture.id})."
+            )
 
         entry = Ecriture.objects.create(
             journal=journal,

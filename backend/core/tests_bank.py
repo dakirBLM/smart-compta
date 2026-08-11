@@ -47,6 +47,113 @@ class BankStatementTestCase(TestCase):
             import_bank_statement(self.entreprise, data)
         self.assertIn("ne correspond pas au compte bancaire", str(ctx.exception))
 
+    def test_duplicate_operation_raises_error(self):
+        """Vérifier qu'une opération identique (date, ref, label, montant) est rejetée."""
+        # Créer une première opération
+        data1 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "CHQ-1001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        import_bank_statement(self.entreprise, data1)
+        
+        # Essayer d'importer la même opération à nouveau
+        data2 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "CHQ-1001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        with self.assertRaises(BankStatementError) as ctx:
+            import_bank_statement(self.entreprise, data2)
+        self.assertIn("Doublon détecté", str(ctx.exception))
+        self.assertIn("10/01/2026", str(ctx.exception))
+        self.assertIn("CHQ-1001", str(ctx.exception))
+        self.assertIn("120000", str(ctx.exception))
+
+    def test_similar_operation_different_amount_allowed(self):
+        """Vérifier qu'une opération similaire avec un montant différent est acceptée."""
+        data1 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "CHQ-1001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        import_bank_statement(self.entreprise, data1)
+        
+        # Même date, référence et libellé, mais montant différent → doit être accepté
+        data2 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "CHQ-1001",
+                    "sens": "credit",
+                    "montant": 150000.0,  # Montant différent
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        entries = import_bank_statement(self.entreprise, data2)
+        self.assertEqual(len(entries), 1)
+
+    def test_similar_operation_different_date_allowed(self):
+        """Vérifier qu'une opération similaire avec une date différente est acceptée."""
+        data1 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "CHQ-1001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        import_bank_statement(self.entreprise, data1)
+        
+        # Même référence, libellé et montant, mais date différente → doit être accepté
+        data2 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "11/01/2026",  # Date différente
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "CHQ-1001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        entries = import_bank_statement(self.entreprise, data2)
+        self.assertEqual(len(entries), 1)
+
     def test_bank_account_match_and_line_by_line_processing(self):
         data = {
             "numero_compte": "002000123456789",  # Correct matching account
@@ -373,3 +480,128 @@ class BankStatementIntegrationRulesTestCase(TestCase):
         d, c = self._import("OP DIVERSE NON IDENTIFIEE", "debit", 1000)
         self.assertEqual(d, "512000")
         self.assertEqual(c, HOLDING_ACCOUNT)
+
+    def test_duplicate_bank_operation_all_four_identical_raises_error(self):
+        """Si la date, la référence, le libellé et le montant sont identiques, lever une erreur."""
+        data_first = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        # Premier import -> succès
+        import_bank_statement(self.entreprise, data_first)
+
+        # Deuxième import identique -> erreur de doublon
+        with self.assertRaises(BankStatementError) as ctx:
+            import_bank_statement(self.entreprise, data_first)
+        self.assertIn("existe déjà", str(ctx.exception))
+
+    def test_duplicate_bank_operation_different_date_succeeds(self):
+        """Si la date est différente, ce n'est pas un doublon et l'import réussit."""
+        data1 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        data2 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "21/01/2026", # Différente date
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        import_bank_statement(self.entreprise, data1)
+        # Ne doit pas lever d'erreur
+        import_bank_statement(self.entreprise, data2)
+
+    def test_duplicate_bank_operation_different_reference_succeeds(self):
+        """Si la référence est différente, ce n'est pas un doublon et l'import réussit."""
+        data1 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        data2 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF456", # Différente référence
+            }],
+        }
+        import_bank_statement(self.entreprise, data1)
+        # Ne doit pas lever d'erreur
+        import_bank_statement(self.entreprise, data2)
+
+    def test_duplicate_bank_operation_different_libelle_succeeds(self):
+        """Si le libellé est différent, ce n'est pas un doublon et l'import réussit."""
+        data1 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        data2 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "AUTRE VIREMENT RECU", # Différent libellé
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        import_bank_statement(self.entreprise, data1)
+        # Ne doit pas lever d'erreur
+        import_bank_statement(self.entreprise, data2)
+
+    def test_duplicate_bank_operation_different_amount_succeeds(self):
+        """Si le montant est différent, ce n'est pas un doublon et l'import réussit."""
+        data1 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 15000,
+                "reference": "REF123",
+            }],
+        }
+        data2 = {
+            "numero_compte": "002000999999999",
+            "lignes": [{
+                "date": "20/01/2026",
+                "libelle": "VIREMENT RECU",
+                "sens": "debit",
+                "montant": 25000, # Différent montant
+                "reference": "REF123",
+            }],
+        }
+        import_bank_statement(self.entreprise, data1)
+        # Ne doit pas lever d'erreur
+        import_bank_statement(self.entreprise, data2)
+
