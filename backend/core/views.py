@@ -544,14 +544,16 @@ class JournalEcrituresView(APIView):
         entreprise = _accountant_entreprise(request, pk)
         journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
         
-        # For Banque journal, retrieve all bank ecritures of the entreprise
-        # so entries are always visible regardless of header fiscal year selection.
-        if journal.type_journal == Journal.Type.BANQUE:
+        # For Banque and Caisse journals, retrieve all ecritures of that
+        # type for the entreprise regardless of the selected fiscal year so
+        # entries remain visible even when multiple year-specific journals
+        # exist. Other standard journals are scoped to the journal's year.
+        if journal.type_journal in (Journal.Type.BANQUE, Journal.Type.CAISSE):
             qs = Ecriture.objects.filter(
                 journal__entreprise=entreprise,
-                journal__type_journal=Journal.Type.BANQUE,
+                journal__type_journal=journal.type_journal,
             ).prefetch_related("lignes").order_by("-date_ecriture", "-id")
-        elif journal.type_journal in (Journal.Type.CAISSE, Journal.Type.ACHAT, Journal.Type.VENTE, Journal.Type.OD):
+        elif journal.type_journal in (Journal.Type.ACHAT, Journal.Type.VENTE, Journal.Type.OD):
             qs = Ecriture.objects.filter(
                 journal__entreprise=entreprise,
                 journal__type_journal=journal.type_journal,

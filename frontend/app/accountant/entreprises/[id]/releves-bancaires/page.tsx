@@ -26,10 +26,13 @@ export default function RelevesBancairesPage() {
     api
       .get<Journal[]>(`/api/entreprises/${id}/journaux/`)
       .then((journaux) => {
-        const banqueJournaux = journaux.filter((j) => j.type_journal === "banque");
-        if (!banqueJournaux.length) return Promise.resolve([] as Ecriture[]);
+        // Include both BANQUE and CAISSE journals so linked caisse entries appear
+        const relevantJournaux = journaux.filter(
+          (j) => j.type_journal === "banque" || j.type_journal === "caisse"
+        );
+        if (!relevantJournaux.length) return Promise.resolve([] as Ecriture[]);
         return Promise.all(
-          banqueJournaux.map((b) =>
+          relevantJournaux.map((b) =>
             api.get<Ecriture[]>(`/api/entreprises/${id}/journaux/${b.id}/ecritures/`)
           )
         ).then((results) => results.flat());

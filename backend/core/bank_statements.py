@@ -471,12 +471,12 @@ def import_bank_statement(entreprise, data):
     created = []
     for row in lines:
         exercice = _resolve_exercice(entreprise, row["date"])
-        journal = journals.get(exercice.id)
+        journal = journals.get((exercice.id, Journal.Type.BANQUE))
         if not journal:
             journal, _ = Journal.objects.get_or_create(
                 entreprise=entreprise, annee=exercice, type_journal=Journal.Type.BANQUE
             )
-            journals[exercice.id] = journal
+            journals[(exercice.id, Journal.Type.BANQUE)] = journal
 
         try:
             confidence = int(row["confidence"]) if row["confidence"] is not None else None
@@ -525,4 +525,46 @@ def import_bank_statement(entreprise, data):
             montant_credit=row["amount"],
         )
         created.append(entry)
+
+        # Automatic linked CAISSE entry for Versement operations
+        try:
+            lib_norm = _normalize_label(row["libelle"])
+        except Exception:
+            lib_norm = (row.get("libelle") or "").upper()
+        if _label_contains_any(lib_norm, _KW_VERSEMENT):
+            # Ensure a CAISSE journal exists for this exercice
+            caisse_journal = journals.get((exercice.id, Journal.Type.CAISSE))
+            if not caisse_journal:
+                caisse_journal, _ = Journal.objects.get_or_create(
+                    entreprise=entreprise, annee=exercice, type_journal=Journal.Type.CAISSE
+                )
+                journals[(exercice.id, Journal.Type.CAISSE)] = caisse_journal
+
+            # Create the caisse entry: 581000 Debit / 530000 Credit
+            caisse_entry = Ecriture.objects.create(
+                journal=caisse_journal,
+                date_ecriture=row["date"],
+                numero_piece=ref,
+                fournisseur_client=row["tiers"],
+                source=Ecriture.Source.IMPORT,
+                confiance_ia=confidence,
+                statut=Ecriture.Statut.VALIDE,
+                mode_paiement="versement",
+                image_url=str(data.get("image_url") or ""),
+            )
+            LigneEcriture.objects.create(
+                ecriture=caisse_entry,
+                numero_compte="581000",
+                libelle=row["libelle"],
+                montant_debit=row["amount"],
+                montant_credit=Decimal("0"),
+            )
+            LigneEcriture.objects.create(
+                ecriture=caisse_entry,
+                numero_compte="530000",
+                libelle=row["libelle"],
+                montant_debit=Decimal("0"),
+                montant_credit=row["amount"],
+            )
+            created.append(caisse_entry)
     return created
