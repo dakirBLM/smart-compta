@@ -111,7 +111,22 @@ export default function RelevesBancairesPage() {
 
                 return (
                   <Card key={e.id} className="space-y-3">
-                    <div className="flex items-center justify-between gap-4 border-b pb-2">
+                  <div className="flex flex-col gap-4 border-b pb-2 md:flex-row md:items-center md:justify-between">
+                    <div className="flex items-start gap-4">
+                      {e.image_url && (
+                        <button
+                          type="button"
+                          onClick={() => window.open(e.image_url, "_blank")}
+                          className="overflow-hidden rounded-lg border border-gray-200 bg-gray-100 shadow-sm transition hover:shadow-md"
+                          aria-label="Afficher le relevé bancaire en grand"
+                        >
+                          <img
+                            src={e.image_url}
+                            alt="Miniature du relevé bancaire"
+                            className="h-20 w-20 object-cover"
+                          />
+                        </button>
+                      )}
                       <div>
                         <div className="flex items-center gap-2">
                           <span className="font-mono text-xs font-bold text-brand">
@@ -128,11 +143,12 @@ export default function RelevesBancairesPage() {
                           {e.fournisseur_client && ` · Tiers : ${e.fournisseur_client}`}
                         </div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-mono font-bold text-brand">{formatDZD(Number(montant))}</div>
-                        <div className="text-xs text-gray-400">Écriture N° {e.id}</div>
-                      </div>
                     </div>
+                    <div className="text-right md:text-right">
+                      <div className="font-mono font-bold text-brand">{formatDZD(Number(montant))}</div>
+                      <div className="text-xs text-gray-400">Écriture N° {e.id}</div>
+                    </div>
+                  </div>
 
                     {/* Single accounting table view for history record */}
                     <div className="overflow-x-auto rounded border bg-gray-50/50">

@@ -94,6 +94,7 @@ export function BankStatementFlow({
   const [submitting, setSubmitting] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
   const [savedEcritures, setSavedEcritures] = useState<Ecriture[]>([]);
+  const [imageUrl, setImageUrl] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
 
@@ -128,6 +129,7 @@ export function BankStatementFlow({
       clearInterval(timer);
       setStepDone(4);
       setNumeroCompte(res.data.numero_compte || "");
+      setImageUrl(res.image_url || "");
 
       // Prefer the backend-computed accounting preview (ecritures_preview) which
       // already applies classify_operation() rules correctly.
@@ -257,6 +259,7 @@ export function BankStatementFlow({
       // Reconstruct payload for backend import
       const payload: BankStatementExtraction = {
         numero_compte: numeroCompte,
+        image_url: imageUrl,
         lignes: rows.map((r) => {
           const isDebit = r.compte_debit.trim().startsWith("512");
           return {
@@ -297,6 +300,7 @@ export function BankStatementFlow({
     setRows([]);
     setError("");
     setSavedEcritures([]);
+    setImageUrl("");
     setRedirectIn(5);
   }
 

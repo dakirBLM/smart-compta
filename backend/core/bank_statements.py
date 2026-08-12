@@ -398,38 +398,60 @@ def _resolve_exercice(entreprise, date):
 def check_bank_operation_duplicate(entreprise, operation_date, reference, label, amount):
     """Vérifie si une opération bancaire identique existe déjà.
     
-    Compare selon les 4 critères :
-    1. Date de l'opération
-    2. N° de pièce (référence)
-    3. Libellé
-    4. Montant
+    Logique conditionnelle :
+    - Si libellé contient "SORT CHQ" → Comparer les 4 critères :
+      1. Date de l'opération
+      2. N° de pièce (référence)
+      3. Libellé
+      4. Montant
+      (Tous les 4 doivent correspondre)
+    
+    - Sinon → Vérifier uniquement l'unicité du n° de pièce
     
     Retourne l'Ecriture existante si un doublon est trouvé, None sinon.
     """
     from django.db.models import Q
     
-    # Chercher une ecriture bancaire avec la même date, référence
-    duplicate = Ecriture.objects.filter(
-        journal__entreprise=entreprise,
-        journal__type_journal=Journal.Type.BANQUE,
-        date_ecriture=operation_date,
-        numero_piece=reference,
-    ).first()
+    label_normalized = (label or "").upper()
+    is_sort_chq = "SORT CHQ" in label_normalized
     
-    if not duplicate:
+    # Pour les opérations SORT CHQ : vérifier les 4 critères
+    if is_sort_chq:
+        # Chercher une ecriture bancaire avec la même date, référence
+        duplicate = Ecriture.objects.filter(
+            journal__entreprise=entreprise,
+            journal__type_journal=Journal.Type.BANQUE,
+            date_ecriture=operation_date,
+            numero_piece=reference,
+        ).first()
+        
+        if not duplicate:
+            return None
+        
+        # Vérifier que au moins une ligne a le même libellé ET montant
+        matching_line = duplicate.lignes.filter(
+            libelle=label
+        ).filter(
+            Q(montant_debit=amount) | Q(montant_credit=amount)
+        ).first()
+        
+        if matching_line:
+            return duplicate
+        
         return None
     
-    # Vérifier que au moins une ligne a le même libellé ET montant
-    matching_line = duplicate.lignes.filter(
-        libelle=label
-    ).filter(
-        Q(montant_debit=amount) | Q(montant_credit=amount)
-    ).first()
-    
-    if matching_line:
-        return duplicate
-    
-    return None
+    # Pour les autres opérations : vérifier seulement l'unicité du n° de pièce
+    else:
+        duplicate = Ecriture.objects.filter(
+            journal__entreprise=entreprise,
+            journal__type_journal=Journal.Type.BANQUE,
+            numero_piece=reference,
+        ).first()
+        
+        if duplicate:
+            return duplicate
+        
+        return None
 
 
 @transaction.atomic
@@ -483,6 +505,7 @@ def import_bank_statement(entreprise, data):
             confiance_ia=confidence,
             statut=Ecriture.Statut.VALIDE,
             mode_paiement="relevé bancaire",
+            image_url=str(data.get("image_url") or ""),
         )
         compte_debit, compte_credit = classify_operation(
             row["libelle"], row["direction"], row["counterpart"], row["tiers"], entreprise
