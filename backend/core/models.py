@@ -121,6 +121,7 @@ class Ecriture(models.Model):
     confiance_ia = models.IntegerField(null=True, blank=True)
     statut = models.CharField(max_length=20, choices=Statut.choices, default=Statut.EN_COURS)
     mode_paiement = models.CharField(max_length=50, blank=True, default="")
+    image_url = models.CharField(max_length=500, blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

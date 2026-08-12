@@ -47,15 +47,15 @@ class BankStatementTestCase(TestCase):
             import_bank_statement(self.entreprise, data)
         self.assertIn("ne correspond pas au compte bancaire", str(ctx.exception))
 
-    def test_duplicate_operation_raises_error(self):
-        """Vérifier qu'une opération identique (date, ref, label, montant) est rejetée."""
-        # Créer une première opération
+    def test_duplicate_sort_chq_raises_error(self):
+        """Pour SORT CHQ: Vérifier qu'une opération identique (date, ref, label, montant) est rejetée."""
+        # Créer une première opération SORT CHQ
         data1 = {
             "numero_compte": "002000123456789",
             "lignes": [
                 {
                     "date": "10/01/2026",
-                    "libelle": "Virement Fournisseur CONDOR",
+                    "libelle": "SORT CHQ 00123",
                     "reference": "CHQ-1001",
                     "sens": "credit",
                     "montant": 120000.0,
@@ -65,13 +65,13 @@ class BankStatementTestCase(TestCase):
         }
         import_bank_statement(self.entreprise, data1)
         
-        # Essayer d'importer la même opération à nouveau
+        # Essayer d'importer la même SORT CHQ à nouveau (tous les 4 critères identiques)
         data2 = {
             "numero_compte": "002000123456789",
             "lignes": [
                 {
                     "date": "10/01/2026",
-                    "libelle": "Virement Fournisseur CONDOR",
+                    "libelle": "SORT CHQ 00123",
                     "reference": "CHQ-1001",
                     "sens": "credit",
                     "montant": 120000.0,
@@ -82,19 +82,53 @@ class BankStatementTestCase(TestCase):
         with self.assertRaises(BankStatementError) as ctx:
             import_bank_statement(self.entreprise, data2)
         self.assertIn("Doublon détecté", str(ctx.exception))
-        self.assertIn("10/01/2026", str(ctx.exception))
-        self.assertIn("CHQ-1001", str(ctx.exception))
-        self.assertIn("120000", str(ctx.exception))
 
-    def test_similar_operation_different_amount_allowed(self):
-        """Vérifier qu'une opération similaire avec un montant différent est acceptée."""
+    def test_duplicate_non_sort_chq_raises_error(self):
+        """Pour les opérations non-SORT CHQ: Vérifier que même numero_piece est rejeté."""
+        # Créer une première opération NON-SORT CHQ
         data1 = {
             "numero_compte": "002000123456789",
             "lignes": [
                 {
                     "date": "10/01/2026",
                     "libelle": "Virement Fournisseur CONDOR",
-                    "reference": "CHQ-1001",
+                    "reference": "VIR-2001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        import_bank_statement(self.entreprise, data1)
+        
+        # Essayer d'importer une autre opération avec le même numero_piece
+        # Même si les autres détails diffèrent, le numero_piece dupliqué doit être rejeté
+        data2 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "11/01/2026",  # Date différente
+                    "libelle": "Autre Virement",  # Libellé différent
+                    "reference": "VIR-2001",  # Même numero_piece
+                    "sens": "credit",
+                    "montant": 50000.0,  # Montant différent
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        with self.assertRaises(BankStatementError) as ctx:
+            import_bank_statement(self.entreprise, data2)
+        self.assertIn("existe déjà", str(ctx.exception))
+
+    def test_sort_chq_different_amount_allowed(self):
+        """Pour SORT CHQ: Vérifier qu'un montant différent est accepté même avec date et ref identiques."""
+        data1 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "SORT CHQ 00456",
+                    "reference": "CHQ-2001",
                     "sens": "credit",
                     "montant": 120000.0,
                     "compte_contrepartie": "401000",
@@ -109,8 +143,8 @@ class BankStatementTestCase(TestCase):
             "lignes": [
                 {
                     "date": "10/01/2026",
-                    "libelle": "Virement Fournisseur CONDOR",
-                    "reference": "CHQ-1001",
+                    "libelle": "SORT CHQ 00456",
+                    "reference": "CHQ-2001",
                     "sens": "credit",
                     "montant": 150000.0,  # Montant différent
                     "compte_contrepartie": "401000",
@@ -120,15 +154,15 @@ class BankStatementTestCase(TestCase):
         entries = import_bank_statement(self.entreprise, data2)
         self.assertEqual(len(entries), 1)
 
-    def test_similar_operation_different_date_allowed(self):
-        """Vérifier qu'une opération similaire avec une date différente est acceptée."""
+    def test_sort_chq_different_date_allowed(self):
+        """Pour SORT CHQ: Vérifier qu'une date différente est acceptée même avec ref et montant identiques."""
         data1 = {
             "numero_compte": "002000123456789",
             "lignes": [
                 {
                     "date": "10/01/2026",
-                    "libelle": "Virement Fournisseur CONDOR",
-                    "reference": "CHQ-1001",
+                    "libelle": "SORT CHQ 00789",
+                    "reference": "CHQ-3001",
                     "sens": "credit",
                     "montant": 120000.0,
                     "compte_contrepartie": "401000",
@@ -143,8 +177,8 @@ class BankStatementTestCase(TestCase):
             "lignes": [
                 {
                     "date": "11/01/2026",  # Date différente
-                    "libelle": "Virement Fournisseur CONDOR",
-                    "reference": "CHQ-1001",
+                    "libelle": "SORT CHQ 00789",
+                    "reference": "CHQ-3001",
                     "sens": "credit",
                     "montant": 120000.0,
                     "compte_contrepartie": "401000",

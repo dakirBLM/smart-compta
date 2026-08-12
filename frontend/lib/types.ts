@@ -144,6 +144,7 @@ export interface Ecriture {
   confiance_ia: number | null;
   statut: Statut;
   mode_paiement: string;
+  image_url?: string;
   created_at: string;
   lignes: LigneEcriture[];
   total_debit: number;
@@ -217,6 +218,7 @@ export interface BankStatementLigne {
 export interface BankStatementExtraction {
   numero_compte: string;
   lignes: BankStatementLigne[];
+  image_url?: string;
 }
 
 export interface BankStatementImportResult {

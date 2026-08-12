@@ -190,7 +190,7 @@ class EcritureSerializer(serializers.ModelSerializer):
         fields = [
             "id", "journal", "journal_nom", "date_ecriture", "numero_piece",
             "fournisseur_client", "source", "confiance_ia", "statut",
-            "mode_paiement", "created_at", "lignes",
+            "mode_paiement", "image_url", "created_at", "lignes",
             "total_debit", "total_credit",
         ]
         read_only_fields = ["journal", "created_at"]

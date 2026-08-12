@@ -66,15 +66,16 @@ def _accountant_entreprise(request, pk):
 
 def _assert_unique_piece(entreprise, numero, exclude_id=None, date_ecriture=None, 
                          libelle=None, montant=None):
-    """Check for duplicate operations only if ALL 4 criteria match:
-    1. Date (date_ecriture)
-    2. N° de pièce (numero_piece) 
-    3. Libellé
-    4. Montant
+    """Check for duplicate operations with conditional logic:
     
-    All four must match to be considered a duplicate.
-    If date_ecriture, libelle, or montant are not provided, perform legacy 
-    numero_piece uniqueness check.
+    - If libelle contains "SORT CHQ" → Check all 4 criteria:
+      1. Date (date_ecriture)
+      2. N° de pièce (numero_piece) 
+      3. Libellé
+      4. Montant
+      All four must match to be considered a duplicate.
+    
+    - Otherwise → Only check numero_piece uniqueness (legacy behavior)
     """
     from rest_framework.exceptions import ValidationError
     from decimal import Decimal, InvalidOperation
@@ -84,8 +85,11 @@ def _assert_unique_piece(entreprise, numero, exclude_id=None, date_ecriture=None
     if not numero:
         return
     
-    # If all 4 criteria are provided, check for a complete match
-    if date_ecriture is not None and libelle is not None and montant is not None:
+    libelle_normalized = (libelle or "").upper() if libelle else ""
+    is_sort_chq = "SORT CHQ" in libelle_normalized
+    
+    # For SORT CHQ operations: check all 4 criteria
+    if is_sort_chq and date_ecriture is not None and libelle is not None and montant is not None:
         try:
             # Convert montant to Decimal if needed
             if isinstance(montant, str):
@@ -127,16 +131,17 @@ def _assert_unique_piece(entreprise, numero, exclude_id=None, date_ecriture=None
         except (InvalidOperation, ValueError):
             return  # Skip duplicate check if montant is invalid
     
-    # Legacy behavior: if not all 4 criteria provided, just check numero_piece uniqueness
-    qs = Ecriture.objects.filter(
-        journal__entreprise=entreprise, numero_piece=numero
-    )
-    if exclude_id:
-        qs = qs.exclude(pk=exclude_id)
-    if qs.exists():
-        raise ValidationError(
-            {"numero_piece": f"Une écriture avec le numéro « {numero} » existe déjà."}
+    # For non-SORT CHQ operations: only check numero_piece uniqueness
+    if not is_sort_chq or (is_sort_chq and not (date_ecriture and libelle and montant)):
+        qs = Ecriture.objects.filter(
+            journal__entreprise=entreprise, numero_piece=numero
         )
+        if exclude_id:
+            qs = qs.exclude(pk=exclude_id)
+        if qs.exists():
+            raise ValidationError(
+                {"numero_piece": f"Une écriture avec le numéro « {numero} » existe déjà."}
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -921,6 +926,19 @@ class BankStatementUploadView(APIView):
         except (WebhookError, BankStatementError) as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        image_url = ""
+        image_url = str(
+            data.get("image_url") or
+            data.get("file_url") or
+            data.get("image") or
+            ""
+        )
+        if not image_url:
+            try:
+                image_url = upload_invoice_image(raw, filename=name) or ""
+            except WebhookError:
+                image_url = ""
+
         # Compute accounting preview so the frontend can show the double-entry
         # table before the accountant confirms (no DB writes at this stage).
         ecritures_preview = preview_entries(data)
@@ -929,6 +947,7 @@ class BankStatementUploadView(APIView):
             "data": data,
             "numero_compte_valide": True,
             "ecritures_preview": ecritures_preview,
+            "image_url": image_url,
         })
 
 

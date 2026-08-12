@@ -169,7 +169,7 @@ export async function scannerUpload(
 export async function bankStatementUpload(
   file: File,
   entrepriseId: number
-): Promise<{ data: BankStatementExtraction; numero_compte_valide: boolean; ecritures_preview?: EcrituresPreviewRow[] }> {
+): Promise<{ data: BankStatementExtraction; numero_compte_valide: boolean; ecritures_preview?: EcrituresPreviewRow[]; image_url?: string }> {
   if (file.size > MAX_UPLOAD_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(1);
     throw new ApiError(
