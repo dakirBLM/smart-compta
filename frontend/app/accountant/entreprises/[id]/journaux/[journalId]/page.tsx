@@ -65,6 +65,8 @@ export default function JournalPage() {
   const [searchCompte, setSearchCompte] = useState("");
   const [searchDate, setSearchDate] = useState("");
   const [showNewJournal, setShowNewJournal] = useState(false);
+  const [chooserJournals, setChooserJournals] = useState<Journal[]>([]);
+  const [showChooser, setShowChooser] = useState(false);
   const searchParams = useSearchParams();
   const [newName, setNewName] = useState("");
 
@@ -89,22 +91,62 @@ export default function JournalPage() {
     }
     setLoading(true);
     (async () => {
-      const all = await api.get<Journal[]>(
-        `/api/entreprises/${id}/journaux/?annee=${annee}`
-      );
+      // First try journals for the currently selected year.
+      let all = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/?annee=${annee}`);
       setJournals(all);
       let j: Journal | undefined;
       if (isNumeric) {
         j = all.find((x) => x.id === Number(type));
       } else {
-        j = await api.post<Journal>(`/api/entreprises/${id}/journaux/`, {
-          type_journal: type,
-          annee: exercice.id,
-        });
+        // Reuse existing standard journal (banque/caisse/achat/vente/od) if present.
+        // Prefer a journal that already contains entries (ecritures_count>0),
+        // falling back to the first matching journal.
+        const matching = all.filter((x) => x.type_journal === type);
+        j = matching.find((x) => (x as any).ecritures_count > 0) || matching[0];
+
+        // If no journal for the selected year, try across all years to find a
+        // populated one (avoids creating an empty journal when a populated
+        // same-type journal exists in another exercice).
+        if (!j) {
+          const allAny = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
+          setJournals(allAny);
+          const matchingAny = allAny.filter((x) => x.type_journal === type);
+          j = matchingAny.find((x) => (x as any).ecritures_count > 0) || matchingAny[0];
+        }
+
+        // If still no journal, create one for the current year.
+        if (!j) {
+          j = await api.post<Journal>(`/api/entreprises/${id}/journaux/`, {
+            type_journal: type,
+            annee: exercice.id,
+          });
+        }
       }
       if (j) {
         setJournal(j);
         await loadEcritures(j);
+        // If the route used a symbolic type (e.g. /journaux/caisse), navigate
+        // to the concrete journal id so the UI consistently displays the
+        // populated journal and subsequent operations target the correct id.
+        if (!isNumeric) {
+          try {
+            router.push(`${base}/journaux/${j.id}${qsAnnee}`);
+          } catch (e) {
+            // ignore navigation errors in client environments
+          }
+        }
+      }
+      // If multiple same-type journals exist across years, offer a chooser
+      // so the accountant can pick the populated one manually.
+      if (!isNumeric) {
+        const allAny = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
+        const matchingAny = allAny.filter((x) => x.type_journal === type);
+        if (matchingAny.length > 1) {
+          setChooserJournals(matchingAny);
+          // Only show chooser when the currently selected journal is empty
+          // to avoid interrupting the happy path.
+          if (!j || (j as any).ecritures_count === 0) setShowChooser(true);
+        }
       }
     })().finally(() => setLoading(false));
   }, [entreprise, annee, id, type, isNumeric, loadEcritures]);
@@ -127,6 +169,14 @@ export default function JournalPage() {
   }
 
   const customJournals = journals.filter((j) => j.type_journal === "autre");
+
+  function chooseJournal(j: Journal) {
+    setShowChooser(false);
+    setJournal(j);
+    loadEcritures(j);
+    // Update the URL to the chosen journal so the route reflects selection.
+    router.push(`${base}/journaux/${j.id}${qsAnnee}`);
+  }
 
   async function saveEcriture(payload: Parameters<typeof api.post>[1]) {
     if (!journal) return;
@@ -366,6 +416,32 @@ export default function JournalPage() {
             <Button variant="success" onClick={createJournal} disabled={!newName.trim()}>
               {t("creer")}
             </Button>
+          </div>
+        </div>
+      </Modal>
+
+      <Modal
+        open={showChooser}
+        onClose={() => setShowChooser(false)}
+        title="Sélectionner un journal"
+      >
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">Plusieurs journaux de ce type existent. Choisissez celui à afficher :</p>
+          <div className="max-h-64 overflow-auto">
+            {chooserJournals.map((cj) => (
+              <div key={cj.id} className="flex items-center justify-between gap-3 rounded-md border p-3 mb-2">
+                <div>
+                  <div className="font-medium">{cj.type_label} — [ID {cj.id}]</div>
+                  <div className="text-xs text-gray-500">{cj.ecritures_count} écriture{(cj as any).ecritures_count !== 1 ? 's' : ''} — créé le {new Date(cj.created_at).toLocaleDateString()}</div>
+                </div>
+                <div>
+                  <Button variant="outline" size="sm" onClick={() => chooseJournal(cj)}>Ouvrir</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="flex justify-end">
+            <Button variant="ghost" onClick={() => setShowChooser(false)}>Fermer</Button>
           </div>
         </div>
       </Modal>

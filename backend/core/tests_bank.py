@@ -322,6 +322,61 @@ class BankStatementTestCase(TestCase):
         l_debit = ec.lignes.filter(montant_debit__gt=0).first()
         self.assertEqual(l_debit.numero_compte, "512000")
 
+    def test_versement_creates_banque_and_caisse_entries(self):
+        """When import contains VERSEMENT, create both Banque and Caisse entries."""
+        data = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "20/02/2026",
+                    "libelle": "VERSEMENT ESPECES",
+                    "reference": "VIR-5001",
+                    "sens": "debit",
+                    "montant": 20000.0,
+                }
+            ],
+        }
+
+        created = import_bank_statement(self.entreprise, data)
+        # Expect two created entries: Banque + Caisse
+        self.assertEqual(len(created), 2)
+
+        journal_banque = Journal.objects.get(entreprise=self.entreprise, type_journal=Journal.Type.BANQUE)
+        journal_caisse = Journal.objects.get(entreprise=self.entreprise, type_journal=Journal.Type.CAISSE)
+
+        ecritures_b = Ecriture.objects.filter(journal=journal_banque)
+        ecritures_c = Ecriture.objects.filter(journal=journal_caisse)
+        self.assertEqual(ecritures_b.count(), 1)
+        self.assertEqual(ecritures_c.count(), 1)
+
+        eb = ecritures_b.first()
+        ec = ecritures_c.first()
+        # Same date and reference
+        self.assertEqual(eb.date_ecriture, ec.date_ecriture)
+        self.assertEqual(eb.numero_piece, ec.numero_piece)
+
+        # Banque entry: 512000 Debit / 581000 Credit
+        blines = list(eb.lignes.all())
+        b_debit = [l for l in blines if float(l.montant_debit) > 0][0]
+        b_credit = [l for l in blines if float(l.montant_credit) > 0][0]
+        self.assertEqual(b_debit.numero_compte, "512000")
+        self.assertEqual(b_credit.numero_compte, "581000")
+        self.assertEqual(float(b_debit.montant_debit), 20000.0)
+        self.assertEqual(float(b_credit.montant_credit), 20000.0)
+
+        # Caisse entry: 581000 Debit / 530000 Credit
+        clines = list(ec.lignes.all())
+        c_debit = [l for l in clines if float(l.montant_debit) > 0][0]
+        c_credit = [l for l in clines if float(l.montant_credit) > 0][0]
+        self.assertEqual(c_debit.numero_compte, "581000")
+        self.assertEqual(c_credit.numero_compte, "530000")
+        self.assertEqual(float(c_debit.montant_debit), 20000.0)
+        self.assertEqual(float(c_credit.montant_credit), 20000.0)
+
+        # Ensure 530000 is NOT present in the banque lines
+        accounts_b = {l.numero_compte for l in blines}
+        self.assertNotIn("530000", accounts_b)
+
 
 class ClassifyOperationTestCase(TestCase):
     """Tests unitaires de classify_operation() pour chaque règle comptable."""
