@@ -3,15 +3,17 @@
 CSV expected columns: classe, numero_compte, libelle
 
 Usage:
-  python manage.py import_scf /path/to/LA_TABLE_SCF.csv
+  python manage.py import_scf                          # use backend/data/LA_TABLE_SCF.csv
+  python manage.py import_scf /path/to/LA_TABLE_SCF.csv  # custom path
 
-If no path provided, it will try the user's Downloads folder (Windows):
-C:\\Users\\<username>\\Downloads\\LA_TABLE_SCF.csv
+Default path (no argument): backend/data/LA_TABLE_SCF.csv
+This works locally and in production (Vercel, etc.) without relying on user's Downloads folder.
 """
 import csv
-import os
+from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.db import transaction
+from django.conf import settings
 from core.models import SCFAccount
 
 
@@ -19,17 +21,20 @@ class Command(BaseCommand):
     help = "Import SCF accounts from a CSV file into SCFAccount (no duplicates)."
 
     def add_arguments(self, parser):
-        parser.add_argument("csv_path", nargs="?", help="Path to the CSV file")
+        parser.add_argument("csv_path", nargs="?", help="Path to the CSV file (default: backend/data/LA_TABLE_SCF.csv)")
 
     def handle(self, *args, **options):
-        path = options.get("csv_path")
-        if not path:
-            # Try default Downloads path on Windows
-            home = os.path.expanduser("~")
-            path = os.path.join(home, "Downloads", "LA_TABLE_SCF.csv")
-
-        if not os.path.exists(path):
-            self.stderr.write(self.style.ERROR(f"CSV file not found: {path}"))
+        path_arg = options.get("csv_path")
+        if path_arg:
+            # User provided a custom path
+            path = Path(path_arg)
+        else:
+            # Default to backend/data/LA_TABLE_SCF.csv (relative to BASE_DIR)
+            base_dir = settings.BASE_DIR
+            path = base_dir / "data" / "LA_TABLE_SCF.csv"
+        
+        if not path.exists():
+            self.stderr.write(self.style.ERROR(f"CSV file not found: {path.resolve()}"))
             return
 
         created = 0
