@@ -83,6 +83,16 @@ export default function EntreprisesPage() {
     selectEntreprise(selected);
   }
 
+  async function deleteEntreprise() {
+    if (!selected) return;
+    await api.del(`/api/entreprises/${selected.id}/`);
+    setModal(null);
+    setSelected(null);
+    setSelectedYear(null);
+    setClients([]);
+    load();
+  }
+
   return (
     <AppShell title={t("entreprises")}>
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[200px_1fr]">
@@ -272,6 +282,29 @@ export default function EntreprisesPage() {
               load();
             }}
           />
+        )}
+      </Modal>
+
+      <Modal
+        open={modal === "delete"}
+        onClose={() => setModal(null)}
+        title="Supprimer l'entreprise"
+      >
+        {selected && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Voulez-vous vraiment supprimer <strong>{selected.nom}</strong> ?
+              Cette action supprimera aussi ses données associées.
+            </p>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => setModal(null)}>
+                Annuler
+              </Button>
+              <Button variant="danger" onClick={deleteEntreprise}>
+                Supprimer
+              </Button>
+            </div>
+          </div>
         )}
       </Modal>
     </AppShell>

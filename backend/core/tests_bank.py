@@ -410,6 +410,16 @@ class ClassifyOperationTestCase(TestCase):
         self.assertEqual(d, "401000")
         self.assertEqual(c, BANK_ACCOUNT)
 
+    def test_chq_nos_clt_uses_chq_retour_logic(self):
+        d, c = classify_operation("CHQ NOS CLT 000123", "credit", "", "")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
+    def test_ch_nos_clt_alias_uses_chq_retour_logic(self):
+        d, c = classify_operation("CH NOS CLT 000123", "credit", "", "")
+        self.assertEqual(d, "401000")
+        self.assertEqual(c, BANK_ACCOUNT)
+
     # ── Règle SORT CHQ : analyse du contexte (jamais 401000 automatique) ───────
     def test_sort_chq_frais_context(self):
         """SORT CHQ avec contexte de frais → Débit 627000 / Crédit 512000."""

@@ -43,6 +43,9 @@ urlpatterns = [
          views.BankStatementImportView.as_view()),
     # Local mock AI webhook (dev only) — set WEBHOOK_URL to this to demo.
     path("scanner/mock-webhook/", views.MockWebhookView.as_view()),
+     # SCF (Plan comptable)
+     path("scf/", views.SCFListView.as_view()),
+     path("entreprises/<int:pk>/scf/", views.SCFListView.as_view()),
     # Factures
     path("factures/", views.FactureListCreateView.as_view()),
     path("factures/<int:pk>/", views.FactureDetailView.as_view()),
