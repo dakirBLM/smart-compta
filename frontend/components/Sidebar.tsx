@@ -379,6 +379,13 @@ export function Sidebar({
               onNavigate={nav}
             />
             <Item
+              href={`${base}/scf`}
+              icon={<Scale size={20} />}
+              label={"Tableau SCF"}
+              active={is(`${base}/scf`)}
+              onNavigate={nav}
+            />
+            <Item
               href={`${base}/messages`}
               icon={<MessageSquare size={20} />}
               label={t("messages")}

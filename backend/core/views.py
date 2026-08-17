@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -18,6 +19,7 @@ from .bank_statements import (
 from .models import (
     ClientAccess,
     ClientComptable,
+    SCFAccount,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
@@ -54,6 +56,7 @@ from .serializers import (
     FournisseurSerializer,
     JournalSerializer,
     MessageSerializer,
+    SCFAccountSerializer,
 )
 
 User = get_user_model()
@@ -147,6 +150,40 @@ def _assert_unique_piece(entreprise, numero, exclude_id=None, date_ecriture=None
 # --------------------------------------------------------------------------- #
 # Entreprises
 # --------------------------------------------------------------------------- #
+
+
+class SCFListView(APIView):
+    """Return SCF accounts grouped by Classe 1..7.
+
+    - GET /api/scf/ -> global accounts (entreprise is null)
+    - GET /api/entreprises/<pk>/scf/ -> global + entreprise-specific accounts
+    """
+    permission_classes = [AllowAny]
+
+    def get(self, request, pk=None):
+        entreprise = None
+        if pk:
+            try:
+                entreprise = Entreprise.objects.get(pk=pk)
+            except Entreprise.DoesNotExist:
+                return Response(status=status.HTTP_404_NOT_FOUND)
+
+        qs = SCFAccount.objects.filter(entreprise__isnull=True)
+        if entreprise:
+            # include entreprise-specific accounts as well
+            qs = SCFAccount.objects.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
+
+        accounts = qs.order_by("classe", "numero_compte")
+        data = SCFAccountSerializer(accounts, many=True).data
+
+        # Group by classe 1..7
+        result = {str(i): [] for i in range(1, 8)}
+        for a in data:
+            classe = str(a.get("classe") or 0)
+            if classe in result:
+                result[classe].append({"numero_compte": a["numero_compte"], "libelle": a["libelle"]})
+        return Response(result)
+
 class EntrepriseListCreateView(APIView):
     permission_classes = [IsAccountant]
 

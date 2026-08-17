@@ -192,6 +192,41 @@ class ClientComptable(models.Model):
         return f"{self.nom} ({self.numero_compte})"
 
 
+class SCFAccount(models.Model):
+    """Plan comptable SCF — comptes de référence.
+
+    - `entreprise` nullable: when null the account is a global reference
+      imported from the CSV. When set, the account is specific to that entreprise
+      (e.g. fournisseurs/clients créés pour une entreprise).
+    - `classe` is derived from the first digit of `numero_compte`.
+    """
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="scf_accounts",
+        null=True, blank=True,
+    )
+    numero_compte = models.CharField(max_length=20)
+    libelle = models.CharField(max_length=255)
+    classe = models.IntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ("entreprise", "numero_compte")
+        ordering = ["classe", "numero_compte"]
+
+    def save(self, *args, **kwargs):
+        # Determine classe from first digit when possible.
+        try:
+            self.classe = int(str(self.numero_compte).strip()[0])
+        except Exception:
+            # Fallback: set to 0 if cannot determine
+            self.classe = 0
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        ent = f" ({self.entreprise.nom})" if self.entreprise else ""
+        return f"{self.numero_compte} - {self.libelle}{ent}"
+
+
 class Message(models.Model):
     """Message entre le comptable et un client (portail) d'une entreprise."""
     entreprise = models.ForeignKey(

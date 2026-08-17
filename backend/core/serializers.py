@@ -4,6 +4,7 @@ from rest_framework import serializers
 from .models import (
     ClientAccess,
     ClientComptable,
+    SCFAccount,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
@@ -304,3 +305,10 @@ class FactureSerializer(serializers.ModelSerializer):
         if obj.ecriture_id:
             return EcritureInlineSerializer(obj.ecriture).data
         return None
+
+
+class SCFAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SCFAccount
+        fields = ["id", "entreprise", "numero_compte", "libelle", "classe", "created_at"]
+        read_only_fields = ["created_at"]

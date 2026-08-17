@@ -3,7 +3,8 @@
 import { Plus, Trash2, ChevronDown } from "lucide-react";
 import { useState } from "react";
 import { Button, Input, Label } from "@/components/ui";
-import { SCF_ACCOUNTS } from "@/lib/algeria";
+import { useEffect } from "react";
+import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { Ecriture, LigneEcriture } from "@/lib/types";
 import { formatDZD, sumLignes } from "@/lib/utils";
@@ -173,6 +174,7 @@ export function EcritureForm({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [scfAccounts, setScfAccounts] = useState<{ compte: string; libelle: string }[]>([]);
   const [activeCompteIndex, setActiveCompteIndex] = useState<number | null>(null);
   const [compteFilter, setCompteFilter] = useState("");
 
@@ -182,7 +184,24 @@ export function EcritureForm({
     lignes.map((l) => ({ debit: l.montant_debit, credit: l.montant_credit }))
   );
 
-  const filteredScfAccounts = SCF_ACCOUNTS.filter(
+  useEffect(() => {
+    let mounted = true;
+    api
+      .get<Record<string, { numero_compte: string; libelle: string }[]>>("/api/scf/")
+      .then((data) => {
+        const merged: { compte: string; libelle: string }[] = [];
+        Object.values(data).forEach((arr: any) => {
+          (arr || []).forEach((a: any) => merged.push({ compte: a.numero_compte, libelle: a.libelle }));
+        });
+        if (mounted) setScfAccounts(merged);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const filteredScfAccounts = scfAccounts.filter(
     (a) =>
       a.compte.includes(compteFilter) ||
       a.libelle.toLowerCase().includes(compteFilter.toLowerCase())
@@ -326,7 +345,7 @@ export function EcritureForm({
 
       {/* SCF account suggestions for the Compte field */}
       <datalist id="scf-accounts">
-        {SCF_ACCOUNTS.map((a) => (
+        {scfAccounts.map((a) => (
           <option key={a.compte} value={a.compte}>
             {a.compte} — {a.libelle}
           </option>
@@ -361,7 +380,7 @@ export function EcritureForm({
                     }}
                     onChange={(e) => {
                       const v = e.target.value;
-                      const match = SCF_ACCOUNTS.find((a) => a.compte === v);
+                      const match = scfAccounts.find((a) => a.compte === v);
                       setCompteFilter(v);
                       setLigne(i, match && !l.libelle
                         ? { numero_compte: v, libelle: match.libelle }
