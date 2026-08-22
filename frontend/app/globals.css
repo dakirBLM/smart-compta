@@ -1,32 +1,86 @@
+@import url("https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,300;0,400;0,500;0,600;0,700;0,800;1,400;1,600&family=Inter:wght@400;500;600;700&display=swap");
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
-
 :root {
-  --brand: #111111;
+  --brand: #1F3D35;
+  --brand-dark: #142823;
+  --brand-light: #2A5247;
+  --lime: #C8F15A;
+  --lime-light: #E8FFC5;
+  --canvas: #F7FAF7;
 }
 
 html,
 body {
   padding: 0;
   margin: 0;
-  font-family: "Inter", sans-serif;
+  font-family: "Poppins", "Inter", sans-serif;
+  background-color: #F7FAF7;
+  color: #1F3D35;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
-/* RTL: flip flex rows so the Arabic UI mirrors correctly. */
+/* Custom modern scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(31, 61, 53, 0.15);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(31, 61, 53, 0.3);
+}
+
+/* RTL: flip flex rows so Arabic mirrors correctly */
 html[dir="rtl"] .rtl-flip {
   flex-direction: row-reverse;
 }
 
 .kpi-number {
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 700;
-  line-height: 1.1;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
 }
 
 table th {
-  font-size: 14px;
-  font-weight: 700;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
+
+/* Radar & Pulse visual effects for AI widgets */
+.radar-grid {
+  background-image: radial-gradient(circle, rgba(200, 241, 90, 0.12) 1px, transparent 1px);
+  background-size: 20px 20px;
+}
+
+.glow-lime {
+  box-shadow: 0 0 30px rgba(200, 241, 90, 0.3);
+}
+
+.glow-brand {
+  box-shadow: 0 10px 30px -5px rgba(31, 61, 53, 0.35);
+}
+
+/* Subtle gradient animations */
+@keyframes meshGradient {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-mesh {
+  background-size: 200% 200%;
+  animation: meshGradient 8s ease infinite;
+}
+

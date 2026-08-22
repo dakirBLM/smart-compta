@@ -8,6 +8,7 @@ import {
   Pencil,
   Plus,
   RotateCcw,
+  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -157,8 +158,22 @@ export function ScannerFlow({
 
   // ---- CAPTURE ----
   if (phase === "capture")
+  // ---- CAPTURE ----
+  if (phase === "capture")
     return (
-      <Card className="mx-auto max-w-xl text-center">
+      <Card className="mx-auto max-w-xl p-6 sm:p-8">
+        {/* Maiase banner */}
+        <div className="mb-6 flex items-center gap-3 rounded-2xl bg-lime-light/60 border border-lime/30 p-3.5 text-left">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/maiase.png" alt="Maiase AI" className="h-12 w-12 rounded-xl object-contain bg-white/80 p-1 shrink-0 ring-2 ring-lime" />
+          <div>
+            <div className="text-xs font-bold text-brand uppercase tracking-wider">Assistant Maiase · Scan Intelligent</div>
+            <p className="text-xs text-brand/80 mt-0.5">
+              Déposez votre facture. L&apos;IA détectera automatiquement le fournisseur, les montants, la TVA et générera l&apos;écriture comptable SCF.
+            </p>
+          </div>
+        </div>
+
         {/* Camera (mobile) */}
         <input
           ref={inputRef}
@@ -176,54 +191,77 @@ export function ScannerFlow({
           onChange={pickFile}
         />
         {preview ? (
-          <img src={preview} alt="facture" className="mx-auto mb-4 max-h-80 rounded-lg" />
+          <div className="relative mb-4">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={preview} alt="facture" className="mx-auto max-h-80 rounded-2xl border border-gray-200 object-contain shadow-md" />
+            <button
+              onClick={() => {
+                setFile(null);
+                setPreview(null);
+              }}
+              className="absolute top-2 right-2 rounded-full bg-rose-600 p-1.5 text-white hover:bg-rose-700 shadow-md"
+            >
+              <Trash2 size={16} />
+            </button>
+          </div>
         ) : file && isPdf ? (
-          <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed text-brand">
-            <FileText size={48} />
-            <p className="mt-2 max-w-xs truncate px-4 text-sm">{file.name}</p>
-            <p className="text-xs text-gray-400">PDF — toutes les pages seront analysées</p>
+          <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-brand/30 bg-[#F7FAF7] text-brand">
+            <div className="rounded-2xl bg-brand p-4 text-lime mb-2 shadow-brand-glow">
+              <FileText size={40} />
+            </div>
+            <p className="max-w-xs truncate px-4 text-sm font-bold text-brand">{file.name}</p>
+            <p className="text-xs text-gray-400 mt-1">Document PDF prêt pour l&apos;analyse IA</p>
           </div>
         ) : (
           <div
-            onClick={() => inputRef.current?.click()}
-            className="mx-auto mb-4 flex h-64 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed text-gray-400"
+            onClick={() => importRef.current?.click()}
+            className="mx-auto mb-4 flex h-64 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-[#F7FAF7] hover:border-lime hover:bg-lime-light/20 transition-all text-gray-500"
           >
-            <Camera size={48} />
-            <p className="mt-2">{t("prendrePhoto")}</p>
+            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-lime-light text-brand shadow-glow-sm mb-3">
+              <Upload size={32} />
+            </div>
+            <p className="font-bold text-brand text-sm">Glissez un fichier ou cliquez ici</p>
+            <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG (Max 15MB)</p>
           </div>
         )}
+
         {/* Optional: pre-select the journal to help the AI classify (facultatif) */}
-        <div className="mx-auto mb-3 max-w-xs text-left">
-          <label className="mb-1 block text-xs text-gray-500">
-            Journal (facultatif — aide l'IA)
+        <div className="mx-auto mb-4 max-w-sm text-left">
+          <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">
+            Journal comptable suggéré (facultatif)
           </label>
           <select
             value={journalHint}
             onChange={(e) => setJournalHint(e.target.value)}
-            className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm"
+            className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-xs font-semibold text-brand outline-none focus:border-brand focus:ring-2 focus:ring-lime/40"
           >
-            <option value="">Détection automatique</option>
-            <option value="Achats">Achats</option>
-            <option value="Ventes">Ventes</option>
-            <option value="Banque">Banque</option>
-            <option value="Caisse">Caisse</option>
-            <option value="OD">Opérations diverses</option>
+            <option value="">✨ Détection automatique par Maiase</option>
+            <option value="Achats">Achats (Fournisseurs / Charges)</option>
+            <option value="Ventes">Ventes (Clients / Produits)</option>
+            <option value="Banque">Banque (Règlements & Virements)</option>
+            <option value="Caisse">Caisse (Espèces)</option>
+            <option value="OD">Opérations diverses (Salaires, Taxes)</option>
           </select>
         </div>
 
-        {error && <p className="mb-3 text-sm text-danger">{error}</p>}
-        <div className="flex flex-wrap justify-center gap-2">
-          <Button variant="success" onClick={() => setShowCamera(true)}>
-            <Camera size={16} /> Scanner (caméra guidée)
+        {error && (
+          <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-semibold text-rose-700 text-left">
+            {error}
+          </div>
+        )}
+
+        <div className="flex flex-wrap justify-center gap-2.5">
+          <Button variant="outline" onClick={() => setShowCamera(true)} className="text-xs font-bold gap-1.5">
+            <Camera size={16} /> Caméra guidée
           </Button>
-          <Button variant="outline" onClick={() => inputRef.current?.click()}>
+          <Button variant="outline" onClick={() => inputRef.current?.click()} className="text-xs font-bold gap-1.5">
             <Camera size={16} /> Photo
           </Button>
-          <Button variant="outline" onClick={() => importRef.current?.click()}>
-            <Upload size={16} /> Importer (PDF / Image)
+          <Button variant="outline" onClick={() => importRef.current?.click()} className="text-xs font-bold gap-1.5">
+            <Upload size={16} /> Importer fichier
           </Button>
-          <Button variant="success" onClick={send} disabled={!file}>
-            {t("envoyer")}
+          <Button variant="primary" onClick={send} disabled={!file} className="text-xs font-bold gap-1.5 shadow-glow-sm">
+            <Sparkles size={16} /> {t("envoyer")} à Maiase
           </Button>
         </div>
         {showCamera && (
@@ -241,20 +279,37 @@ export function ScannerFlow({
   // ---- LOADING ----
   if (phase === "loading")
     return (
-      <Card className="mx-auto max-w-xl">
-        <div className="mb-6 flex items-center justify-center gap-3 text-brand">
-          <Spinner className="h-6 w-6" />
-          <span className="text-lg font-semibold">{t("extractionEnCours")}</span>
+      <Card className="mx-auto max-w-lg p-8 text-center">
+        {/* Maiase Radar Animation */}
+        <div className="relative mx-auto mb-6 flex h-32 w-32 items-center justify-center">
+          <div className="absolute inset-0 rounded-full border border-lime/40 animate-ping opacity-75" />
+          <div className="absolute inset-2 rounded-full border-2 border-dashed border-lime animate-spin" />
+          <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-brand shadow-brand-glow">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/maiase.png" alt="Maiase" className="h-14 w-14 object-contain animate-float" />
+          </div>
         </div>
-        <div className="space-y-3">
+
+        <h3 className="text-lg font-extrabold text-brand mb-1">
+          {t("extractionEnCours")}
+        </h3>
+        <p className="text-xs text-gray-500 mb-6">
+          Maiase analyse les données et prépare les écritures…
+        </p>
+
+        <div className="space-y-3 rounded-2xl bg-[#F7FAF7] p-5 text-left border border-gray-100">
           {STEPS.map((s, i) => (
             <div key={s.key} className="flex items-center gap-3">
               {i < stepDone ? (
-                <CheckCircle2 className="text-success" size={20} />
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-lime text-brand">
+                  <CheckCircle2 size={16} />
+                </div>
+              ) : i === stepDone ? (
+                <Spinner className="h-5 w-5 text-brand" />
               ) : (
                 <Circle className="text-gray-300" size={20} />
               )}
-              <span className={i < stepDone ? "text-brand" : "text-gray-400"}>
+              <span className={i <= stepDone ? "font-bold text-xs text-brand" : "text-xs text-gray-400"}>
                 {t(s.labelKey)}
               </span>
             </div>

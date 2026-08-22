@@ -5,21 +5,33 @@ import { cn } from "@/lib/utils";
 import * as React from "react";
 
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:pointer-events-none focus:outline-none focus:ring-2 focus:ring-offset-1",
+  "inline-flex items-center justify-center gap-2 rounded-xl text-sm font-semibold transition-all duration-200 disabled:opacity-50 disabled:pointer-events-none focus:outline-none focus:ring-2 focus:ring-offset-1 active:scale-[0.98]",
   {
     variants: {
       variant: {
-        primary: "bg-brand text-white hover:bg-brand-dark focus:ring-brand",
-        success: "bg-success text-white hover:bg-green-600 focus:ring-success",
-        danger: "bg-danger text-white hover:bg-red-600 focus:ring-danger",
-        warning: "bg-warning text-white hover:bg-amber-600 focus:ring-warning",
-        outline: "border border-brand text-brand hover:bg-brand/5",
-        ghost: "text-brand hover:bg-brand/10",
+        primary:
+          "bg-lime text-brand hover:bg-lime-hover shadow-sm hover:shadow-glow-sm focus:ring-lime",
+        brand:
+          "bg-brand text-white hover:bg-brand-dark focus:ring-brand shadow-sm hover:shadow-brand-glow/20",
+        success:
+          "bg-emerald-600 text-white hover:bg-emerald-700 focus:ring-emerald-500 shadow-sm",
+        danger:
+          "bg-rose-600 text-white hover:bg-rose-700 focus:ring-rose-500 shadow-sm",
+        warning:
+          "bg-amber-500 text-white hover:bg-amber-600 focus:ring-amber-500 shadow-sm",
+        outline:
+          "border border-gray-200 bg-white text-brand hover:bg-gray-50 hover:border-gray-300 focus:ring-brand/20",
+        ghost:
+          "text-brand hover:bg-lime-light/60 hover:text-brand focus:ring-lime",
+        soft:
+          "bg-lime-light text-brand hover:bg-lime/40 focus:ring-lime",
       },
       size: {
-        sm: "h-8 px-3",
-        md: "h-10 px-4",
-        lg: "h-12 px-6 text-base",
+        xs: "h-7 px-2.5 text-xs rounded-lg",
+        sm: "h-8 px-3 text-xs rounded-lg",
+        md: "h-10 px-4 py-2",
+        lg: "h-12 px-6 text-base rounded-2xl",
+        xl: "h-14 px-8 text-lg rounded-2xl",
       },
     },
     defaultVariants: { variant: "primary", size: "md" },
@@ -43,10 +55,10 @@ export const Input = React.forwardRef<
   <input
     ref={ref}
     className={cn(
-      "h-10 w-full rounded-lg border px-3 text-sm outline-none focus:ring-2 focus:ring-brand/40",
+      "h-10 w-full rounded-xl border px-3.5 text-sm transition-all outline-none focus:border-brand focus:ring-2 focus:ring-lime/40",
       locked
         ? "border-danger bg-red-50 text-danger cursor-not-allowed"
-        : "border-gray-300",
+        : "border-gray-200 bg-white hover:border-gray-300",
       className
     )}
     {...props}
@@ -62,7 +74,7 @@ export function Label({
   className?: string;
 }) {
   return (
-    <label className={cn("mb-1 block text-sm font-medium text-gray-700", className)}>
+    <label className={cn("mb-1.5 block text-xs font-semibold uppercase tracking-wider text-gray-600", className)}>
       {children}
     </label>
   );
@@ -75,7 +87,10 @@ export function Card({
 }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("rounded-xl border border-gray-200 bg-white p-5 shadow-sm", className)}
+      className={cn(
+        "rounded-2xl border border-gray-100/80 bg-white p-5 shadow-[0_4px_20px_-4px_rgba(31,61,53,0.06)] transition-all",
+        className
+      )}
       {...props}
     >
       {children}
@@ -93,3 +108,4 @@ export function Spinner({ className }: { className?: string }) {
     />
   );
 }
+

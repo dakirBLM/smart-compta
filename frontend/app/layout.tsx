@@ -4,8 +4,11 @@ import { I18nProvider } from "@/lib/i18n-context";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Smart Compta",
-  description: "Plateforme de gestion comptable bilingue (FR/AR)",
+  title: "Comptia DZ — Votre comptabilité devient intelligente",
+  description: "Plateforme de gestion comptable bilingue (FR/AR) propulsée par l'intelligence artificielle.",
+  icons: {
+    icon: "/logo_web.png",
+  },
 };
 
 export default function RootLayout({

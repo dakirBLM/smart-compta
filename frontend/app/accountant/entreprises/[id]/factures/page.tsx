@@ -317,15 +317,15 @@ export default function FacturesAccountantPage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      {/* ── Tabs ── */}
-      <div className="mb-5 flex flex-wrap gap-2">
+      {/* Onglets Scanner / Mes factures */}
+      <div className="mb-6 flex flex-wrap gap-2.5">
         <button
           onClick={() => setTab("scanner")}
           className={cn(
-            "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all",
+            "flex items-center gap-2 rounded-2xl px-5 py-2.5 text-xs font-bold transition-all",
             tab === "scanner"
-              ? "bg-brand text-white shadow-sm"
-              : "bg-white text-brand border hover:bg-brand/5"
+              ? "bg-brand text-lime shadow-brand-glow"
+              : "bg-white text-brand border border-gray-200 hover:border-lime"
           )}
         >
           <ScanLine size={16} />
@@ -334,10 +334,10 @@ export default function FacturesAccountantPage() {
         <button
           onClick={() => setTab("clients")}
           className={cn(
-            "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all",
+            "flex items-center gap-2 rounded-2xl px-5 py-2.5 text-xs font-bold transition-all",
             tab === "clients"
-              ? "bg-brand text-white shadow-sm"
-              : "bg-white text-brand border hover:bg-brand/5"
+              ? "bg-brand text-lime shadow-brand-glow"
+              : "bg-white text-brand border border-gray-200 hover:border-lime"
           )}
         >
           <Receipt size={16} />
