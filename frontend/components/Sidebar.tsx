@@ -187,6 +187,7 @@ export function Sidebar({
   const base = entrepriseId
     ? `/accountant/entreprises/${entrepriseId}`
     : "/accountant";
+  const anneeQuery = annee ? `&annee=${annee}` : "";
   const is = (p: string) => pathname === p || pathname.startsWith(p + "/");
   const nav = () => onClose?.();
 

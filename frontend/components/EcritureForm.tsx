@@ -85,7 +85,7 @@ const OD_TEMPLATES = [
     label: "Facture d'électricité",
     lignes: [
       { numero_compte: "606", libelle: "Facture d'électricité", montant_debit: 0, montant_credit: 0 },
-      { numero_compte: "44566", libelle: "TVA déductible", montant_debit: 0, montant_credit: 0 },
+      { numero_compte: "445600", libelle: "TVA déductible", montant_debit: 0, montant_credit: 0 },
       { numero_compte: "401", libelle: "Sonelgaz / Fournisseur", montant_debit: 0, montant_credit: 0 },
     ],
   },
@@ -93,7 +93,7 @@ const OD_TEMPLATES = [
     label: "Facture téléphone / internet",
     lignes: [
       { numero_compte: "626", libelle: "Frais de télécommunication", montant_debit: 0, montant_credit: 0 },
-      { numero_compte: "44566", libelle: "TVA déductible", montant_debit: 0, montant_credit: 0 },
+      { numero_compte: "445600", libelle: "TVA déductible", montant_debit: 0, montant_credit: 0 },
       { numero_compte: "401", libelle: "Fournisseur télécom", montant_debit: 0, montant_credit: 0 },
     ],
   },
@@ -101,7 +101,7 @@ const OD_TEMPLATES = [
     label: "Loyer local",
     lignes: [
       { numero_compte: "613", libelle: "Loyer du local", montant_debit: 0, montant_credit: 0 },
-      { numero_compte: "44566", libelle: "TVA déductible", montant_debit: 0, montant_credit: 0 },
+      { numero_compte: "445600", libelle: "TVA déductible", montant_debit: 0, montant_credit: 0 },
       { numero_compte: "401", libelle: "Bailleur", montant_debit: 0, montant_credit: 0 },
     ],
   },
@@ -145,6 +145,7 @@ export function EcritureForm({
   onSubmit,
   onCancel,
   journalType,
+  entrepriseId,
 }: {
   initial?: Ecriture;
   onSubmit: (payload: {
@@ -157,6 +158,7 @@ export function EcritureForm({
   }) => Promise<void>;
   onCancel: () => void;
   journalType?: string;
+  entrepriseId?: string;
 }) {
   const { t } = useI18n();
   const [date, setDate] = useState(initial?.date_ecriture ?? "");
@@ -186,8 +188,9 @@ export function EcritureForm({
 
   useEffect(() => {
     let mounted = true;
+    const url = entrepriseId ? `/api/entreprises/${entrepriseId}/scf/` : "/api/scf/";
     api
-      .get<Record<string, { numero_compte: string; libelle: string }[]>>("/api/scf/")
+      .get<Record<string, { numero_compte: string; libelle: string }[]>>(url)
       .then((data) => {
         const merged: { compte: string; libelle: string }[] = [];
         Object.values(data).forEach((arr: any) => {
