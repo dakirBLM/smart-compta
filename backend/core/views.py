@@ -1250,7 +1250,7 @@ class FactureValidateView(APIView):
         }
         if float(facture.montant_tva) > 0:
             extraction_data["lignes"].append({
-                "compte": "445700" if is_vente else "44566",
+                "compte": "445700" if is_vente else "445600",
                 "libelle": "TVA collectée" if is_vente else "TVA déductible",
                 "debit": 0 if is_vente else float(facture.montant_tva),
                 "credit": float(facture.montant_tva) if is_vente else 0,
@@ -1441,7 +1441,7 @@ class MockWebhookView(APIView):
                 "lignes": [
                     {"compte": "6011", "libelle": "Achats de marchandises",
                      "debit": 100000.00, "credit": 0.00},
-                    {"compte": "44566", "libelle": "TVA déductible",
+                    {"compte": "445600", "libelle": "TVA déductible",
                      "debit": 19000.00, "credit": 0.00},
                     {"compte": "4011", "libelle": "Fournisseurs",
                      "debit": 0.00, "credit": 119000.00},

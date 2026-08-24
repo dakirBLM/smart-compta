@@ -309,6 +309,8 @@ export default function FacturesAccountantPage() {
 
   const enAttente = factures.filter((f) => f.statut === "en_cours");
   const comptabilisees = factures.filter((f) => f.statut === "valide");
+  const facturesAchat = comptabilisees.filter((f) => f.type_facture !== "vente");
+  const facturesVente = comptabilisees.filter((f) => f.type_facture === "vente");
 
   return (
     <AppShell
@@ -457,9 +459,25 @@ export default function FacturesAccountantPage() {
                     </p>
                   </Card>
                 ) : (
-                  <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
-                    {comptabilisees.map((f) => (
-                      <Card key={f.id} className="group overflow-hidden p-0 transition-shadow hover:shadow-md">
+                  <div className="space-y-6">
+                    {[
+                      { label: "Factures d'achat", factures: facturesAchat },
+                      { label: "Factures de vente", factures: facturesVente },
+                    ].map(({ label, factures: categorie }) => (
+                      <section key={label}>
+                        <h3 className="mb-3 text-sm font-semibold text-gray-700">
+                          {label} ({categorie.length})
+                        </h3>
+                        {categorie.length === 0 ? (
+                          <Card>
+                            <p className="py-4 text-center text-sm text-gray-400">
+                              Aucune facture dans cette catégorie.
+                            </p>
+                          </Card>
+                        ) : (
+                          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+                            {categorie.map((f) => (
+                              <Card key={f.id} className="group overflow-hidden p-0 transition-shadow hover:shadow-md">
                         {/* Image */}
                         <div className="relative overflow-hidden">
                           {f.image_url && f.image_url.startsWith("http") ? (
@@ -510,6 +528,10 @@ export default function FacturesAccountantPage() {
                           </button>
                         </div>
                       </Card>
+                            ))}
+                          </div>
+                        )}
+                      </section>
                     ))}
                   </div>
                 )}

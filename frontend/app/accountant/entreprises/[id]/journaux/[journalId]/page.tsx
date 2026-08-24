@@ -1,6 +1,6 @@
 "use client";
 
-import { BookPlus, Plus, Search, Banknote, CreditCard, FileText, Info } from "lucide-react";
+import { Plus, Search, Banknote, CreditCard, FileText, Info } from "lucide-react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -65,6 +65,8 @@ export default function JournalPage() {
   const [searchCompte, setSearchCompte] = useState("");
   const [searchDate, setSearchDate] = useState("");
   const [showNewJournal, setShowNewJournal] = useState(false);
+  const [creatingJournal, setCreatingJournal] = useState(false);
+  const [newJournalError, setNewJournalError] = useState("");
   const [chooserJournals, setChooserJournals] = useState<Journal[]>([]);
   const [showChooser, setShowChooser] = useState(false);
   const searchParams = useSearchParams();
@@ -159,13 +161,22 @@ export default function JournalPage() {
   async function createJournal() {
     const exercice = entreprise?.exercices.find((x) => x.annee === annee);
     if (!exercice || !newName.trim()) return;
-    const j = await api.post<Journal>(`/api/entreprises/${id}/journaux/`, {
-      nom: newName.trim(),
-      annee: exercice.id,
-    });
-    setShowNewJournal(false);
-    setNewName("");
-    router.push(`${base}/journaux/${j.id}${qsAnnee}`);
+    setCreatingJournal(true);
+    setNewJournalError("");
+    try {
+      const j = await api.post<Journal>(`/api/entreprises/${id}/journaux/`, {
+        nom: newName.trim(),
+        type_journal: "autre",
+        annee: exercice.id,
+      });
+      setShowNewJournal(false);
+      setNewName("");
+      router.push(`${base}/journaux/${j.id}${qsAnnee}`);
+    } catch (error: any) {
+      setNewJournalError(error?.response?.data?.detail || error?.message || "Erreur lors de la création du journal.");
+    } finally {
+      setCreatingJournal(false);
+    }
   }
 
   const customJournals = journals.filter((j) => j.type_journal === "autre");
@@ -227,7 +238,7 @@ export default function JournalPage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      {/* Custom journals + create new */}
+      {/* Custom journals */}
       <div className="mb-3 flex flex-wrap items-center gap-2">
         {customJournals.map((j) => (
           <button
@@ -241,9 +252,6 @@ export default function JournalPage() {
             {j.type_label}
           </button>
         ))}
-        <Button variant="outline" size="sm" onClick={() => setShowNewJournal(true)}>
-          <BookPlus size={15} /> Nouveau journal
-        </Button>
       </div>
 
       {/* Journal header banner */}
@@ -391,15 +399,27 @@ export default function JournalPage() {
             setEditing(null);
           }}
           journalType={type}
+          entrepriseId={String(id)}
         />
       </Modal>
 
       <Modal
         open={showNewJournal}
-        onClose={() => setShowNewJournal(false)}
+        onClose={() => {
+          if (!creatingJournal) {
+            setShowNewJournal(false);
+            setNewJournalError("");
+          }
+        }}
         title="Nouveau journal"
       >
-        <div className="space-y-3">
+        <form
+          className="space-y-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            createJournal();
+          }}
+        >
           <div>
             <label className="mb-1 block text-sm">Nom du journal</label>
             <Input
@@ -409,15 +429,21 @@ export default function JournalPage() {
               autoFocus
             />
           </div>
+          {newJournalError && <p className="text-sm text-danger">{newJournalError}</p>}
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setShowNewJournal(false)}>
+            <Button
+              type="button"
+              variant="ghost"
+              onClick={() => setShowNewJournal(false)}
+              disabled={creatingJournal}
+            >
               {t("annuler")}
             </Button>
-            <Button variant="success" onClick={createJournal} disabled={!newName.trim()}>
-              {t("creer")}
+            <Button type="submit" variant="success" disabled={!newName.trim() || creatingJournal}>
+              {creatingJournal ? "Création..." : t("creer")}
             </Button>
           </div>
-        </div>
+        </form>
       </Modal>
 
       <Modal

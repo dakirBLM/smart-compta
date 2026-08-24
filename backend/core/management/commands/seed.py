@@ -99,7 +99,7 @@ class Command(BaseCommand):
         LigneEcriture.objects.create(ecriture=ec, numero_compte="6011",
                                      libelle="Achats de marchandises",
                                      montant_debit=ht, montant_credit=0)
-        LigneEcriture.objects.create(ecriture=ec, numero_compte="44566",
+        LigneEcriture.objects.create(ecriture=ec, numero_compte="445600",
                                      libelle="TVA déductible",
                                      montant_debit=tva, montant_credit=0)
         LigneEcriture.objects.create(ecriture=ec, numero_compte="4011",

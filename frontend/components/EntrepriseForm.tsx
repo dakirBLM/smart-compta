@@ -73,8 +73,7 @@ export function EntrepriseForm({
     if (!form.exercice_comptable.trim()) return "L'exercice comptable est obligatoire.";
     for (const [f, len, label] of [
       ["nif", 15, "NIF"], ["nis", 15, "NIS"], ["nin", 18, "NIN"],
-      ["numero_compte", 10, "N° de compte"], ["rib", 22, "RIB"],
-      ["numero_compte2", 10, "N° de compte 2"], ["rib2", 22, "RIB 2"],
+      ["rib", 22, "RIB"], ["rib2", 22, "RIB 2"],
     ] as [string, number, string][]) {
       if (form[f] && form[f].length > len)
         return `${label} : ${len} chiffres maximum.`;
@@ -243,8 +242,8 @@ export function EntrepriseForm({
                   <Input value={form[bk]} onChange={(e) => set(bk, e.target.value)} />
                 </div>
                 <div>
-                  <Label>N° compte (10 chiffres)</Label>
-                  <Input inputMode="numeric" value={form[ck]} onChange={(e) => set(ck, onlyDigits(e.target.value, 10))} />
+                  <Label>N° compte</Label>
+                  <Input inputMode="numeric" value={form[ck]} onChange={(e) => set(ck, onlyDigits(e.target.value, 60))} />
                 </div>
                 <div>
                   <Label>RIB (22 chiffres)</Label>
