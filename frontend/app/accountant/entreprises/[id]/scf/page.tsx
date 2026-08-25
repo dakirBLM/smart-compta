@@ -7,14 +7,14 @@ import { api } from "@/lib/api";
 export default function SCFPage() {
   const params = useParams();
   const entrepriseId = params?.id;
-  const [data, setData] = useState<Record<string, { numero_compte: string; libelle: string }[]>>({});
+  const [data, setData] = useState<Record<string, { numero_compte: string; libelle: string; parent?: string | null }[]>>({});
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!entrepriseId) return;
     setLoading(true);
     api
-      .get<Record<string, { numero_compte: string; libelle: string }[]>>(
+      .get<Record<string, { numero_compte: string; libelle: string; parent?: string | null }[]>>(
         `/api/entreprises/${entrepriseId}/scf/`
       )
       .then((d) => setData(d))
@@ -34,13 +34,27 @@ export default function SCFPage() {
             <div className="text-sm text-gray-600">
               {(data[cls] || []).length} comptes
             </div>
-            <div className="mt-3 space-y-2 max-h-64 overflow-y-auto">
-              {(data[cls] || []).map((a) => (
-                <div key={a.numero_compte} className="flex items-start gap-3">
-                  <div className="font-mono text-sm text-brand">{a.numero_compte}</div>
-                  <div className="text-sm">{a.libelle}</div>
-                </div>
-              ))}
+            <div className="mt-3 space-y-3 max-h-64 overflow-y-auto">
+              {Array.from(
+                new Set((data[cls] || []).map((a) => a.parent || a.numero_compte))
+              ).map((parent) => {
+                const parentAccount = (data[cls] || []).find((a) => a.numero_compte === parent);
+                const children = (data[cls] || []).filter((a) => a.parent === parent);
+                return (
+                  <div key={parent}>
+                    <div className="flex items-start gap-3 font-semibold">
+                      <div className="font-mono text-sm text-brand">{parent}</div>
+                      <div className="text-sm">{parentAccount?.libelle || "Compte SCF"}</div>
+                    </div>
+                    {children.map((a) => (
+                      <div key={a.numero_compte} className="ml-5 flex items-start gap-3 border-l pl-3">
+                        <div className="font-mono text-sm text-brand">{a.numero_compte}</div>
+                        <div className="text-sm">{a.libelle}</div>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
               {(data[cls] || []).length === 0 && (
                 <div className="text-sm text-gray-400">Aucun compte.</div>
               )}

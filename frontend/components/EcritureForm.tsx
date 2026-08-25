@@ -202,7 +202,7 @@ export function EcritureForm({
     return () => {
       mounted = false;
     };
-  }, []);
+  }, [entrepriseId]);
 
   const filteredScfAccounts = scfAccounts.filter(
     (a) =>
@@ -214,7 +214,18 @@ export function EcritureForm({
     setLignes((ls) => ls.map((l, idx) => (idx === i ? { ...l, ...patch } : l)));
 
   function applyTemplate(tpl: (typeof BANQUE_TEMPLATES)[0]) {
-    setLignes(tpl.lignes.map((l) => ({ ...l })));
+    setLignes(
+      tpl.lignes.map((l) => {
+        const account =
+          (l.numero_compte === "512"
+            ? scfAccounts.find((a) => a.compte === "512001")
+            : undefined) ??
+          scfAccounts.find((a) => a.compte === `${l.numero_compte}000`) ??
+          scfAccounts.find((a) => a.compte === l.numero_compte) ??
+          scfAccounts.find((a) => a.compte.startsWith(l.numero_compte));
+        return { ...l, numero_compte: account?.compte ?? l.numero_compte };
+      })
+    );
     setShowTemplates(false);
   }
 
@@ -226,6 +237,13 @@ export function EcritureForm({
     }
     if (!date) {
       setError(t("date"));
+      return;
+    }
+    const invalidAccount = lignes.find(
+      (ligne) => ligne.numero_compte && !scfAccounts.some((a) => a.compte === ligne.numero_compte)
+    );
+    if (invalidAccount) {
+      setError(`Le compte ${invalidAccount.numero_compte} n'existe pas dans le plan comptable SCF.`);
       return;
     }
     setSaving(true);

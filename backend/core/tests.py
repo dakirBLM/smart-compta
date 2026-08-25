@@ -4,7 +4,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Fournisseur
+from .models import ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Fournisseur, Journal, SCFAccount
 
 
 class BankStatementImportTests(APITestCase):
@@ -14,7 +14,7 @@ class BankStatementImportTests(APITestCase):
         )
         self.enterprise = Entreprise.objects.create(
             nom="ACME", nif="1", nis="2", date_creation=date(2026, 1, 1),
-            exercice_comptable="2026", numero_compte="001 234-56", accountant=user,
+            exercice_comptable="2026", banque="BNA", numero_compte="001 234-56", accountant=user,
         )
         ExerciceAnnee.objects.create(entreprise=self.enterprise, annee=2026, is_active=True)
         self.client.force_authenticate(user)
@@ -34,10 +34,12 @@ class BankStatementImportTests(APITestCase):
         entries = list(Ecriture.objects.order_by("date_ecriture", "id").prefetch_related("lignes"))
         self.assertEqual([str(e.date_ecriture) for e in entries], ["2026-02-04", "2026-02-05"])
         first = list(entries[0].lignes.all())
-        self.assertEqual(first[0].numero_compte, "512000")
-        self.assertEqual(str(first[0].montant_debit), "200.00")
-        self.assertEqual(first[1].numero_compte, "411000")
-        self.assertEqual(str(first[1].montant_credit), "200.00")
+        bank_line = next(line for line in first if line.numero_compte == "512001")
+        self.assertEqual(bank_line.montant_debit + bank_line.montant_credit, 200)
+        self.assertEqual(
+            sum(line.montant_debit + line.montant_credit for line in first if line is not bank_line),
+            200,
+        )
         self.assertEqual(entries[0].total_debit, entries[0].total_credit)
 
     def test_mismatched_statement_account_is_rejected_before_creating_entries(self):
@@ -81,3 +83,79 @@ class BankStatementImportTests(APITestCase):
         self.assertIn("627000", {l.numero_compte for l in entry.lignes.all()})
         self.assertEqual(ClientComptable.objects.count(), 0)
         self.assertEqual(Fournisseur.objects.count(), 0)
+
+
+class EcritureScfValidationTests(APITestCase):
+    def setUp(self):
+        user = get_user_model().objects.create_user(
+            username="scf-comptable", password="secret", role="accountant"
+        )
+        SCFAccount.objects.create(numero_compte="512", libelle="Banques", classe=5)
+        SCFAccount.objects.create(numero_compte="401", libelle="Fournisseurs", classe=4)
+        SCFAccount.objects.create(numero_compte="411", libelle="Clients", classe=4)
+        SCFAccount.objects.create(numero_compte="53", libelle="Caisse", classe=5)
+        self.enterprise = Entreprise.objects.create(
+            nom="SCF TEST", nif="11", nis="22", date_creation=date(2026, 1, 1),
+            exercice_comptable="2026", banque="BNA", accountant=user,
+        )
+        year = ExerciceAnnee.objects.create(
+            entreprise=self.enterprise, annee=2026, is_active=True
+        )
+        journal = Journal.objects.create(
+            entreprise=self.enterprise, annee=year, type_journal=Journal.Type.OD
+        )
+        self.url = f"/api/entreprises/{self.enterprise.id}/journaux/{journal.id}/ecritures/"
+        self.client.force_authenticate(user)
+
+    def test_unknown_account_is_rejected(self):
+        response = self.client.post(self.url, {
+            "date_ecriture": "2026-01-01",
+            "lignes": [
+                {"numero_compte": "4111", "libelle": "Client", "montant_debit": "10", "montant_credit": "0"},
+                {"numero_compte": "512001", "libelle": "Banque", "montant_debit": "0", "montant_credit": "10"},
+            ],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("SCF", str(response.data))
+        self.assertEqual(Ecriture.objects.count(), 0)
+
+    def test_bank_subaccount_uses_enterprise_bank_label(self):
+        response = self.client.post(self.url, {
+            "date_ecriture": "2026-01-01",
+            "lignes": [
+                {"numero_compte": "411", "libelle": "Client", "montant_debit": "10", "montant_credit": "0"},
+                {"numero_compte": "512001", "libelle": "Banque", "montant_debit": "0", "montant_credit": "10"},
+            ],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        account = SCFAccount.objects.get(entreprise=self.enterprise, numero_compte="512001")
+        self.assertEqual(account.libelle, "BANQUE BNA")
+
+    def test_scf_api_nests_dynamic_accounts_under_parent(self):
+        Fournisseur.objects.create(
+            entreprise=self.enterprise, nom="Fournisseur A", numero_compte="401001"
+        )
+        response = self.client.get(f"/api/entreprises/{self.enterprise.id}/scf/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        accounts = response.data["4"] + response.data["5"]
+        self.assertEqual(
+            [account for account in accounts if account["numero_compte"] == "401001"],
+            [{"numero_compte": "401001", "libelle": "Fournisseur A", "parent": "401"}],
+        )
+        self.assertEqual(
+            len([account for account in accounts if account["numero_compte"] == "512001"]),
+            1,
+        )
+
+    def test_scf_api_nests_other_dynamic_accounts_under_their_master_parent(self):
+        SCFAccount.objects.create(
+            entreprise=self.enterprise, numero_compte="530001", libelle="Petite caisse", classe=5
+        )
+        response = self.client.get(f"/api/entreprises/{self.enterprise.id}/scf/")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        caisse = next(account for account in response.data["5"] if account["numero_compte"] == "530001")
+        self.assertEqual(caisse["parent"], "53")

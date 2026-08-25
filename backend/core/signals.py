@@ -46,63 +46,51 @@ def get_inherited_label(numero_compte):
 
 @receiver(post_save, sender=LigneEcriture)
 def add_ligne_compte_to_scf(sender, instance: LigneEcriture, created, **kwargs):
-    # Add any account used in a LigneEcriture to the SCF for the corresponding entreprise
     if not instance.numero_compte:
         return
 
-    # Check if the exact account already exists globally (e.g. "401")
-    # If so, do not create a duplicate in the local SCF.
-    if SCFAccount.objects.filter(entreprise__isnull=True, numero_compte=instance.numero_compte).exists():
-        return
-
-    # Determine entreprise via the ecriture -> journal -> entreprise
     ent = None
     try:
         ent = instance.ecriture.journal.entreprise
     except Exception:
         pass
+    if not ent or not SCFAccount.objects.filter(
+        entreprise__isnull=True, numero_compte=instance.numero_compte
+    ).exists():
+        return
 
-    libelle = instance.libelle or ""
-
-    # If the account is a bank account (starts with 512), use a better libelle
     if instance.numero_compte.startswith("512"):
-        if ent and ent.banque:
-            libelle = f"Banque - {ent.banque}"
-        else:
-            libelle = "Banque"
-    else:
-        # Avoid generic labels from transaction descriptions for padded accounts (like 401000, 411000, 530000)
-        # or for any account created during an import/scanner (where libelle is just the bank description/AI extract)
-        inherited = get_inherited_label(instance.numero_compte)
-        if inherited:
-            is_import_or_scanner = instance.ecriture.source in ("import", "scanner")
-            is_padded_generic = instance.numero_compte.endswith("000")
-            
-            if is_padded_generic or is_import_or_scanner or not libelle:
-                libelle = inherited
+        banque = {
+            "512001": ent.banque,
+            "512002": ent.banque2,
+        }.get(instance.numero_compte)
+        if not banque:
+            return
+        SCFAccount.objects.update_or_create(
+            entreprise=ent,
+            numero_compte=instance.numero_compte,
+            defaults={"libelle": f"BANQUE {banque}"},
+        )
+        return
 
-    # Create entreprise-specific SCF entry (if not exists).
-    SCFAccount.objects.get_or_create(
-        entreprise=ent,
-        numero_compte=instance.numero_compte,
-        defaults={"libelle": libelle},
-    )
+    inherited = get_inherited_label(instance.numero_compte) or instance.libelle
+    if inherited:
+        SCFAccount.objects.update_or_create(
+            entreprise=ent,
+            numero_compte=instance.numero_compte,
+            defaults={"libelle": inherited},
+        )
 
 from .models import Entreprise
 
 @receiver(post_save, sender=Entreprise)
 def update_entreprise_bank_scf(sender, instance: Entreprise, created, **kwargs):
-    """Automatically ensure the 512000 SCF account exists and is named after the entreprise's bank."""
-    if instance.banque:
-        # Create or update the 512000 account to reflect the bank name.
-        obj, created_flag = SCFAccount.objects.get_or_create(
-            entreprise=instance,
-            numero_compte="512000",
-            defaults={"libelle": f"Banque - {instance.banque}"}
-        )
-        if not created_flag:
-            # Update it if the name is not correct
-            new_libelle = f"Banque - {instance.banque}"
-            if obj.libelle != new_libelle:
-                obj.libelle = new_libelle
-                obj.save(update_fields=["libelle"])
+    for numero_compte, banque in (("512001", instance.banque), ("512002", instance.banque2)):
+        if banque and SCFAccount.objects.filter(
+            entreprise__isnull=True, numero_compte="512"
+        ).exists():
+            SCFAccount.objects.update_or_create(
+                entreprise=instance,
+                numero_compte=numero_compte,
+                defaults={"libelle": f"BANQUE {banque}"},
+            )

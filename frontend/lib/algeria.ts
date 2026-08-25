@@ -23,7 +23,7 @@ export const SCF_ACCOUNTS: { compte: string; libelle: string }[] = [
   { compte: "411000", libelle: "Clients" },
   { compte: "445600", libelle: "TVA déductible" },
   { compte: "445700", libelle: "TVA collectée" },
-  { compte: "512000", libelle: "Banque" },
+  { compte: "512001", libelle: "Banque" },
   { compte: "530000", libelle: "Caisse" },
   { compte: "600000", libelle: "Achats" },
   { compte: "700000", libelle: "Ventes de marchandises" },

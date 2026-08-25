@@ -73,8 +73,8 @@ doit se terminer par un module **Webhook Response** (`Content-Type: application/
   "confiance": 95,
   "lignes": [
     { "compte": "6011",  "libelle": "Achats de marchandises", "debit": 100000.00, "credit": 0.00 },
-    { "compte": "44566", "libelle": "TVA déductible",          "debit": 19000.00,  "credit": 0.00 },
-    { "compte": "4011",  "libelle": "Fournisseurs",            "debit": 0.00,      "credit": 119000.00 }
+    { "compte": "445600", "libelle": "TVA déductible",          "debit": 19000.00,  "credit": 0.00 },
+    { "compte": "401001", "libelle": "Fournisseur",              "debit": 0.00,      "credit": 119000.00 }
   ],
   "statut": "en_cours",
   "erreurs": []
