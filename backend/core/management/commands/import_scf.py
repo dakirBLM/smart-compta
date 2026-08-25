@@ -49,6 +49,9 @@ class Command(BaseCommand):
                     if not numero:
                         skipped += 1
                         continue
+                    if numero in {"44566", "645000"}:
+                        skipped += 1
+                        continue
                     try:
                         classe_val = int(str(numero).strip()[0])
                     except Exception:

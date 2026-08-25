@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowRight, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
@@ -95,38 +95,36 @@ export default function EntreprisesPage() {
 
   return (
     <AppShell title={t("entreprises")}>
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[240px_1fr]">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[200px_1fr]">
         {/* Left action panel */}
-        <div className="space-y-3">
-          <Button variant="primary" className="w-full font-bold shadow-glow-sm" onClick={() => setModal("create")}>
+        <div className="space-y-2">
+          <Button className="w-full" onClick={() => setModal("create")}>
             <Plus size={16} /> {t("ajouter")}
           </Button>
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              variant="outline"
-              className="w-full text-xs font-semibold"
-              onClick={() => setModal("edit")}
-              disabled={!selected}
-            >
-              <Pencil size={14} /> {t("modifier")}
-            </Button>
-            <Button
-              variant="danger"
-              className="w-full text-xs font-semibold"
-              onClick={() => setModal("delete")}
-              disabled={!selected}
-            >
-              <Trash2 size={14} /> {t("supprimer")}
-            </Button>
-          </div>
+          <Button
+            variant="danger"
+            className="w-full"
+            onClick={() => setModal("delete")}
+            disabled={!selected}
+          >
+            <Trash2 size={16} /> {t("supprimer")}
+          </Button>
+          <Button
+            variant="outline"
+            className="w-full"
+            onClick={() => setModal("edit")}
+            disabled={!selected}
+          >
+            <Pencil size={16} /> {t("modifier")}
+          </Button>
 
-          <div className="pt-3 border-t border-gray-200">
+          <div className="pt-4">
             {/* Step 1: choose the year */}
-            <div className="mb-1.5 text-xs font-bold uppercase tracking-wider text-gray-500">
+            <div className="mb-1 text-sm font-semibold text-gray-500">
               1. {t("annees")}
             </div>
             <select
-              className="mb-4 h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-xs font-semibold text-brand outline-none focus:border-brand focus:ring-2 focus:ring-lime/40"
+              className="mb-3 h-10 w-full rounded-lg border border-gray-300 px-2 text-sm"
               value={yearFilter ?? ""}
               onChange={(e) => {
                 setYearFilter(e.target.value ? Number(e.target.value) : null);
@@ -135,47 +133,42 @@ export default function EntreprisesPage() {
             >
               <option value="">Toutes les années</option>
               {allYears.map((y) => (
-                <option key={y} value={y}>
-                  Exercice {y}
-                </option>
+                <option key={y} value={y}>{y}</option>
               ))}
             </select>
 
             {/* Step 2: choose the entreprise */}
-            <div className="mb-2 text-xs font-bold uppercase tracking-wider text-gray-500">
+            <div className="mb-2 text-sm font-semibold text-gray-500">
               2. {t("entreprises")}
             </div>
-            <div className="space-y-1.5 max-h-[380px] overflow-y-auto pr-1">
+            <div className="space-y-1">
               {visibleEntreprises.map((e) => (
                 <button
                   key={e.id}
                   onClick={() => selectEntreprise(e)}
                   className={cn(
-                    "flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-left text-xs font-semibold transition-all",
+                    "block w-full rounded-lg px-3 py-2 text-left text-sm",
                     selected?.id === e.id
-                      ? "bg-brand font-bold text-lime shadow-brand-glow"
-                      : "bg-white text-gray-700 hover:bg-gray-100 hover:text-brand border border-gray-100"
+                      ? "bg-brand text-white"
+                      : "hover:bg-gray-100"
                   )}
                 >
-                  <span className="truncate">{e.nom}</span>
-                  {selected?.id === e.id && (
-                    <span className="h-2 w-2 rounded-full bg-lime" />
-                  )}
+                  {e.nom}
                 </button>
               ))}
               {visibleEntreprises.length === 0 && (
-                <p className="text-xs text-gray-400 py-3 text-center">{t("aucuneDonnee")}</p>
+                <p className="text-sm text-gray-400">{t("aucuneDonnee")}</p>
               )}
             </div>
           </div>
         </div>
 
         {/* Center: Années | Clients */}
-        <Card className="p-6">
-          <div className="mb-6 flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/80 px-3.5">
+        <Card>
+          <div className="mb-4 flex items-center gap-2 rounded-lg border px-3">
             <Search size={16} className="text-gray-400" />
             <input
-              className="h-10 flex-1 bg-transparent text-xs font-medium outline-none text-brand"
+              className="h-10 flex-1 outline-none"
               placeholder={t("rechercher")}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -183,53 +176,45 @@ export default function EntreprisesPage() {
           </div>
 
           {selected ? (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="grid grid-cols-2 gap-4">
               <div>
-                <h3 className="mb-3 flex items-center justify-between border-b pb-2 font-bold text-brand text-sm">
-                  <span>{t("annees")} fiscales</span>
-                  <span className="text-[11px] text-gray-400 font-normal">Sélectionner pour entrer</span>
+                <h3 className="mb-2 border-b pb-2 font-semibold text-brand">
+                  {t("annees")}
                 </h3>
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {selected.exercices.map((ex) => (
                     <button
                       key={ex.id}
                       onClick={() => setSelectedYear(ex.annee)}
                       className={cn(
-                        "flex w-full items-center justify-between rounded-xl px-4 py-3 text-left text-xs font-bold transition-all",
+                        "block w-full rounded-lg px-3 py-2 text-left",
                         selectedYear === ex.annee
-                          ? "bg-lime text-brand shadow-glow-sm shadow-lime/25 ring-2 ring-lime"
-                          : "bg-gray-50 text-gray-700 hover:bg-gray-100"
+                          ? "bg-green-100 font-semibold text-success"
+                          : "hover:bg-gray-100"
                       )}
                     >
-                      <span>Exercice {ex.annee}</span>
-                      {ex.is_active && (
-                        <span className="rounded-full bg-brand/10 px-2 py-0.5 text-[10px] font-bold">
-                          Actif
-                        </span>
-                      )}
+                      {ex.annee}
                     </button>
                   ))}
                   {selected.exercices.length === 0 && (
-                    <p className="text-xs text-gray-400 py-4 text-center">{t("aucuneDonnee")}</p>
+                    <p className="text-sm text-gray-400">{t("aucuneDonnee")}</p>
                   )}
                 </div>
               </div>
-
               <div>
-                <h3 className="mb-3 flex items-center justify-between border-b pb-2 font-bold text-brand text-sm">
-                  <span>{t("clients")} associés</span>
-                  <span className="text-[11px] text-gray-400 font-normal">{filteredClients.length} au total</span>
+                <h3 className="mb-2 border-b pb-2 font-semibold text-brand">
+                  {t("clients")}
                 </h3>
-                <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
+                <div className="space-y-1">
                   {filteredClients.map((c) => (
                     <div
                       key={c.id}
-                      className="flex items-center justify-between rounded-xl border border-gray-100 bg-gray-50/50 px-3.5 py-2.5 hover:bg-white transition-all text-xs"
+                      className="flex items-center justify-between rounded-lg px-3 py-2 hover:bg-gray-100"
                     >
-                      <span className="font-semibold text-brand">{c.nom_client}</span>
+                      <span>{c.nom_client}</span>
                       {modal === "delete" && (
                         <Button
-                          size="xs"
+                          size="sm"
                           variant="danger"
                           onClick={() => deleteClient(c.client)}
                         >
@@ -239,31 +224,26 @@ export default function EntreprisesPage() {
                     </div>
                   ))}
                   {filteredClients.length === 0 && (
-                    <p className="text-xs text-gray-400 py-4 text-center">{t("aucuneDonnee")}</p>
+                    <p className="text-sm text-gray-400">{t("aucuneDonnee")}</p>
                   )}
                 </div>
               </div>
             </div>
           ) : (
-            <div className="py-12 text-center text-xs text-gray-400">
-              Sélectionnez une entreprise dans le panneau de gauche
-            </div>
+            <p className="text-gray-400">{t("aucuneDonnee")}</p>
           )}
 
           {selected && selectedYear && (
-            <div className="mt-8 flex justify-end border-t pt-4">
+            <div className="mt-6 flex justify-end">
               <Button
-                variant="primary"
-                size="lg"
-                className="font-bold gap-2 text-sm shadow-glow"
+                variant="success"
                 onClick={() =>
                   router.push(
                     `/accountant/entreprises/${selected.id}?annee=${selectedYear}`
                   )
                 }
               >
-                <span>Accéder au dossier ({selected.nom} · {selectedYear})</span>
-                <ArrowRight size={16} />
+                {t("entrer")} →
               </Button>
             </div>
           )}

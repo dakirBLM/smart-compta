@@ -459,7 +459,9 @@ def persist_extraction(entreprise, data, source="scanner"):
         ttc = float(data.get("montant_ttc") or 0)
         if ttc > 0:
             reg_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
-            compte_tresorerie = CAISSE_COMPTE if is_cash else "512000"
+            compte_tresorerie = CAISSE_COMPTE if is_cash else (
+                "512001" if entreprise.banque else "512000"
+            )
             lib_reglement = "Règlement espèces" if is_cash else "Règlement banque"
 
             reg_journal, _ = Journal.objects.get_or_create(

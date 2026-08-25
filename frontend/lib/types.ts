@@ -206,7 +206,7 @@ export interface BankStatementLigne {
   date: string;
   libelle: string;
   reference: string;
-  /** Sens de l'écriture pour le compte 512000 (Banque) — pas la colonne
+  /** Sens de l'écriture pour le compte 512001 (Banque) — pas la colonne
    * brute du relevé : "debit" = encaissement, "credit" = décaissement. */
   sens: "debit" | "credit";
   montant: number | string;

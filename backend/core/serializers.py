@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from rest_framework import serializers
 
 from .models import (
@@ -178,6 +179,20 @@ class LigneEcritureSerializer(serializers.ModelSerializer):
     class Meta:
         model = LigneEcriture
         fields = ["id", "numero_compte", "libelle", "montant_debit", "montant_credit"]
+
+    def validate_numero_compte(self, value):
+        numero = str(value).strip()
+        entreprise = self.context.get("entreprise")
+        accounts = SCFAccount.objects.filter(numero_compte=numero)
+        if entreprise:
+            accounts = accounts.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
+        else:
+            accounts = accounts.filter(entreprise__isnull=True)
+        if not accounts.exists():
+            raise serializers.ValidationError(
+                f"Le compte {numero} n'existe pas dans le plan comptable SCF."
+            )
+        return numero
 
 
 class EcritureSerializer(serializers.ModelSerializer):

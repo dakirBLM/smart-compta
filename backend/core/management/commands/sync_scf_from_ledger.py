@@ -32,6 +32,12 @@ class Command(BaseCommand):
         with transaction.atomic():
             for ent, items in groups.items():
                 for numero, libelle in items:
+                    if not SCFAccount.objects.filter(
+                        entreprise__isnull=True, numero_compte=numero
+                    ).exists() and not SCFAccount.objects.filter(
+                        entreprise=ent, numero_compte=numero
+                    ).exists():
+                        continue
                     obj, created_flag = SCFAccount.objects.get_or_create(
                         entreprise=ent,
                         numero_compte=numero,

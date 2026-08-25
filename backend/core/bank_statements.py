@@ -18,6 +18,11 @@ from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
 BANK_ACCOUNT = "512000"
 
+
+def enterprise_bank_account(entreprise):
+    """Return the first dynamic SCF account for the enterprise's bank."""
+    return "512001" if entreprise and entreprise.banque else BANK_ACCOUNT
+
 # Compte d'attente used when the AI cannot determine the counterpart account.
 # The accountant can correct it in the journal afterwards.
 HOLDING_ACCOUNT = "471000"
@@ -510,6 +515,11 @@ def import_bank_statement(entreprise, data):
         compte_debit, compte_credit = classify_operation(
             row["libelle"], row["direction"], row["counterpart"], row["tiers"], entreprise
         )
+        bank_account = enterprise_bank_account(entreprise)
+        if compte_debit == BANK_ACCOUNT:
+            compte_debit = bank_account
+        if compte_credit == BANK_ACCOUNT:
+            compte_credit = bank_account
         LigneEcriture.objects.create(
             ecriture=entry,
             numero_compte=compte_debit,

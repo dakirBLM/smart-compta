@@ -169,19 +169,47 @@ class SCFListView(APIView):
                 return Response(status=status.HTTP_404_NOT_FOUND)
 
         qs = SCFAccount.objects.filter(entreprise__isnull=True)
+        local_accounts = {}
         if entreprise:
-            # include entreprise-specific accounts as well
-            qs = SCFAccount.objects.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
+            local_accounts = {
+                account.numero_compte: account
+                for account in SCFAccount.objects.filter(entreprise=entreprise)
+            }
+        global_numbers = set(qs.values_list("numero_compte", flat=True))
 
-        accounts = qs.order_by("classe", "numero_compte")
+        accounts = []
+        for account in qs.order_by("classe", "numero_compte"):
+            accounts.append(local_accounts.get(account.numero_compte, account))
+        accounts.extend(
+            account for numero, account in local_accounts.items()
+            if numero not in global_numbers
+        )
         data = SCFAccountSerializer(accounts, many=True).data
+
+        # Keep every dynamic account under the longest matching master account.
+        # The response remains grouped by class for compatibility with clients.
+        master_numbers = set(qs.values_list("numero_compte", flat=True))
+        for account in data:
+            numero = account["numero_compte"]
+            account["parent"] = next(
+                (
+                    numero[:length]
+                    for length in range(len(numero) - 1, 0, -1)
+                    if numero[:length] in master_numbers
+                ),
+                None,
+            )
 
         # Group by classe 1..7
         result = {str(i): [] for i in range(1, 8)}
         for a in data:
             classe = str(a.get("classe") or 0)
             if classe in result:
-                result[classe].append({"numero_compte": a["numero_compte"], "libelle": a["libelle"]})
+                result[classe].append({
+                    "numero_compte": a["numero_compte"],
+                    "libelle": a["libelle"],
+                    "parent": a.get("parent"),
+                })
         return Response(result)
 
 class EntrepriseListCreateView(APIView):
@@ -677,7 +705,10 @@ class JournalEcrituresView(APIView):
                     montant=montant_total
                 )
             
-            serializer = EcritureSerializer(data=request.data)
+            serializer = EcritureSerializer(
+                data=request.data,
+                context={"request": request, "entreprise": entreprise},
+            )
             if not serializer.is_valid():
                 return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
             
@@ -709,7 +740,12 @@ class EcritureDetailView(APIView):
 
     def put(self, request, pk):
         ecriture = self._get(request, pk)
-        serializer = EcritureSerializer(ecriture, data=request.data, partial=True)
+        serializer = EcritureSerializer(
+            ecriture,
+            data=request.data,
+            partial=True,
+            context={"request": request, "entreprise": ecriture.journal.entreprise},
+        )
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
