@@ -84,7 +84,34 @@ class EntrepriseSerializer(serializers.ModelSerializer):
         return v
 
     def validate(self, attrs):
-        # Activity-dependent required fields.
+        # ------------------------------------------------------------------ #
+        # Per-accountant NIF / NIS uniqueness
+        # (replaces the old global unique=True constraint on the model fields)
+        # ------------------------------------------------------------------ #
+        request = self.context.get("request")
+        accountant = getattr(request, "user", None) if request else None
+
+        if accountant and accountant.is_authenticated:
+            exclude_pk = self.instance.pk if self.instance else None
+            qs_base = Entreprise.objects.filter(accountant=accountant)
+            if exclude_pk:
+                qs_base = qs_base.exclude(pk=exclude_pk)
+
+            nif = (attrs.get("nif") or "").strip()
+            nis = (attrs.get("nis") or "").strip()
+
+            if nif and qs_base.filter(nif=nif).exists():
+                raise serializers.ValidationError(
+                    {"nif": f"Une entreprise avec le NIF « {nif} » existe déjà dans votre compte."}
+                )
+            if nis and qs_base.filter(nis=nis).exists():
+                raise serializers.ValidationError(
+                    {"nis": f"Une entreprise avec le NIS « {nis} » existe déjà dans votre compte."}
+                )
+
+        # ------------------------------------------------------------------ #
+        # Activity-dependent required fields
+        # ------------------------------------------------------------------ #
         def g(f):
             if f in attrs:
                 return attrs[f]
