@@ -206,7 +206,7 @@ export function EcritureForm({
 
   const filteredScfAccounts = scfAccounts.filter(
     (a) =>
-      a.compte.includes(compteFilter) ||
+      a.compte.startsWith(compteFilter) ||
       a.libelle.toLowerCase().includes(compteFilter.toLowerCase())
   );
 
@@ -459,6 +459,14 @@ export function EcritureForm({
           </tfoot>
         </table>
       </div>
+      
+      <datalist id="scf-accounts">
+        {filteredScfAccounts.slice(0, 50).map((account) => (
+          <option key={account.compte} value={account.compte}>
+            {account.compte} - {account.libelle}
+          </option>
+        ))}
+      </datalist>
 
       {activeCompteIndex !== null && (
         <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm mt-3">
