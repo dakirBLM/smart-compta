@@ -1,4 +1,6 @@
+import csv
 from datetime import date
+from pathlib import Path
 
 from django.contrib.auth import get_user_model
 from rest_framework import status
@@ -159,3 +161,13 @@ class EcritureScfValidationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         caisse = next(account for account in response.data["5"] if account["numero_compte"] == "530001")
         self.assertEqual(caisse["parent"], "53")
+
+
+class SCFReferenceDataTests(APITestCase):
+    def test_class_5_labels_do_not_use_placeholder_me_s(self):
+        csv_path = Path(__file__).resolve().parent.parent / "data" / "LA_TABLE_SCF.csv"
+        with csv_path.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+
+        class_5_labels = [row["libelle"] for row in rows if row["classe"] == "5"]
+        self.assertFalse(any("me-s" in label.lower() or "me-es" in label.lower() for label in class_5_labels))

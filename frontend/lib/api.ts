@@ -108,8 +108,22 @@ function extractErrorMessage(data: unknown, status: number): string {
     // First field error: "champ: message"
     const parts: string[] = [];
     for (const [key, val] of Object.entries(obj)) {
-      const msg = Array.isArray(val) ? val.join(", ") : String(val);
-      parts.push(key === "non_field_errors" ? msg : `${key}: ${msg}`);
+      let msg: string;
+      if (Array.isArray(val)) {
+        // val may be: string[], or object[] (nested serializer errors per ligne)
+        msg = val.map((item) => {
+          if (item && typeof item === "object") {
+            // e.g. { numero_compte: ["..."], libelle: ["..."] }
+            return Object.entries(item as Record<string, unknown>)
+              .map(([f, v]) => `${f}: ${Array.isArray(v) ? (v as string[]).join(", ") : String(v)}`)
+              .join(", ");
+          }
+          return String(item);
+        }).filter(Boolean).join(" · ");
+      } else {
+        msg = String(val);
+      }
+      if (msg) parts.push(key === "non_field_errors" ? msg : `${key}: ${msg}`);
     }
     if (parts.length) return parts.join(" · ");
   }
