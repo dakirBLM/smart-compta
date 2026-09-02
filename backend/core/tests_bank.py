@@ -83,9 +83,8 @@ class BankStatementTestCase(TestCase):
             import_bank_statement(self.entreprise, data2)
         self.assertIn("Doublon détecté", str(ctx.exception))
 
-    def test_duplicate_non_sort_chq_raises_error(self):
-        """Pour les opérations non-SORT CHQ: Vérifier que même numero_piece est rejeté."""
-        # Créer une première opération NON-SORT CHQ
+    def test_duplicate_requires_same_date_piece_label_and_amount(self):
+        """Un même numéro de pièce ne doit pas déclencher de doublon si au moins un autre champ diffère."""
         data1 = {
             "numero_compte": "002000123456789",
             "lignes": [
@@ -100,25 +99,56 @@ class BankStatementTestCase(TestCase):
             ]
         }
         import_bank_statement(self.entreprise, data1)
-        
-        # Essayer d'importer une autre opération avec le même numero_piece
-        # Même si les autres détails diffèrent, le numero_piece dupliqué doit être rejeté
+
         data2 = {
             "numero_compte": "002000123456789",
             "lignes": [
                 {
-                    "date": "11/01/2026",  # Date différente
-                    "libelle": "Autre Virement",  # Libellé différent
-                    "reference": "VIR-2001",  # Même numero_piece
+                    "date": "11/01/2026",
+                    "libelle": "Autre Virement",
+                    "reference": "VIR-2001",
                     "sens": "credit",
-                    "montant": 50000.0,  # Montant différent
+                    "montant": 50000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        entries = import_bank_statement(self.entreprise, data2)
+        self.assertEqual(len(entries), 1)
+
+    def test_duplicate_same_date_piece_label_and_amount_raises_error(self):
+        """Le doublon est bien détecté quand les 4 champs requis concordent exactement."""
+        data1 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "VIR-2001",
+                    "sens": "credit",
+                    "montant": 120000.0,
+                    "compte_contrepartie": "401000",
+                }
+            ]
+        }
+        import_bank_statement(self.entreprise, data1)
+
+        data2 = {
+            "numero_compte": "002000123456789",
+            "lignes": [
+                {
+                    "date": "10/01/2026",
+                    "libelle": "Virement Fournisseur CONDOR",
+                    "reference": "VIR-2001",
+                    "sens": "credit",
+                    "montant": 120000.0,
                     "compte_contrepartie": "401000",
                 }
             ]
         }
         with self.assertRaises(BankStatementError) as ctx:
             import_bank_statement(self.entreprise, data2)
-        self.assertIn("existe déjà", str(ctx.exception))
+        self.assertIn("Doublon détecté", str(ctx.exception))
 
     def test_sort_chq_different_amount_allowed(self):
         """Pour SORT CHQ: Vérifier qu'un montant différent est accepté même avec date et ref identiques."""
