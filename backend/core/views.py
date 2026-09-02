@@ -9,7 +9,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
-from .account_helpers import get_or_create_client_comptable
+from .account_helpers import (
+    apply_scf_subaccounts,
+    apply_tiers_account,
+    get_or_create_client_comptable,
+    get_or_create_fournisseur,
+)
 from .bank_statements import (
     BankStatementError,
     import_bank_statement,
@@ -828,6 +833,38 @@ class ScannerUploadView(APIView):
         except WebhookError as exc:
             return Response({"error": str(exc)},
                             status=status.HTTP_502_BAD_GATEWAY)
+
+        # Resolve dynamic SCF accounts before displaying the review screen.
+        # The confirmed payload therefore already contains the exact account
+        # numbers that will appear in the SCF table and the grand livre.
+        entreprise = None
+        if request.user.role == "accountant":
+            entreprise_id = request.data.get("entreprise")
+            if entreprise_id:
+                entreprise = Entreprise.objects.filter(
+                    id=entreprise_id, accountant=request.user
+                ).first()
+        elif request.user.role == "client":
+            access = (ClientAccess.objects.filter(client=request.user)
+                      .select_related("entreprise").first())
+            entreprise = access.entreprise if access else None
+        if entreprise and data.get("lignes"):
+            try:
+                journal = str(data.get("journal", "")).strip().lower()
+                tiers_nom = (data.get("fournisseur") or "").strip()
+                if tiers_nom and journal in {"achats", "achat"}:
+                    tiers = get_or_create_fournisseur(entreprise, tiers_nom)
+                    data["lignes"] = apply_tiers_account(
+                        data["lignes"], tiers.numero_compte, "401"
+                    )
+                elif tiers_nom and journal in {"ventes", "vente"}:
+                    tiers = get_or_create_client_comptable(entreprise, tiers_nom)
+                    data["lignes"] = apply_tiers_account(
+                        data["lignes"], tiers.numero_compte, "411"
+                    )
+                data["lignes"] = apply_scf_subaccounts(entreprise, data["lignes"])
+            except (ValidationError, ValueError) as exc:
+                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         errors = validate_extraction(data)
         return Response({"data": data, "erreurs": errors,

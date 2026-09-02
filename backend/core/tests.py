@@ -1,10 +1,12 @@
 from datetime import date
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from .models import ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Fournisseur, Journal, SCFAccount
+from .account_helpers import apply_scf_subaccounts
 
 
 class BankStatementImportTests(APITestCase):
@@ -159,3 +161,116 @@ class EcritureScfValidationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         caisse = next(account for account in response.data["5"] if account["numero_compte"] == "530001")
         self.assertEqual(caisse["parent"], "53")
+
+    def test_invoice_scf_families_get_named_reusable_subaccounts(self):
+        for numero, libelle in (
+            ("380", "Produit A"),
+            ("381", "Matiere B"),
+            ("382", "Fourniture C"),
+            ("355", "Produit fini D"),
+            ("512", "BNA"),
+        ):
+            SCFAccount.objects.create(
+                numero_compte=numero, libelle=libelle, classe=int(numero[0])
+            )
+
+        lines = [
+            {"compte": numero, "libelle": libelle}
+            for numero, libelle in (
+                ("380", "Produit A"),
+                ("381", "Matiere B"),
+                ("382", "Fourniture C"),
+                ("355", "Produit fini D"),
+                ("512", "BNA"),
+            )
+        ]
+        first = apply_scf_subaccounts(self.enterprise, lines)
+        second = apply_scf_subaccounts(self.enterprise, lines)
+
+        self.assertEqual(
+            [line["compte"] for line in first],
+            ["380001", "381001", "382001", "355001", "512001"],
+        )
+        self.assertEqual(first, second)
+        self.assertEqual(
+            SCFAccount.objects.filter(
+                entreprise=self.enterprise,
+                numero_compte__in=["380001", "381001", "382001", "355001", "512001"],
+            ).count(),
+            5,
+        )
+        self.assertEqual(
+            SCFAccount.objects.get(
+                entreprise=self.enterprise, numero_compte="512001"
+            ).libelle,
+            "BANQUE BNA",
+        )
+
+    @patch("core.views.call_webhook")
+    def test_scan_preview_contains_scf_subaccounts_before_confirmation(self, webhook):
+        for numero in ("380", "512"):
+            SCFAccount.objects.create(
+                numero_compte=numero, libelle="Compte", classe=int(numero[0])
+            )
+        webhook.return_value = {
+            "fournisseur": "Fournisseur A",
+            "date_facture": "01/01/2026",
+            "numero_facture": "FAC-1",
+            "montant_ht": 100,
+            "tva_pourcentage": 19,
+            "montant_tva": 19,
+            "montant_ttc": 119,
+            "journal": "Achats",
+            "confiance": 95,
+            "lignes": [
+                {"compte": "380", "libelle": "Produit A", "debit": 100, "credit": 0},
+                {"compte": "512", "libelle": "BNA", "debit": 0, "credit": 100},
+            ],
+        }
+
+        response = self.client.post(
+            "/api/scanner/upload/",
+            {"entreprise": self.enterprise.id, "image": "dGVzdA=="},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [line["compte"] for line in response.data["data"]["lignes"]],
+            ["380001", "512001"],
+        )
+        self.assertEqual(Ecriture.objects.count(), 0)
+
+    @patch("core.views.call_webhook")
+    def test_scan_preview_replaces_generic_tier_account(self, webhook):
+        SCFAccount.objects.create(numero_compte="401", libelle="Fournisseurs", classe=4)
+        webhook.return_value = {
+            "fournisseur": "Fournisseur Preview",
+            "date_facture": "01/01/2026",
+            "numero_facture": "FAC-2",
+            "montant_ht": 100,
+            "tva_pourcentage": 19,
+            "montant_tva": 19,
+            "montant_ttc": 119,
+            "journal": "Achats",
+            "confiance": 95,
+            "lignes": [
+                {"compte": "401000", "libelle": "Fournisseur Preview", "debit": 0, "credit": 119},
+                {"compte": "6011", "libelle": "Achats", "debit": 119, "credit": 0},
+            ],
+        }
+
+        response = self.client.post(
+            "/api/scanner/upload/",
+            {"entreprise": self.enterprise.id, "image": "dGVzdA=="},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        fournisseur = Fournisseur.objects.get(
+            entreprise=self.enterprise, nom="Fournisseur Preview"
+        )
+        comptes = [line["compte"] for line in response.data["data"]["lignes"]]
+        self.assertIn(fournisseur.numero_compte, comptes)
+        self.assertNotIn("401000", comptes)
+        self.assertEqual(Ecriture.objects.count(), 0)

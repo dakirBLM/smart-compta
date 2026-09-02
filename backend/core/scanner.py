@@ -14,9 +14,11 @@ from django.core.exceptions import ValidationError
 
 from .account_helpers import (
     apply_tiers_account,
+    apply_scf_subaccounts,
     auto_balance_lines,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
+    get_or_create_scf_subaccount,
     _normalize_name,
 )
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
@@ -430,6 +432,13 @@ def persist_extraction(entreprise, data, source="scanner"):
         except ValidationError as e:
             raise WebhookError(str(e))
 
+    # Resolve stock, merchandise and bank master accounts to enterprise-specific
+    # SCF subaccounts using the element identified in each invoice line.
+    try:
+        lignes_data = apply_scf_subaccounts(entreprise, lignes_data)
+    except (ValidationError, ValueError) as e:
+        raise WebhookError(str(e))
+
     confiance = int(data.get("confiance", 0))
     statut = (Ecriture.Statut.VALIDE if confiance >= 90
               else Ecriture.Statut.EN_COURS)
@@ -460,7 +469,8 @@ def persist_extraction(entreprise, data, source="scanner"):
         if ttc > 0:
             reg_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
             compte_tresorerie = CAISSE_COMPTE if is_cash else (
-                "512001" if entreprise.banque else "512000"
+                get_or_create_scf_subaccount(entreprise, "512", entreprise.banque)
+                if entreprise.banque else "512000"
             )
             lib_reglement = "Règlement espèces" if is_cash else "Règlement banque"
 

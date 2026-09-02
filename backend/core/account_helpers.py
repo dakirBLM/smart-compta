@@ -1,8 +1,9 @@
-"""Génération et résolution des numéros de compte tiers (401 / 411)."""
+"""Génération et résolution des comptes tiers et sous-comptes SCF."""
 import re
 
 from django.core.exceptions import ValidationError
-from .models import ClientComptable, Fournisseur
+from django.db import transaction
+from .models import ClientComptable, Fournisseur, SCFAccount
 
 
 def _normalize_name(name: str) -> str:
@@ -164,4 +165,98 @@ def auto_balance_lines(lignes: list, is_vente: bool) -> list:
                 "credit": 0,
             })
 
+    return out
+
+
+SCF_SUBACCOUNT_PREFIXES = ("380", "381", "382", "355", "512")
+
+
+def _is_generic_scf_account(numero: str, prefix: str) -> bool:
+    """Recognize a master account (or its usual zero/one suffix aliases)."""
+    return numero in (prefix, f"{prefix}000", f"{prefix}1")
+
+
+def _bank_for_line(entreprise, label: str):
+    """Choose the configured bank named by the line, otherwise the first one."""
+    clean_label = _normalize_name(label)
+    for banque in (entreprise.banque, entreprise.banque2):
+        if banque and _normalize_name(banque) in clean_label:
+            return banque
+    return entreprise.banque or entreprise.banque2
+
+
+@transaction.atomic
+def get_or_create_scf_subaccount(entreprise, prefix: str, libelle: str) -> str:
+    """Return an enterprise-specific SCF subaccount, reusing it by label.
+
+    The global master account must exist first, keeping generated accounts
+    synchronized with the imported SCF chart. Number allocation is locked per
+    enterprise transaction so two confirmations cannot receive the same suffix.
+    """
+    prefix = str(prefix).strip()
+    entreprise.__class__.objects.select_for_update().get(pk=entreprise.pk)
+    if prefix not in SCF_SUBACCOUNT_PREFIXES:
+        raise ValueError(f"Préfixe SCF non pris en charge: {prefix}")
+    if not SCFAccount.objects.filter(entreprise__isnull=True, numero_compte=prefix).exists():
+        raise ValidationError(f"Le compte {prefix} n'existe pas dans le plan comptable SCF.")
+
+    label = (libelle or "").strip()
+    if prefix == "512":
+        banque = _bank_for_line(entreprise, label)
+        if not banque:
+            raise ValidationError("Aucune banque n'est enregistrée pour cette entreprise.")
+        label = f"BANQUE {banque}"
+
+    normalized_label = _normalize_name(label)
+    existing = SCFAccount.objects.filter(entreprise=entreprise, numero_compte__startswith=prefix)
+    for account in existing:
+        if _normalize_name(account.libelle) == normalized_label:
+            return account.numero_compte
+
+    allocated = list(
+        SCFAccount.objects.select_for_update()
+        .filter(entreprise=entreprise, numero_compte__startswith=prefix)
+        .values_list("numero_compte", flat=True)
+    )
+    suffixes = [
+        int(match.group(1))
+        for number in allocated
+        if (match := re.fullmatch(rf"{re.escape(prefix)}(\d{{3}})", str(number)))
+    ]
+    next_suffix = max(suffixes, default=0) + 1
+    if next_suffix > 999:
+        raise ValueError(f"Limite de comptes {prefix} atteinte pour cette entreprise.")
+    account = SCFAccount.objects.create(
+        entreprise=entreprise,
+        numero_compte=f"{prefix}{next_suffix:03d}",
+        libelle=label,
+        classe=int(prefix[0]),
+    )
+    return account.numero_compte
+
+
+def apply_scf_subaccounts(entreprise, lignes: list) -> list:
+    """Replace generic 380/381/382/355/512 lines with named subaccounts."""
+    out = []
+    for raw_line in lignes:
+        line = dict(raw_line)
+        numero = str(line.get("compte", "") or "").strip()
+        prefix = next(
+            (candidate for candidate in SCF_SUBACCOUNT_PREFIXES
+             if numero.startswith(candidate)),
+            None,
+        )
+        if prefix and _is_generic_scf_account(numero, prefix):
+            line["compte"] = get_or_create_scf_subaccount(
+                entreprise, prefix, line.get("libelle", "")
+            )
+        elif prefix == "512" and numero in {"512001", "512002"}:
+            bank = entreprise.banque if numero == "512001" else entreprise.banque2
+            if bank:
+                SCFAccount.objects.update_or_create(
+                    entreprise=entreprise,
+                    numero_compte=numero,
+                    defaults={"libelle": f"BANQUE {bank}", "classe": 5},
+                )
+        out.append(line)
     return out
