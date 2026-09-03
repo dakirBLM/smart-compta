@@ -18,7 +18,7 @@ from .account_helpers import (
     auto_balance_lines,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
-    get_or_create_scf_subaccount,
+    enterprise_bank_subaccount,
     _normalize_name,
 )
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
@@ -469,8 +469,10 @@ def persist_extraction(entreprise, data, source="scanner"):
         if ttc > 0:
             reg_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
             compte_tresorerie = CAISSE_COMPTE if is_cash else (
-                get_or_create_scf_subaccount(entreprise, "512", entreprise.banque)
-                if entreprise.banque else "512000"
+                enterprise_bank_subaccount(
+                    entreprise, data.get("banque") or data.get("libelle_banque") or ""
+                )
+                if entreprise.banque or entreprise.banque2 else "512000"
             )
             lib_reglement = "Règlement espèces" if is_cash else "Règlement banque"
 

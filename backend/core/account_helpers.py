@@ -185,6 +185,11 @@ def _bank_for_line(entreprise, label: str):
     return entreprise.banque or entreprise.banque2
 
 
+def enterprise_bank_subaccount(entreprise, label: str = "") -> str:
+    """Return the named 512 subaccount for the bank identified by a label."""
+    return get_or_create_scf_subaccount(entreprise, "512", label)
+
+
 @transaction.atomic
 def get_or_create_scf_subaccount(entreprise, prefix: str, libelle: str) -> str:
     """Return an enterprise-specific SCF subaccount, reusing it by label.

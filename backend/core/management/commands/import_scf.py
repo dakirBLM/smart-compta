@@ -10,6 +10,7 @@ Default path (no argument): backend/data/LA_TABLE_SCF.csv
 This works locally and in production (Vercel, etc.) without relying on user's Downloads folder.
 """
 import csv
+import re
 from pathlib import Path
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -46,6 +47,8 @@ class Command(BaseCommand):
                     numero = (row.get("numero_compte") or row.get("numero") or "").strip()
                     libelle = (row.get("libelle") or row.get("label") or "").strip()
                     classe = row.get("classe")
+                    if str(classe).strip() == "5":
+                        libelle = re.sub(r"me-es|me-s", "accreditifs", libelle, flags=re.IGNORECASE)
                     if not numero:
                         skipped += 1
                         continue
