@@ -225,7 +225,7 @@ class EntrepriseListCreateView(APIView):
         return Response(EntrepriseSerializer(qs, many=True).data)
 
     def post(self, request):
-        serializer = EntrepriseSerializer(data=request.data)
+        serializer = EntrepriseSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
         entreprise = serializer.save(accountant=request.user)
         # Seed the first fiscal year from exercice_comptable if it is a year, or current year.
@@ -249,7 +249,8 @@ class EntrepriseDetailView(APIView):
 
     def put(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
-        serializer = EntrepriseSerializer(entreprise, data=request.data, partial=True)
+        serializer = EntrepriseSerializer(entreprise, data=request.data, partial=True,
+                                          context={"request": request})
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)

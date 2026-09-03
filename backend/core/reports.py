@@ -7,8 +7,9 @@ account number determines the class (1..7).
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
+from django.db.models import Q
 
-from .models import Ecriture, LigneEcriture
+from .models import Ecriture, LigneEcriture, SCFAccount
 
 # Standard account-class labels (Plan Comptable National).
 CLASSE_LABELS = {
@@ -173,11 +174,40 @@ def build_grand_livre(entreprise, annee=None, start=None, end=None):
     qs = _lignes_qs(entreprise, annee, start, end).order_by(
         "numero_compte", "ecriture__date_ecriture", "ecriture__id"
     )
+    
+    # Pre-fetch SCF accounts for this entreprise to get correct titles
+    scf_qs = SCFAccount.objects.filter(Q(entreprise=entreprise) | Q(entreprise__isnull=True))
+    scf_map = {}
+    # Load global accounts first
+    for scf in scf_qs.filter(entreprise__isnull=True):
+        scf_map[scf.numero_compte] = scf.libelle
+    # Overwrite with entreprise-specific accounts
+    for scf in scf_qs.filter(entreprise=entreprise):
+        scf_map[scf.numero_compte] = scf.libelle
+
     comptes = defaultdict(lambda: {"libelle": "", "lignes": []})
     for ligne in qs:
-        comptes[ligne.numero_compte]["lignes"].append(ligne)
-        if ligne.libelle and not comptes[ligne.numero_compte]["libelle"]:
-            comptes[ligne.numero_compte]["libelle"] = ligne.libelle
+        compte_num = ligne.numero_compte
+        comptes[compte_num]["lignes"].append(ligne)
+        # Use SCF libelle if available, fallback to the line's libelle or a TODO string
+        if not comptes[compte_num]["libelle"]:
+            if compte_num in scf_map:
+                comptes[compte_num]["libelle"] = scf_map[compte_num]
+            elif ligne.libelle:
+                comptes[compte_num]["libelle"] = ligne.libelle
+            else:
+                # Hierarchical fallback: find the longest matching prefix in scf_map
+                inherited_label = ""
+                for i in range(len(compte_num) - 1, 0, -1):
+                    prefix = compte_num[:i]
+                    if prefix in scf_map:
+                        inherited_label = scf_map[prefix]
+                        break
+                
+                if inherited_label:
+                    comptes[compte_num]["libelle"] = inherited_label
+                else:
+                    comptes[compte_num]["libelle"] = CLASSE_LABELS.get(compte_num[0], f"Compte {compte_num}")
 
     result = []
     for compte in sorted(comptes.keys()):

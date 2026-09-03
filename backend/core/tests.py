@@ -1,4 +1,6 @@
+import csv
 from datetime import date
+from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -113,7 +115,7 @@ class EcritureScfValidationTests(APITestCase):
         response = self.client.post(self.url, {
             "date_ecriture": "2026-01-01",
             "lignes": [
-                {"numero_compte": "4111", "libelle": "Client", "montant_debit": "10", "montant_credit": "0"},
+                {"numero_compte": "999999", "libelle": "Compte inconnu", "montant_debit": "10", "montant_credit": "0"},
                 {"numero_compte": "512001", "libelle": "Banque", "montant_debit": "0", "montant_credit": "10"},
             ],
         }, format="json")
@@ -274,3 +276,13 @@ class EcritureScfValidationTests(APITestCase):
         self.assertIn(fournisseur.numero_compte, comptes)
         self.assertNotIn("401000", comptes)
         self.assertEqual(Ecriture.objects.count(), 0)
+
+
+class SCFReferenceDataTests(APITestCase):
+    def test_class_5_labels_do_not_use_placeholder_me_s(self):
+        csv_path = Path(__file__).resolve().parent.parent / "data" / "LA_TABLE_SCF.csv"
+        with csv_path.open(encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+
+        class_5_labels = [row["libelle"] for row in rows if row["classe"] == "5"]
+        self.assertFalse(any("me-s" in label.lower() or "me-es" in label.lower() for label in class_5_labels))

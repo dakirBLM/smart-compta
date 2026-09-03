@@ -75,7 +75,7 @@ def add_ligne_compte_to_scf(sender, instance: LigneEcriture, created, **kwargs):
 
     inherited = get_inherited_label(instance.numero_compte) or instance.libelle
     if inherited:
-        SCFAccount.objects.update_or_create(
+        SCFAccount.objects.get_or_create(
             entreprise=ent,
             numero_compte=instance.numero_compte,
             defaults={"libelle": inherited},

@@ -206,7 +206,7 @@ export function EcritureForm({
 
   const filteredScfAccounts = scfAccounts.filter(
     (a) =>
-      a.compte.includes(compteFilter) ||
+      a.compte.startsWith(compteFilter) ||
       a.libelle.toLowerCase().includes(compteFilter.toLowerCase())
   );
 
@@ -239,8 +239,19 @@ export function EcritureForm({
       setError(t("date"));
       return;
     }
+    const isValidCompte = (numero: string) => {
+      if (!numero) return true;
+      // Accept exact match
+      if (scfAccounts.some((a) => a.compte === numero)) return true;
+      // Accept padded 6-digit accounts whose prefix exists in SCF
+      // e.g. "607000" is valid if "607" or "60" or "6" exists in SCF
+      for (let len = numero.length - 1; len >= 1; len--) {
+        if (scfAccounts.some((a) => a.compte === numero.slice(0, len))) return true;
+      }
+      return false;
+    };
     const invalidAccount = lignes.find(
-      (ligne) => ligne.numero_compte && !scfAccounts.some((a) => a.compte === ligne.numero_compte)
+      (ligne) => ligne.numero_compte && !isValidCompte(ligne.numero_compte)
     );
     if (invalidAccount) {
       setError(`Le compte ${invalidAccount.numero_compte} n'existe pas dans le plan comptable SCF.`);
@@ -407,6 +418,19 @@ export function EcritureForm({
                         ? { numero_compte: v, libelle: match.libelle }
                         : { numero_compte: v });
                     }}
+                    onBlur={(e) => {
+                      let v = e.target.value;
+                      if (v && v.length < 6 && /^\d+$/.test(v)) {
+                        v = v.padEnd(6, "0");
+                        const match = scfAccounts.find((a) => a.compte === v) || scfAccounts.find((a) => a.compte === e.target.value);
+                        setLigne(i, { 
+                          numero_compte: v, 
+                          libelle: l.libelle || match?.libelle || ""
+                        });
+                      }
+                      // Delay closing custom popup slightly to allow clicks
+                      setTimeout(() => setActiveCompteIndex(null), 200);
+                    }}
                   />
                 </td>
                 <td className="p-1">
@@ -459,6 +483,14 @@ export function EcritureForm({
           </tfoot>
         </table>
       </div>
+      
+      <datalist id="scf-accounts">
+        {filteredScfAccounts.slice(0, 50).map((account) => (
+          <option key={account.compte} value={account.compte}>
+            {account.compte} - {account.libelle}
+          </option>
+        ))}
+      </datalist>
 
       {activeCompteIndex !== null && (
         <div className="rounded-xl border border-gray-200 bg-white p-3 shadow-sm mt-3">
@@ -493,8 +525,12 @@ export function EcritureForm({
                 onClick={() => {
                   if (activeCompteIndex === null) return;
                   const ligne = lignes[activeCompteIndex];
+                  let finalCompte = account.compte;
+                  if (finalCompte.length < 6 && /^\d+$/.test(finalCompte)) {
+                    finalCompte = finalCompte.padEnd(6, "0");
+                  }
                   setLigne(activeCompteIndex, {
-                    numero_compte: account.compte,
+                    numero_compte: finalCompte,
                     libelle: ligne.libelle || account.libelle,
                   });
                   setActiveCompteIndex(null);

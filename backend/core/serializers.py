@@ -84,7 +84,34 @@ class EntrepriseSerializer(serializers.ModelSerializer):
         return v
 
     def validate(self, attrs):
-        # Activity-dependent required fields.
+        # ------------------------------------------------------------------ #
+        # Per-accountant NIF / NIS uniqueness
+        # (replaces the old global unique=True constraint on the model fields)
+        # ------------------------------------------------------------------ #
+        request = self.context.get("request")
+        accountant = getattr(request, "user", None) if request else None
+
+        if accountant and accountant.is_authenticated:
+            exclude_pk = self.instance.pk if self.instance else None
+            qs_base = Entreprise.objects.filter(accountant=accountant)
+            if exclude_pk:
+                qs_base = qs_base.exclude(pk=exclude_pk)
+
+            nif = (attrs.get("nif") or "").strip()
+            nis = (attrs.get("nis") or "").strip()
+
+            if nif and qs_base.filter(nif=nif).exists():
+                raise serializers.ValidationError(
+                    {"nif": f"Une entreprise avec le NIF « {nif} » existe déjà dans votre compte."}
+                )
+            if nis and qs_base.filter(nis=nis).exists():
+                raise serializers.ValidationError(
+                    {"nis": f"Une entreprise avec le NIS « {nis} » existe déjà dans votre compte."}
+                )
+
+        # ------------------------------------------------------------------ #
+        # Activity-dependent required fields
+        # ------------------------------------------------------------------ #
         def g(f):
             if f in attrs:
                 return attrs[f]
@@ -183,16 +210,29 @@ class LigneEcritureSerializer(serializers.ModelSerializer):
     def validate_numero_compte(self, value):
         numero = str(value).strip()
         entreprise = self.context.get("entreprise")
-        accounts = SCFAccount.objects.filter(numero_compte=numero)
-        if entreprise:
-            accounts = accounts.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
-        else:
-            accounts = accounts.filter(entreprise__isnull=True)
-        if not accounts.exists():
-            raise serializers.ValidationError(
-                f"Le compte {numero} n'existe pas dans le plan comptable SCF."
-            )
-        return numero
+
+        def scf_exists(num):
+            qs = SCFAccount.objects.filter(numero_compte=num)
+            if entreprise:
+                qs = qs.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
+            else:
+                qs = qs.filter(entreprise__isnull=True)
+            return qs.exists()
+
+        # Accept exact match first
+        if scf_exists(numero):
+            return numero
+
+        # Accept 6-digit padded accounts whose prefix exists in SCF
+        # e.g. "607000" is valid because "607" exists in SCF
+        for length in range(len(numero) - 1, 0, -1):
+            if scf_exists(numero[:length]):
+                return numero
+
+        raise serializers.ValidationError(
+            f"Le compte {numero} n'existe pas dans le plan comptable SCF."
+        )
+
 
 
 class EcritureSerializer(serializers.ModelSerializer):
