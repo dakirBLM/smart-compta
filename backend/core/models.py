@@ -4,8 +4,8 @@ from django.db import models
 
 class Entreprise(models.Model):
     nom = models.CharField(max_length=255)
-    nif = models.CharField(max_length=50, unique=True)          # locked after creation
-    nis = models.CharField(max_length=50, unique=True)          # locked after creation
+    nif = models.CharField(max_length=50, blank=True, default="")  # locked after creation; unique per accountant
+    nis = models.CharField(max_length=50, blank=True, default="")  # locked after creation; unique per accountant
     nin = models.CharField(max_length=50, blank=True, default="")
     date_creation = models.DateField()
     adresse = models.CharField(max_length=255, blank=True, default="")
@@ -35,6 +35,20 @@ class Entreprise(models.Model):
 
     class Meta:
         ordering = ["nom"]
+        # Organization name, NIF, and NIS must be unique within the same accountant's portfolio.
+        # Empty strings for NIF/NIS are excluded from constraints (handled in serializer).
+        constraints = [
+            models.UniqueConstraint(
+                fields=["accountant", "nif"],
+                condition=~models.Q(nif=""),
+                name="unique_nif_per_accountant",
+            ),
+            models.UniqueConstraint(
+                fields=["accountant", "nis"],
+                condition=~models.Q(nis=""),
+                name="unique_nis_per_accountant",
+            ),
+        ]
 
     def __str__(self) -> str:
         return self.nom
