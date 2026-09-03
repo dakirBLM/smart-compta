@@ -208,6 +208,27 @@ class EcritureScfValidationTests(APITestCase):
             "BANQUE BNA",
         )
 
+    def test_second_bank_gets_its_own_named_subaccount(self):
+        self.enterprise.banque2 = "CPA"
+        self.enterprise.save(update_fields=["banque2"])
+        SCFAccount.objects.create(numero_compte="512", libelle="Banques", classe=5)
+
+        first = apply_scf_subaccounts(
+            self.enterprise, [{"compte": "512", "libelle": "Paiement BNA"}]
+        )
+        second = apply_scf_subaccounts(
+            self.enterprise, [{"compte": "512", "libelle": "Paiement CPA"}]
+        )
+
+        self.assertEqual(first[0]["compte"], "512001")
+        self.assertEqual(second[0]["compte"], "512002")
+        self.assertEqual(
+            SCFAccount.objects.get(
+                entreprise=self.enterprise, numero_compte="512002"
+            ).libelle,
+            "BANQUE CPA",
+        )
+
     @patch("core.views.call_webhook")
     def test_scan_preview_contains_scf_subaccounts_before_confirmation(self, webhook):
         for numero in ("380", "512"):
@@ -286,3 +307,4 @@ class SCFReferenceDataTests(APITestCase):
 
         class_5_labels = [row["libelle"] for row in rows if row["classe"] == "5"]
         self.assertFalse(any("me-s" in label.lower() or "me-es" in label.lower() for label in class_5_labels))
+

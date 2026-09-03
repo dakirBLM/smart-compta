@@ -12,16 +12,30 @@ import unicodedata
 from django.core.exceptions import ValidationError
 from django.db import transaction
 
-from .account_helpers import get_or_create_client_comptable, get_or_create_fournisseur
-from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
+from .account_helpers import (
+    apply_scf_subaccounts,
+    enterprise_bank_subaccount,
+    get_or_create_client_comptable,
+    get_or_create_fournisseur,
+)
+from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture, SCFAccount
 
 
 BANK_ACCOUNT = "512000"
 
 
-def enterprise_bank_account(entreprise):
-    """Return the first dynamic SCF account for the enterprise's bank."""
-    return "512001" if entreprise and entreprise.banque else BANK_ACCOUNT
+def enterprise_bank_account(entreprise, label=""):
+    """Return the named dynamic SCF account for the enterprise's bank."""
+    if not entreprise or not (entreprise.banque or entreprise.banque2):
+        return BANK_ACCOUNT
+    if not SCFAccount.objects.filter(
+        entreprise__isnull=True, numero_compte="512"
+    ).exists():
+        normalized_label = _normalize_label(label)
+        if entreprise.banque2 and entreprise.banque2.upper() in normalized_label:
+            return "512002"
+        return "512001"
+    return enterprise_bank_subaccount(entreprise, label)
 
 # Compte d'attente used when the AI cannot determine the counterpart account.
 # The accountant can correct it in the journal afterwards.
@@ -503,11 +517,21 @@ def import_bank_statement(entreprise, data):
         compte_debit, compte_credit = classify_operation(
             row["libelle"], row["direction"], row["counterpart"], row["tiers"], entreprise
         )
-        bank_account = enterprise_bank_account(entreprise)
+        bank_account = enterprise_bank_account(entreprise, row["libelle"])
         if compte_debit == BANK_ACCOUNT:
             compte_debit = bank_account
         if compte_credit == BANK_ACCOUNT:
             compte_credit = bank_account
+        counterpart_lines = apply_scf_subaccounts(
+            entreprise,
+            [
+                {"compte": compte_debit, "libelle": row["libelle"]},
+                {"compte": compte_credit, "libelle": row["libelle"]},
+            ],
+        )
+        compte_debit, compte_credit = (
+            counterpart_lines[0]["compte"], counterpart_lines[1]["compte"]
+        )
         LigneEcriture.objects.create(
             ecriture=entry,
             numero_compte=compte_debit,
