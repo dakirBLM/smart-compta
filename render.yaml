@@ -9,12 +9,12 @@ services:
     rootDir: backend
     # Build: install, gather static, migrate, and seed demo data.
     buildCommand: >-
-  pip install -r requirements.txt &&
-  python manage.py collectstatic --noinput &&
-  python manage.py migrate &&
-  python manage.py seed &&
-  python manage.py import_scf &&
-  python manage.py sync_scf_from_ledger
+      pip install -r requirements.txt &&
+      python manage.py collectstatic --noinput &&
+      python manage.py migrate &&
+      python manage.py seed &&
+      python manage.py import_scf &&
+      python manage.py sync_scf_from_ledger
     # --timeout 320: vision extraction can be slow; keep above WEBHOOK_TIMEOUT.
     startCommand: gunicorn smartcompta.wsgi --bind 0.0.0.0:$PORT --timeout 320
     healthCheckPath: /
