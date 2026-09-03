@@ -402,61 +402,49 @@ def _resolve_exercice(entreprise, date):
 
 def check_bank_operation_duplicate(entreprise, operation_date, reference, label, amount):
     """Vérifie si une opération bancaire identique existe déjà.
-    
-    Logique conditionnelle :
-    - Si libellé contient "SORT CHQ" → Comparer les 4 critères :
-      1. Date de l'opération
-      2. N° de pièce (référence)
+
+    Une opération n'est considérée comme un doublon que si tous les champs
+    requis correspondent, dans l'ordre :
+      1. Date
+      2. N° de pièce
       3. Libellé
       4. Montant
-      (Tous les 4 doivent correspondre)
-    
-    - Sinon → Vérifier uniquement l'unicité du n° de pièce
-    
-    Retourne l'Ecriture existante si un doublon est trouvé, None sinon.
+
+    Le numéro de pièce seul ne suffit pas. Si la date, le libellé ou le montant
+    diffère, l'opération est traitée comme une nouvelle opération.
     """
-    from django.db.models import Q
-    
-    label_normalized = (label or "").upper()
-    is_sort_chq = "SORT CHQ" in label_normalized
-    
-    # Pour les opérations SORT CHQ : vérifier les 4 critères
-    if is_sort_chq:
-        # Chercher une ecriture bancaire avec la même date, référence
-        duplicate = Ecriture.objects.filter(
+    if not reference:
+        return None
+
+    normalized_label = _normalize_label(label)
+    amount_decimal = Decimal(str(amount))
+
+    duplicate = (
+        Ecriture.objects.filter(
             journal__entreprise=entreprise,
             journal__type_journal=Journal.Type.BANQUE,
             date_ecriture=operation_date,
             numero_piece=reference,
-        ).first()
-        
-        if not duplicate:
-            return None
-        
-        # Vérifier que au moins une ligne a le même libellé ET montant
-        matching_line = duplicate.lignes.filter(
-            libelle=label
-        ).filter(
-            Q(montant_debit=amount) | Q(montant_credit=amount)
-        ).first()
-        
-        if matching_line:
-            return duplicate
-        
+        )
+        .prefetch_related("lignes")
+        .first()
+    )
+    if not duplicate:
         return None
-    
-    # Pour les autres opérations : vérifier seulement l'unicité du n° de pièce
-    else:
-        duplicate = Ecriture.objects.filter(
-            journal__entreprise=entreprise,
-            journal__type_journal=Journal.Type.BANQUE,
-            numero_piece=reference,
-        ).first()
-        
-        if duplicate:
+
+    for line in duplicate.lignes.all():
+        if _normalize_label(line.libelle) != normalized_label:
+            continue
+
+        line_amount = Decimal(str(line.montant_debit or 0))
+        if line_amount == amount_decimal:
             return duplicate
-        
-        return None
+
+        line_amount = Decimal(str(line.montant_credit or 0))
+        if line_amount == amount_decimal:
+            return duplicate
+
+    return None
 
 
 @transaction.atomic

@@ -210,16 +210,29 @@ class LigneEcritureSerializer(serializers.ModelSerializer):
     def validate_numero_compte(self, value):
         numero = str(value).strip()
         entreprise = self.context.get("entreprise")
-        accounts = SCFAccount.objects.filter(numero_compte=numero)
-        if entreprise:
-            accounts = accounts.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
-        else:
-            accounts = accounts.filter(entreprise__isnull=True)
-        if not accounts.exists():
-            raise serializers.ValidationError(
-                f"Le compte {numero} n'existe pas dans le plan comptable SCF."
-            )
-        return numero
+
+        def scf_exists(num):
+            qs = SCFAccount.objects.filter(numero_compte=num)
+            if entreprise:
+                qs = qs.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
+            else:
+                qs = qs.filter(entreprise__isnull=True)
+            return qs.exists()
+
+        # Accept exact match first
+        if scf_exists(numero):
+            return numero
+
+        # Accept 6-digit padded accounts whose prefix exists in SCF
+        # e.g. "607000" is valid because "607" exists in SCF
+        for length in range(len(numero) - 1, 0, -1):
+            if scf_exists(numero[:length]):
+                return numero
+
+        raise serializers.ValidationError(
+            f"Le compte {numero} n'existe pas dans le plan comptable SCF."
+        )
+
 
 
 class EcritureSerializer(serializers.ModelSerializer):
