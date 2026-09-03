@@ -3,7 +3,7 @@ from django.test import TestCase
 from core.models import Entreprise, Journal, Ecriture, LigneEcriture, ExerciceAnnee
 from core.bank_statements import (
     import_bank_statement, BankStatementError, validate_statement_account,
-    classify_operation, BANK_ACCOUNT, HOLDING_ACCOUNT,
+    classify_operation, BANK_ACCOUNT, HOLDING_ACCOUNT, enterprise_bank_account,
 )
 from django.contrib.auth import get_user_model
 
@@ -272,7 +272,7 @@ class BankStatementTestCase(TestCase):
         l_credit1 = [l for l in lignes1 if float(l.montant_credit) > 0][0]
         self.assertTrue(l_debit1.numero_compte.startswith("401"))
         self.assertEqual(float(l_debit1.montant_debit), 120000.0)
-        self.assertEqual(l_credit1.numero_compte, "512000")
+        self.assertEqual(l_credit1.numero_compte, enterprise_bank_account(self.entreprise))
         self.assertEqual(float(l_credit1.montant_credit), 120000.0)
 
         # 2. Opération 2: Recette Client 350000 DA (encaissement -> débit 512000, crédit 411xxx)
@@ -282,7 +282,7 @@ class BankStatementTestCase(TestCase):
         self.assertEqual(len(lignes2), 2)
         l_debit2 = [l for l in lignes2 if float(l.montant_debit) > 0][0]
         l_credit2 = [l for l in lignes2 if float(l.montant_credit) > 0][0]
-        self.assertEqual(l_debit2.numero_compte, "512000")
+        self.assertEqual(l_debit2.numero_compte, enterprise_bank_account(self.entreprise))
         self.assertEqual(float(l_debit2.montant_debit), 350000.0)
         self.assertTrue(l_credit2.numero_compte.startswith("411"))
         self.assertEqual(float(l_credit2.montant_credit), 350000.0)
@@ -296,7 +296,7 @@ class BankStatementTestCase(TestCase):
         l_credit3 = [l for l in lignes3 if float(l.montant_credit) > 0][0]
         self.assertEqual(l_debit3.numero_compte, "627000")
         self.assertEqual(float(l_debit3.montant_debit), 2500.0)
-        self.assertEqual(l_credit3.numero_compte, "512000")
+        self.assertEqual(l_credit3.numero_compte, enterprise_bank_account(self.entreprise))
         self.assertEqual(float(l_credit3.montant_credit), 2500.0)
 
     def test_bank_statement_accepts_two_amount_columns(self):
@@ -350,7 +350,7 @@ class BankStatementTestCase(TestCase):
         self.assertEqual(l_credit.numero_compte, "471000")
         # La ligne de débit doit être 512000 (compte d'attente en crédit, banque en débit)
         l_debit = ec.lignes.filter(montant_debit__gt=0).first()
-        self.assertEqual(l_debit.numero_compte, "512000")
+        self.assertEqual(l_debit.numero_compte, enterprise_bank_account(self.entreprise))
 
     def test_versement_creates_banque_and_caisse_entries(self):
         """When import contains VERSEMENT, create both Banque and Caisse entries."""
@@ -389,7 +389,7 @@ class BankStatementTestCase(TestCase):
         blines = list(eb.lignes.all())
         b_debit = [l for l in blines if float(l.montant_debit) > 0][0]
         b_credit = [l for l in blines if float(l.montant_credit) > 0][0]
-        self.assertEqual(b_debit.numero_compte, "512000")
+        self.assertEqual(b_debit.numero_compte, enterprise_bank_account(self.entreprise))
         self.assertEqual(b_credit.numero_compte, "581000")
         self.assertEqual(float(b_debit.montant_debit), 20000.0)
         self.assertEqual(float(b_credit.montant_credit), 20000.0)
@@ -582,32 +582,32 @@ class BankStatementIntegrationRulesTestCase(TestCase):
 
     def test_integration_versement(self):
         d, c = self._import("VERSEMENT ESPECES AU GUICHET", "debit", 50000)
-        self.assertEqual(d, "512000")
+        self.assertEqual(d, enterprise_bank_account(self.entreprise))
         self.assertEqual(c, "581000")
 
     def test_integration_sort_chq_fournisseur(self):
         d, c = self._import("SORT CHQ 00089 FOURNISSEUR", "credit", 30000, tiers="FOURNISSEUR ABC")
         self.assertTrue(d.startswith("401"))
-        self.assertEqual(c, "512000")
+        self.assertEqual(c, enterprise_bank_account(self.entreprise))
 
     def test_integration_encaissement_client(self):
         d, c = self._import("REMISE CHEQUE CLIENT DURAND", "debit", 80000, tiers="CLIENT DURAND")
-        self.assertEqual(d, "512000")
+        self.assertEqual(d, enterprise_bank_account(self.entreprise))
         self.assertTrue(c.startswith("411"))
 
     def test_integration_frais_bancaires(self):
         d, c = self._import("COMMISSION SUR VIREMENT EMIS", "credit", 500)
         self.assertEqual(d, "627000")
-        self.assertEqual(c, "512000")
+        self.assertEqual(c, enterprise_bank_account(self.entreprise))
 
     def test_integration_unknown_sortie_holding(self):
         d, c = self._import("OP DIVERSE NON IDENTIFIEE", "credit", 1000)
         self.assertEqual(d, HOLDING_ACCOUNT)
-        self.assertEqual(c, "512000")
+        self.assertEqual(c, enterprise_bank_account(self.entreprise))
 
     def test_integration_unknown_entree_holding(self):
         d, c = self._import("OP DIVERSE NON IDENTIFIEE", "debit", 1000)
-        self.assertEqual(d, "512000")
+        self.assertEqual(d, enterprise_bank_account(self.entreprise))
         self.assertEqual(c, HOLDING_ACCOUNT)
 
     def test_duplicate_bank_operation_all_four_identical_raises_error(self):
