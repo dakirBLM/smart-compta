@@ -68,6 +68,10 @@ class Command(BaseCommand):
                     if created_flag:
                         created += 1
                     else:
+                        if obj.libelle != libelle or obj.classe != classe_val:
+                            obj.libelle = libelle
+                            obj.classe = classe_val
+                            obj.save(update_fields=["libelle", "classe"])
                         skipped += 1
 
         self.stdout.write(self.style.SUCCESS(f"Import complete. Created={created}, Skipped={skipped}"))
