@@ -4,14 +4,14 @@ from django.db import migrations
 
 
 class Migration(migrations.Migration):
+    """Removed the constraint that 0012 added; both are now empty.
+
+    See 0012 for why. Organisation names are deliberately not unique per
+    accountant.
+    """
 
     dependencies = [
         ('core', '0012_per_accountant_nom_uniqueness'),
     ]
 
-    operations = [
-        migrations.RemoveConstraint(
-            model_name='entreprise',
-            name='unique_nom_per_accountant',
-        ),
-    ]
+    operations = []
