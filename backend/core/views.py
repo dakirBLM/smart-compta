@@ -1249,6 +1249,52 @@ class FactureDetailView(APIView):
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
         return Response(FactureSerializer(facture).data)
 
+    @transaction.atomic
+    def delete(self, request, pk):
+        if request.user.role == "accountant":
+            facture = get_object_or_404(
+                Facture, pk=pk, entreprise__accountant=request.user)
+        else:
+            facture = get_object_or_404(Facture, pk=pk, client=request.user)
+
+        ecriture = facture.ecriture
+        if ecriture:
+            caisse_identifiers = {
+                "entreprise_id": ecriture.journal.entreprise_id,
+                "annee_id": ecriture.journal.annee_id,
+                "date_ecriture": ecriture.date_ecriture,
+                "numero_piece": ecriture.numero_piece,
+                "fournisseur_client": ecriture.fournisseur_client,
+                "source": ecriture.source,
+                "confiance_ia": ecriture.confiance_ia,
+                "statut": ecriture.statut,
+                "mode_paiement": ecriture.mode_paiement,
+            }
+            montant_ttc = facture.montant_ttc
+            ecriture.delete()
+
+            caisse_entries = Ecriture.objects.filter(
+                journal__entreprise_id=caisse_identifiers["entreprise_id"],
+                journal__annee_id=caisse_identifiers["annee_id"],
+                journal__type_journal=Journal.Type.CAISSE,
+                date_ecriture=caisse_identifiers["date_ecriture"],
+                numero_piece=caisse_identifiers["numero_piece"],
+                fournisseur_client=caisse_identifiers["fournisseur_client"],
+                source=caisse_identifiers["source"],
+                confiance_ia=caisse_identifiers["confiance_ia"],
+                statut=caisse_identifiers["statut"],
+                mode_paiement=caisse_identifiers["mode_paiement"],
+                lignes__numero_compte="530000",
+            ).filter(
+                Q(lignes__montant_debit=montant_ttc)
+                | Q(lignes__montant_credit=montant_ttc)
+            ).distinct()
+            if caisse_entries.count() == 1:
+                caisse_entries.first().delete()
+
+        facture.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 # --------------------------------------------------------------------------- #
 # Facture – Validate & auto-post to Banque / Caisse
