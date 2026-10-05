@@ -7,8 +7,9 @@ from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from .models import ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Fournisseur, Journal, SCFAccount
+from .models import BankStatement, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
 from .account_helpers import apply_scf_subaccounts
+from .scanner import persist_extraction
 
 
 class BankStatementImportTests(APITestCase):
@@ -26,7 +27,8 @@ class BankStatementImportTests(APITestCase):
 
     def test_import_sorts_lines_and_creates_balanced_inverse_entries(self):
         response = self.client.post(self.url, {
-            "numero_compte": "00123456",
+            "nom_banque": "BNA",
+            "nom_entreprise": "ACME",
             "lignes": [
                 {"date": "05/02/2026", "libelle": "Virement fournisseur", "montant": "100,50", "sens": "credit", "compte_contrepartie": "401000"},
                 {"date": "04/02/2026", "libelle": "Chèque retour client", "montant": "200", "sens": "debit", "compte_contrepartie": "411000"},
@@ -48,16 +50,34 @@ class BankStatementImportTests(APITestCase):
 
     def test_mismatched_statement_account_is_rejected_before_creating_entries(self):
         response = self.client.post(self.url, {
-            "numero_compte": "99999999",
+            "nom_banque": "CPA",
+            "nom_entreprise": "ACME",
             "lignes": [{"date": "04/02/2026", "libelle": "Test", "montant": 1, "sens": "debit", "compte_contrepartie": "401000"}],
         }, format="json")
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Ecriture.objects.count(), 0)
 
+    def test_import_without_legacy_identity_fields_uses_enterprise_profile(self):
+        response = self.client.post(self.url, {
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        statement = BankStatement.objects.get(entreprise=self.enterprise)
+        self.assertEqual(statement.nom_banque, self.enterprise.banque)
+        self.assertEqual(statement.nom_entreprise, self.enterprise.nom)
+
     def test_import_resolves_named_tiers_to_their_own_dedicated_account(self):
         response = self.client.post(self.url, {
-            "numero_compte": "00123456",
+            "nom_banque": "BNA",
+            "nom_entreprise": "ACME",
             "lignes": [
                 {"date": "04/02/2026", "libelle": "Chèque retour fournisseur",
                  "montant": "866041.72", "sens": "credit", "compte_contrepartie": "401000",
@@ -75,7 +95,8 @@ class BankStatementImportTests(APITestCase):
 
     def test_import_without_tiers_name_keeps_generic_counterpart_account(self):
         response = self.client.post(self.url, {
-            "numero_compte": "00123456",
+            "nom_banque": "BNA",
+            "nom_entreprise": "ACME",
             "lignes": [
                 {"date": "04/02/2026", "libelle": "Frais bancaires",
                  "montant": "50", "sens": "debit", "compte_contrepartie": "627000"},
@@ -307,4 +328,410 @@ class SCFReferenceDataTests(APITestCase):
 
         class_5_labels = [row["libelle"] for row in rows if row["classe"] == "5"]
         self.assertFalse(any("me-s" in label.lower() or "me-es" in label.lower() for label in class_5_labels))
+
+
+class InvoiceReuseAfterEntryDeletionTests(APITestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.accountant = user_model.objects.create_user(
+            username="invoice-accountant", password="secret", role="accountant"
+        )
+        self.other_accountant = user_model.objects.create_user(
+            username="other-accountant", password="secret", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="Invoice Test", nif="invoice-1", nis="invoice-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        self.other_entreprise = Entreprise.objects.create(
+            nom="Other Invoice Test", nif="other-invoice-1", nis="other-invoice-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.other_accountant,
+        )
+        year = ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=2026, is_active=True
+        )
+        self.journal = Journal.objects.create(
+            entreprise=self.entreprise, annee=year, type_journal=Journal.Type.ACHAT
+        )
+        self.client.force_authenticate(self.accountant)
+        self.invoice_number = "FAC-RETRY-1"
+        self.confirm_url = "/api/scanner/confirm/"
+
+    def _confirm_data(self):
+        return {
+            "entreprise": self.entreprise.id,
+            "data": {
+                "numero_facture": self.invoice_number,
+                "date_facture": "2026-01-15",
+                "fournisseur": "Fournisseur Test",
+                "montant_ht": 100,
+                "tva_pourcentage": 19,
+                "montant_tva": 19,
+                "montant_ttc": 119,
+                "journal": "Achats",
+                "confiance": 95,
+                "lignes": [],
+            },
+        }
+
+    def _create_entry(self, entreprise, data, source="scanner"):
+        return Ecriture.objects.create(
+            journal=self.journal,
+            date_ecriture=date(2026, 1, 15),
+            numero_piece=data.get("numero_facture", ""),
+            source=source,
+        )
+
+    def test_deleted_entry_allows_reaccounting_by_reusing_facture(self):
+        old_entry = self._create_entry(self.entreprise, self._confirm_data()["data"])
+        facture = Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.accountant,
+            numero_facture=self.invoice_number,
+            statut=Facture.Statut.VALIDE,
+            ecriture=old_entry,
+        )
+
+        delete_response = self.client.delete(f"/api/ecritures/{old_entry.id}/")
+        self.assertEqual(delete_response.status_code, status.HTTP_204_NO_CONTENT)
+        facture.refresh_from_db()
+        self.assertIsNone(facture.ecriture_id)
+
+        with patch("core.views.persist_extraction", side_effect=self._create_entry):
+            response = self.client.post(self.confirm_url, self._confirm_data(), format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        facture.refresh_from_db()
+        self.assertEqual(facture.statut, Facture.Statut.VALIDE)
+        self.assertEqual(facture.ecriture_id, response.data["id"])
+        self.assertEqual(
+            Facture.objects.filter(
+                entreprise=self.entreprise, numero_facture=self.invoice_number
+            ).count(),
+            1,
+        )
+
+    def test_accountant_upload_reuses_facture_after_entry_deletion(self):
+        old_entry = self._create_entry(self.entreprise, self._confirm_data()["data"])
+        facture = Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.accountant,
+            numero_facture=self.invoice_number,
+            statut=Facture.Statut.VALIDE,
+            ecriture=old_entry,
+        )
+        self.client.delete(f"/api/ecritures/{old_entry.id}/")
+
+        payload = {
+            "entreprise": self.entreprise.id,
+            "numero_facture": self.invoice_number,
+            "date_facture": "2026-01-15",
+            "fournisseur_client": "Fournisseur Test",
+            "montant_ht": "100",
+            "tva_pourcentage": "19",
+            "montant_tva": "19",
+            "montant_ttc": "119",
+            "confiance_ia": "95",
+            "lignes": [],
+        }
+        with patch("core.views.persist_extraction", side_effect=self._create_entry):
+            response = self.client.post("/api/factures/", payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        facture.refresh_from_db()
+        self.assertEqual(facture.ecriture_id, response.data["ecriture"])
+        self.assertEqual(
+            Facture.objects.filter(
+                entreprise=self.entreprise, numero_facture=self.invoice_number
+            ).count(),
+            1,
+        )
+
+    def test_scan_reuses_invoice_when_matching_virement_payment_remains(self):
+        old_entry = self._create_entry(self.entreprise, self._confirm_data()["data"])
+        facture = Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.accountant,
+            numero_facture=self.invoice_number,
+            date_facture=date(2026, 1, 15),
+            montant_ttc=119,
+            statut=Facture.Statut.VALIDE,
+            ecriture=old_entry,
+            mode_paiement="Virement",
+            fournisseur_client="Fournisseur Test",
+        )
+        bank_journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=self.journal.annee,
+            type_journal=Journal.Type.BANQUE,
+        )
+        payment_entry = Ecriture.objects.create(
+            journal=bank_journal,
+            date_ecriture=facture.date_facture,
+            numero_piece=self.invoice_number,
+            fournisseur_client=facture.fournisseur_client,
+            source=Ecriture.Source.SCANNER,
+            mode_paiement=facture.mode_paiement,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="401000",
+            montant_debit=119,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="512000",
+            montant_credit=119,
+        )
+        self.client.delete(f"/api/ecritures/{old_entry.id}/")
+
+        payload = self._confirm_data()
+        payload["data"]["mode_paiement"] = "Virement"
+        persist_calls = []
+
+        def persist_invoice_without_extra_payment(entreprise, data, source):
+            persist_calls.append(data)
+            return self._create_entry(entreprise, data, source)
+
+        with patch(
+            "core.views.persist_extraction",
+            side_effect=persist_invoice_without_extra_payment,
+        ):
+            response = self.client.post(self.confirm_url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(persist_calls[0]["mode_paiement"], "")
+        self.assertEqual(Ecriture.objects.filter(pk=payment_entry.pk).count(), 1)
+        self.assertEqual(
+            Ecriture.objects.filter(
+                journal__type_journal=Journal.Type.BANQUE,
+                numero_piece=self.invoice_number,
+            ).count(),
+            1,
+        )
+        facture.refresh_from_db()
+        self.assertEqual(facture.ecriture_id, response.data["id"])
+        self.assertEqual(facture.mode_paiement, "Virement")
+
+    def test_sale_scan_reuses_invoice_when_matching_virement_payment_remains(self):
+        sale_journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=self.journal.annee,
+            type_journal=Journal.Type.VENTE,
+        )
+        old_entry = Ecriture.objects.create(
+            journal=sale_journal,
+            date_ecriture=date(2026, 1, 15),
+            numero_piece=self.invoice_number,
+            source=Ecriture.Source.SCANNER,
+        )
+        facture = Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.accountant,
+            numero_facture=self.invoice_number,
+            date_facture=date(2026, 1, 15),
+            montant_ttc=119,
+            statut=Facture.Statut.VALIDE,
+            ecriture=old_entry,
+            mode_paiement="Virement",
+            fournisseur_client="Client Test",
+            type_facture="vente",
+        )
+        bank_journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=self.journal.annee,
+            type_journal=Journal.Type.BANQUE,
+        )
+        payment_entry = Ecriture.objects.create(
+            journal=bank_journal,
+            date_ecriture=facture.date_facture,
+            numero_piece=self.invoice_number,
+            fournisseur_client=facture.fournisseur_client,
+            source=Ecriture.Source.SCANNER,
+            mode_paiement=facture.mode_paiement,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="512000",
+            montant_debit=119,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="411000",
+            montant_credit=119,
+        )
+        self.client.delete(f"/api/ecritures/{old_entry.id}/")
+
+        payload = self._confirm_data()
+        payload["data"].update({
+            "journal": "Ventes",
+            "fournisseur": "Client Test",
+            "mode_paiement": "Virement",
+        })
+
+        def persist_sale_without_extra_payment(entreprise, data, source):
+            return Ecriture.objects.create(
+                journal=sale_journal,
+                date_ecriture=date(2026, 1, 15),
+                numero_piece=data.get("numero_facture", ""),
+                fournisseur_client=data.get("fournisseur", ""),
+                source=source,
+                mode_paiement=data.get("mode_paiement", ""),
+            )
+
+        with patch(
+            "core.views.persist_extraction",
+            side_effect=persist_sale_without_extra_payment,
+        ) as persist:
+            response = self.client.post(self.confirm_url, payload, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(persist.call_args.args[1]["mode_paiement"], "")
+        self.assertEqual(Ecriture.objects.filter(pk=payment_entry.pk).count(), 1)
+        self.assertEqual(
+            Ecriture.objects.filter(
+                journal__type_journal=Journal.Type.BANQUE,
+                numero_piece=self.invoice_number,
+            ).count(),
+            1,
+        )
+        facture.refresh_from_db()
+        self.assertEqual(facture.ecriture_id, response.data["id"])
+        self.assertEqual(facture.type_facture, "vente")
+        self.assertEqual(facture.mode_paiement, "Virement")
+
+    def test_bank_mode_does_not_create_extra_bank_entry_for_invoice_payment(self):
+        year = ExerciceAnnee.objects.get(entreprise=self.entreprise, annee=2026)
+        data = {
+            "numero_facture": self.invoice_number,
+            "date_facture": "2026-01-15",
+            "fournisseur": "Fournisseur Test",
+            "montant_ht": 100,
+            "tva_pourcentage": 19,
+            "montant_tva": 19,
+            "montant_ttc": 119,
+            "journal": "Achats",
+            "mode_paiement": "Virement",
+            "confiance": 95,
+            "lignes": [
+                {"compte": "6011", "libelle": "Achats de marchandises", "debit": 100, "credit": 0},
+                {"compte": "401000", "libelle": "Fournisseur Test", "debit": 0, "credit": 100},
+            ],
+        }
+
+        created = persist_extraction(self.entreprise, data, source="scanner")
+
+        self.assertEqual(created.journal.type_journal, Journal.Type.ACHAT)
+        self.assertEqual(
+            Ecriture.objects.filter(journal__entreprise=self.entreprise, journal__type_journal=Journal.Type.BANQUE).count(),
+            0,
+        )
+        self.assertEqual(
+            Ecriture.objects.filter(journal__entreprise=self.entreprise, journal__type_journal=Journal.Type.ACHAT).count(),
+            1,
+        )
+
+    def test_bank_journal_api_returns_only_statement_entries(self):
+        year = ExerciceAnnee.objects.get(entreprise=self.entreprise, annee=2026)
+        bank_journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=year,
+            type_journal=Journal.Type.BANQUE,
+        )
+
+        import_entry = Ecriture.objects.create(
+            journal=bank_journal,
+            date_ecriture=date(2026, 1, 15),
+            numero_piece="RELEV-01",
+            fournisseur_client="BNA",
+            source=Ecriture.Source.IMPORT,
+            mode_paiement="relevé bancaire",
+        )
+        LigneEcriture.objects.create(
+            ecriture=import_entry,
+            numero_compte="512000",
+            libelle="Virement client",
+            montant_debit=100,
+            montant_credit=0,
+        )
+        LigneEcriture.objects.create(
+            ecriture=import_entry,
+            numero_compte="411000",
+            libelle="Virement client",
+            montant_debit=0,
+            montant_credit=100,
+        )
+
+        payment_entry = Ecriture.objects.create(
+            journal=bank_journal,
+            date_ecriture=date(2026, 1, 16),
+            numero_piece=self.invoice_number,
+            fournisseur_client="Fournisseur Test",
+            source=Ecriture.Source.SCANNER,
+            mode_paiement="Virement",
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="401000",
+            libelle="Règlement fournisseur Fournisseur Test",
+            montant_debit=119,
+            montant_credit=0,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="512000",
+            libelle="Règlement fournisseur Fournisseur Test",
+            montant_debit=0,
+            montant_credit=119,
+        )
+
+        response = self.client.get(
+            f"/api/entreprises/{self.entreprise.id}/journaux/{bank_journal.id}/ecritures/"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        returned_ids = {item["id"] for item in response.data}
+        self.assertIn(import_entry.id, returned_ids)
+        self.assertNotIn(payment_entry.id, returned_ids)
+
+    def test_active_invoice_is_still_rejected_as_duplicate(self):
+        active_entry = self._create_entry(
+            self.entreprise, self._confirm_data()["data"]
+        )
+        Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.accountant,
+            numero_facture=self.invoice_number,
+            statut=Facture.Statut.VALIDE,
+            ecriture=active_entry,
+        )
+
+        with patch("core.views.persist_extraction") as persist:
+            response = self.client.post(self.confirm_url, self._confirm_data(), format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        persist.assert_not_called()
+        self.assertEqual(Ecriture.objects.count(), 1)
+
+    def test_other_accountant_cannot_delete_or_create_for_company(self):
+        entry = self._create_entry(self.entreprise, self._confirm_data()["data"])
+        self.client.force_authenticate(self.other_accountant)
+
+        delete_response = self.client.delete(f"/api/ecritures/{entry.id}/")
+        create_response = self.client.post(
+            "/api/factures/",
+            {"entreprise": self.entreprise.id, "numero_facture": "FAC-FOREIGN"},
+            format="json",
+        )
+
+        self.assertEqual(delete_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(create_response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Ecriture.objects.filter(pk=entry.pk).exists())
+        self.assertFalse(
+            Facture.objects.filter(
+                entreprise=self.entreprise, numero_facture="FAC-FOREIGN"
+            ).exists()
+        )
 

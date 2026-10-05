@@ -216,13 +216,18 @@ export interface BankStatementLigne {
 }
 
 export interface BankStatementExtraction {
-  numero_compte: string;
+  nom_banque: string;
+  nom_entreprise: string;
+  date?: string;
+  confiance?: number;
+  erreurs?: string[];
   lignes: BankStatementLigne[];
   image_url?: string;
 }
 
 export interface BankStatementImportResult {
-  numero_compte_valide: boolean;
+  nom_banque_valide: boolean;
+  nom_entreprise_valide: boolean;
   ecritures_creees: number;
   ecritures: Ecriture[];
 }

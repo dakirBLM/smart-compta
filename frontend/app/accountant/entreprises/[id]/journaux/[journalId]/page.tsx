@@ -46,6 +46,22 @@ const TYPE_DESCRIPTIONS: Record<string, string> = {
 
 type Tab = "voir" | "rechercher" | "ajouter";
 
+function isBankStatementEntry(entry: Ecriture): boolean {
+  if (entry.mode_paiement.trim().toLocaleLowerCase("fr") === "relevé bancaire") {
+    return true;
+  }
+
+  if (entry.source !== "scanner" && entry.source !== "import") return false;
+  const labels = entry.lignes.map((line) => line.libelle.trim().toLocaleLowerCase("fr"));
+  const isInvoiceSettlement = labels.some((label) =>
+    label.startsWith("règlement fournisseur")
+    || label.startsWith("règlement client")
+    || label.startsWith("règlement banque")
+  );
+  return !isInvoiceSettlement
+    && entry.lignes.some((line) => line.numero_compte.trim().startsWith("512"));
+}
+
 export default function JournalPage() {
   const { t } = useI18n();
   const params = useParams();
@@ -77,7 +93,9 @@ export default function JournalPage() {
       const data = await api.get<Ecriture[]>(
         `/api/entreprises/${id}/journaux/${j.id}/ecritures/${qs}`
       );
-      setEcritures(data);
+      setEcritures(j.type_journal === "banque"
+        ? data.filter(isBankStatementEntry)
+        : data);
     },
     [id]
   );
@@ -97,23 +115,109 @@ export default function JournalPage() {
       let all = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/?annee=${annee}`);
       setJournals(all);
       let j: Journal | undefined;
+      const currentExerciceId = entreprise.exercices.find((x) => x.annee === annee)?.id;
       if (isNumeric) {
         j = all.find((x) => x.id === Number(type));
+        let allAny: Journal[] | undefined;
+        if (!j) {
+          allAny = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
+          j = allAny.find((candidate) => candidate.id === Number(type));
+        }
+        if (j?.type_journal === "banque") {
+          const entries = await api.get<Ecriture[]>(
+            `/api/entreprises/${id}/journaux/${j.id}/ecritures/`
+          );
+          if (!entries.some(isBankStatementEntry)) {
+            allAny ||= await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
+            const bankJournals = allAny.filter((candidate) => candidate.type_journal === "banque");
+          const currentYearJournals = currentExerciceId
+            ? bankJournals.filter((candidate) => candidate.annee === currentExerciceId)
+            : [];
+          const candidates = [
+            ...currentYearJournals,
+            ...bankJournals.filter((candidate) => !currentYearJournals.includes(candidate)),
+          ];
+          for (const candidate of candidates) {
+            const entries = await api.get<Ecriture[]>(
+              `/api/entreprises/${id}/journaux/${candidate.id}/ecritures/`
+            );
+            if (entries.some(isBankStatementEntry)) {
+              j = candidate;
+              break;
+            }
+          }
+          }
+        }
       } else {
-        // Reuse existing standard journal (banque/caisse/achat/vente/od) if present.
-        // Prefer a journal that already contains entries (ecritures_count>0),
-        // falling back to the first matching journal.
+        // Reuse the currently selected year first. Otherwise, if there is no
+        // bank/caisse/etc. journal for this exercise, fall back to other years.
         const matching = all.filter((x) => x.type_journal === type);
-        j = matching.find((x) => (x as any).ecritures_count > 0) || matching[0];
+        const currentYearMatching = currentExerciceId
+          ? matching.filter((x) => x.annee === currentExerciceId)
+          : matching;
+        if (type === "banque") {
+          let bankCandidateFound = false;
+          for (const candidate of currentYearMatching) {
+            const entries = await api.get<Ecriture[]>(
+              `/api/entreprises/${id}/journaux/${candidate.id}/ecritures/`
+            );
+            if (entries.some(isBankStatementEntry)) {
+              j = candidate;
+              bankCandidateFound = true;
+              break;
+            }
+          }
+
+          if (!bankCandidateFound) {
+            const allAny = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
+            const matchingAny = allAny.filter((x) => x.type_journal === type);
+            for (const candidate of matchingAny) {
+              const entries = await api.get<Ecriture[]>(
+                `/api/entreprises/${id}/journaux/${candidate.id}/ecritures/`
+              );
+              if (entries.some(isBankStatementEntry)) {
+                j = candidate;
+                bankCandidateFound = true;
+                break;
+              }
+            }
+          }
+
+          if (!j && currentYearMatching.length > 0) {
+            j = currentYearMatching.find((candidate) => !candidate.nom.trim()) || currentYearMatching[0];
+          }
+        } else {
+          j = currentYearMatching.find((x) => (x as any).ecritures_count > 0) || currentYearMatching[0]
+            || matching.find((x) => (x as any).ecritures_count > 0) || matching[0];
+        }
 
         // If no journal for the selected year, try across all years to find a
-        // populated one (avoids creating an empty journal when a populated
-        // same-type journal exists in another exercice).
+        // populated one in the correct context without opening the wrong same-type journal.
         if (!j) {
           const allAny = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
           setJournals(allAny);
           const matchingAny = allAny.filter((x) => x.type_journal === type);
-          j = matchingAny.find((x) => (x as any).ecritures_count > 0) || matchingAny[0];
+          const currentYearAny = currentExerciceId
+            ? matchingAny.filter((x) => x.annee === currentExerciceId)
+            : matchingAny;
+          if (type === "banque") {
+            for (const candidate of matchingAny) {
+              const entries = await api.get<Ecriture[]>(
+                `/api/entreprises/${id}/journaux/${candidate.id}/ecritures/`
+              );
+              if (entries.some(isBankStatementEntry)) {
+                j = candidate;
+                break;
+              }
+            }
+            j ||= currentYearAny.find((candidate) => !candidate.nom.trim())
+              || currentYearAny[0]
+              || matchingAny.find((candidate) => !candidate.nom.trim())
+              || matchingAny[0];
+          } else {
+            j = currentYearAny.find((x) => (x as any).ecritures_count > 0) || currentYearAny[0]
+              || matchingAny.find((x) => (x as any).ecritures_count > 0) || matchingAny[0];
+          }
         }
 
         // If still no journal, create one for the current year.
@@ -130,9 +234,11 @@ export default function JournalPage() {
         // If the route used a symbolic type (e.g. /journaux/caisse), navigate
         // to the concrete journal id so the UI consistently displays the
         // populated journal and subsequent operations target the correct id.
-        if (!isNumeric) {
+        if (!isNumeric || j.id !== Number(type)) {
+          const journalYear = entreprise.exercices.find((x) => x.id === j?.annee)?.annee;
+          const journalYearQuery = journalYear ? `?annee=${journalYear}` : qsAnnee;
           try {
-            router.push(`${base}/journaux/${j.id}${qsAnnee}`);
+            router.push(`${base}/journaux/${j.id}${journalYearQuery}`);
           } catch (e) {
             // ignore navigation errors in client environments
           }
@@ -262,7 +368,7 @@ export default function JournalPage() {
           <div className="rounded-xl bg-white/20 p-2">{icon}</div>
           <div>
             <h2 className="text-lg font-bold">
-              Journal {TYPE_LABELS[type] ?? type}
+              Journal {title}
             </h2>
             {description && (
               <p className="text-sm text-white/80 mt-0.5">{description}</p>

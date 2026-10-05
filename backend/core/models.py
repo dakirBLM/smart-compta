@@ -54,6 +54,31 @@ class Entreprise(models.Model):
         return self.nom
 
 
+class BankStatement(models.Model):
+    class Statut(models.TextChoices):
+        EN_ATTENTE = "en_attente", "En attente"
+        VALIDE = "valide", "Validé"
+        REJETE = "rejete", "Rejeté"
+
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="releves_bancaires"
+    )
+    nom_banque = models.CharField(max_length=255)
+    nom_entreprise = models.CharField(max_length=255)
+    date = models.DateField()
+    statut = models.CharField(
+        max_length=20, choices=Statut.choices, default=Statut.EN_ATTENTE
+    )
+    confiance = models.IntegerField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-date", "-id"]
+
+    def __str__(self) -> str:
+        return f"{self.nom_banque} - {self.nom_entreprise} ({self.date})"
+
+
 class ExerciceAnnee(models.Model):
     entreprise = models.ForeignKey(
         Entreprise, on_delete=models.CASCADE, related_name="exercices"

@@ -1,16 +1,28 @@
 from datetime import date
+from unittest.mock import patch
 from django.test import TestCase
-from core.models import Entreprise, Journal, Ecriture, LigneEcriture, ExerciceAnnee
+from django.core.files.uploadedfile import SimpleUploadedFile
+from rest_framework.test import APITestCase
+from core.models import BankStatement, Entreprise, Journal, Ecriture, LigneEcriture, ExerciceAnnee
 from core.bank_statements import (
-    import_bank_statement, BankStatementError, validate_statement_account,
-    classify_operation, BANK_ACCOUNT, HOLDING_ACCOUNT, enterprise_bank_account,
+    import_bank_statement as _import_bank_statement, BankStatementError,
+    validate_statement_identity,
+    classify_operation, BANK_ACCOUNT, HOLDING_ACCOUNT,
 )
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
 
-class BankStatementTestCase(TestCase):
+def import_bank_statement(entreprise, data):
+    """Keep accounting-rule fixtures focused on transaction classification."""
+    payload = dict(data)
+    payload.setdefault("nom_banque", entreprise.banque)
+    payload.setdefault("nom_entreprise", entreprise.nom)
+    return _import_bank_statement(entreprise, payload)
+
+
+class BankStatementTestCase(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(username="comptable", password="password", role="accountant")
         self.entreprise = Entreprise.objects.create(
@@ -29,10 +41,12 @@ class BankStatementTestCase(TestCase):
             annee=2026,
             is_active=True
         )
+        self.client.force_authenticate(user=self.user)
 
     def test_bank_account_mismatch_raises_error(self):
         data = {
-            "numero_compte": "999999999999999",  # Wrong account
+            "nom_banque": "CPA",  # Wrong bank
+            "nom_entreprise": self.entreprise.nom,
             "lignes": [
                 {
                     "date": "15/01/2026",
@@ -45,7 +59,66 @@ class BankStatementTestCase(TestCase):
         }
         with self.assertRaises(BankStatementError) as ctx:
             import_bank_statement(self.entreprise, data)
-        self.assertIn("ne correspond pas au compte bancaire", str(ctx.exception))
+        self.assertIn("ne correspond pas au nom de la banque", str(ctx.exception))
+
+    def test_identity_validation_accepts_normalized_bank_alias_and_company_name(self):
+        data = {
+            "nom_banque": "Banque Nationale d'Algerie BNA",
+            "nom_entreprise": "  sarL   test algerie ",
+        }
+        self.assertEqual(
+            validate_statement_identity(self.entreprise, data),
+            (data["nom_banque"], data["nom_entreprise"].strip()),
+        )
+
+    def test_identity_validation_rejects_missing_fields(self):
+        with self.assertRaises(BankStatementError) as ctx:
+            validate_statement_identity(self.entreprise, {})
+        self.assertIn("nom de la banque n'a pas pu être extrait", str(ctx.exception))
+        self.assertIn("nom de l'entreprise n'a pas pu être extrait", str(ctx.exception))
+
+    def test_identity_validation_accepts_second_registered_bank(self):
+        self.entreprise.banque2 = "CPA"
+        self.entreprise.save(update_fields=["banque2"])
+        bank, company = validate_statement_identity(
+            self.entreprise,
+            {"nom_banque": "CPA", "nom_entreprise": self.entreprise.nom},
+        )
+        self.assertEqual((bank, company), ("CPA", self.entreprise.nom))
+
+    def test_local_mock_webhook_returns_statement_identity(self):
+        response = self.client.post(
+            "/api/scanner/mock-webhook/",
+            {
+                "document_type": "releve_bancaire",
+                "journal_hint": "Banque",
+                "entreprise_nom": self.entreprise.nom,
+                "banque": self.entreprise.banque,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["nom_banque"], self.entreprise.banque)
+        self.assertEqual(response.data["nom_entreprise"], self.entreprise.nom)
+
+    def test_legacy_webhook_payload_gets_identity_compatibility_fields(self):
+        with patch("core.views.call_webhook") as webhook:
+            webhook.return_value = {
+                "journal": "Banque",
+                "lignes": [{
+                    "date": "01/02/2026",
+                    "libelle": "Frais bancaires",
+                    "sens": "credit",
+                    "montant": 10,
+                }],
+            }
+            request = self.client.post(
+                f"/api/entreprises/{self.entreprise.id}/releves-bancaires/upload/",
+                {"file": SimpleUploadedFile("releve.jpg", b"image", content_type="image/jpeg")},
+                format="multipart",
+            )
+        self.assertEqual(request.status_code, 200)
+        self.assertEqual(request.data["data"]["nom_banque"], self.entreprise.banque)
+        self.assertEqual(request.data["data"]["nom_entreprise"], self.entreprise.nom)
 
     def test_duplicate_sort_chq_raises_error(self):
         """Pour SORT CHQ: Vérifier qu'une opération identique (date, ref, label, montant) est rejetée."""
@@ -257,6 +330,10 @@ class BankStatementTestCase(TestCase):
 
         created = import_bank_statement(self.entreprise, data)
         self.assertEqual(len(created), 3)
+        statement = BankStatement.objects.get(entreprise=self.entreprise)
+        self.assertEqual(statement.nom_banque, self.entreprise.banque)
+        self.assertEqual(statement.nom_entreprise, self.entreprise.nom)
+        self.assertEqual(statement.statut, BankStatement.Statut.VALIDE)
 
         # Check total generated ecritures in Banque journal
         journal_banque = Journal.objects.get(entreprise=self.entreprise, type_journal=Journal.Type.BANQUE)
@@ -272,7 +349,7 @@ class BankStatementTestCase(TestCase):
         l_credit1 = [l for l in lignes1 if float(l.montant_credit) > 0][0]
         self.assertTrue(l_debit1.numero_compte.startswith("401"))
         self.assertEqual(float(l_debit1.montant_debit), 120000.0)
-        self.assertEqual(l_credit1.numero_compte, enterprise_bank_account(self.entreprise))
+        self.assertEqual(l_credit1.numero_compte, BANK_ACCOUNT)
         self.assertEqual(float(l_credit1.montant_credit), 120000.0)
 
         # 2. Opération 2: Recette Client 350000 DA (encaissement -> débit 512000, crédit 411xxx)
@@ -282,7 +359,7 @@ class BankStatementTestCase(TestCase):
         self.assertEqual(len(lignes2), 2)
         l_debit2 = [l for l in lignes2 if float(l.montant_debit) > 0][0]
         l_credit2 = [l for l in lignes2 if float(l.montant_credit) > 0][0]
-        self.assertEqual(l_debit2.numero_compte, enterprise_bank_account(self.entreprise))
+        self.assertEqual(l_debit2.numero_compte, BANK_ACCOUNT)
         self.assertEqual(float(l_debit2.montant_debit), 350000.0)
         self.assertTrue(l_credit2.numero_compte.startswith("411"))
         self.assertEqual(float(l_credit2.montant_credit), 350000.0)
@@ -296,7 +373,7 @@ class BankStatementTestCase(TestCase):
         l_credit3 = [l for l in lignes3 if float(l.montant_credit) > 0][0]
         self.assertEqual(l_debit3.numero_compte, "627000")
         self.assertEqual(float(l_debit3.montant_debit), 2500.0)
-        self.assertEqual(l_credit3.numero_compte, enterprise_bank_account(self.entreprise))
+        self.assertEqual(l_credit3.numero_compte, BANK_ACCOUNT)
         self.assertEqual(float(l_credit3.montant_credit), 2500.0)
 
     def test_bank_statement_accepts_two_amount_columns(self):
@@ -350,7 +427,7 @@ class BankStatementTestCase(TestCase):
         self.assertEqual(l_credit.numero_compte, "471000")
         # La ligne de débit doit être 512000 (compte d'attente en crédit, banque en débit)
         l_debit = ec.lignes.filter(montant_debit__gt=0).first()
-        self.assertEqual(l_debit.numero_compte, enterprise_bank_account(self.entreprise))
+        self.assertEqual(l_debit.numero_compte, BANK_ACCOUNT)
 
     def test_versement_creates_banque_and_caisse_entries(self):
         """When import contains VERSEMENT, create both Banque and Caisse entries."""
@@ -389,7 +466,7 @@ class BankStatementTestCase(TestCase):
         blines = list(eb.lignes.all())
         b_debit = [l for l in blines if float(l.montant_debit) > 0][0]
         b_credit = [l for l in blines if float(l.montant_credit) > 0][0]
-        self.assertEqual(b_debit.numero_compte, enterprise_bank_account(self.entreprise))
+        self.assertEqual(b_debit.numero_compte, BANK_ACCOUNT)
         self.assertEqual(b_credit.numero_compte, "581000")
         self.assertEqual(float(b_debit.montant_debit), 20000.0)
         self.assertEqual(float(b_credit.montant_credit), 20000.0)
@@ -582,32 +659,40 @@ class BankStatementIntegrationRulesTestCase(TestCase):
 
     def test_integration_versement(self):
         d, c = self._import("VERSEMENT ESPECES AU GUICHET", "debit", 50000)
-        self.assertEqual(d, enterprise_bank_account(self.entreprise))
+        self.assertEqual(d, BANK_ACCOUNT)
         self.assertEqual(c, "581000")
+
+    def test_integration_chq_retour_uses_generic_supplier_account(self):
+        debit, credit = self._import(
+            "CHQ RETOUR FOURNISSEUR", "credit", 30000,
+            compte_contrepartie="401123", tiers="FOURNISSEUR ABC",
+        )
+        self.assertEqual(debit, "401000")
+        self.assertEqual(credit, BANK_ACCOUNT)
 
     def test_integration_sort_chq_fournisseur(self):
         d, c = self._import("SORT CHQ 00089 FOURNISSEUR", "credit", 30000, tiers="FOURNISSEUR ABC")
         self.assertTrue(d.startswith("401"))
-        self.assertEqual(c, enterprise_bank_account(self.entreprise))
+        self.assertEqual(c, BANK_ACCOUNT)
 
     def test_integration_encaissement_client(self):
         d, c = self._import("REMISE CHEQUE CLIENT DURAND", "debit", 80000, tiers="CLIENT DURAND")
-        self.assertEqual(d, enterprise_bank_account(self.entreprise))
+        self.assertEqual(d, BANK_ACCOUNT)
         self.assertTrue(c.startswith("411"))
 
     def test_integration_frais_bancaires(self):
         d, c = self._import("COMMISSION SUR VIREMENT EMIS", "credit", 500)
         self.assertEqual(d, "627000")
-        self.assertEqual(c, enterprise_bank_account(self.entreprise))
+        self.assertEqual(c, BANK_ACCOUNT)
 
     def test_integration_unknown_sortie_holding(self):
         d, c = self._import("OP DIVERSE NON IDENTIFIEE", "credit", 1000)
         self.assertEqual(d, HOLDING_ACCOUNT)
-        self.assertEqual(c, enterprise_bank_account(self.entreprise))
+        self.assertEqual(c, BANK_ACCOUNT)
 
     def test_integration_unknown_entree_holding(self):
         d, c = self._import("OP DIVERSE NON IDENTIFIEE", "debit", 1000)
-        self.assertEqual(d, enterprise_bank_account(self.entreprise))
+        self.assertEqual(d, BANK_ACCOUNT)
         self.assertEqual(c, HOLDING_ACCOUNT)
 
     def test_duplicate_bank_operation_all_four_identical_raises_error(self):
