@@ -18,7 +18,7 @@ import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { ApiError, bankStatementImport, bankStatementUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { BankStatementExtraction, BankStatementImportResult, BankStatementLigne } from "@/lib/types";
+import { BankStatementExtraction, BankStatementImportResult, BankStatementLigne, EcrituresPreviewRow } from "@/lib/types";
 import { formatDZD } from "@/lib/utils";
 
 type Phase = "capture" | "loading" | "review" | "success";
@@ -78,6 +78,7 @@ export function BankStatementFlow({
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [extraction, setExtraction] = useState<BankStatementExtraction | null>(null);
+  const [reviewRows, setReviewRows] = useState<EcrituresPreviewRow[]>([]);
   const [stepDone, setStepDone] = useState(0);
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -117,6 +118,7 @@ export function BankStatementFlow({
       clearInterval(timer);
       setStepDone(4);
       setExtraction(res.data);
+      setReviewRows(res.ecritures_preview ?? []);
       setPhase("review");
     } catch (e) {
       clearInterval(timer);
@@ -152,6 +154,7 @@ export function BankStatementFlow({
     setPreview(null);
     setFile(null);
     setExtraction(null);
+    setReviewRows([]);
     setError("");
     setRedirectIn(5);
   }
@@ -288,18 +291,90 @@ export function BankStatementFlow({
   );
   const canConfirm = hasLignes && invalidLignes.length === 0;
 
-  const updateLigne = (i: number, patch: Partial<BankStatementLigne>) =>
+  const updateLigne = (i: number, patch: Partial<BankStatementLigne>) => {
+    const line = extraction.lignes[i];
     setExtraction({
       ...extraction,
-      lignes: extraction.lignes.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
+      lignes: extraction.lignes.map((current, idx) => (idx === i ? { ...current, ...patch } : current)),
     });
-  const addLigne = () =>
+    setReviewRows((rows) => rows.map((row) => row.ligne_num === i + 1
+      ? {
+          ...row,
+          ...(patch.date !== undefined ? { date: patch.date } : {}),
+          ...(patch.libelle !== undefined ? { libelle: patch.libelle } : {}),
+          ...(patch.montant !== undefined ? { montant: String(patch.montant) } : {}),
+          ...(patch.tiers !== undefined ? { tiers: patch.tiers } : {}),
+          ...(patch.sens !== undefined
+            ? patch.sens === "debit"
+              ? { compte_debit: "512000", compte_credit: line.compte_contrepartie || row.compte_credit }
+              : { compte_debit: line.compte_contrepartie || row.compte_debit, compte_credit: "512000" }
+            : {}),
+        }
+      : row));
+  };
+  const updateAccount = (i: number, side: "debit" | "credit", value: string) => {
+    const rowNumber = i + 1;
+    const row = reviewRows.find((item) => item.ligne_num === rowNumber);
+    const line = extraction.lignes[i];
+    if (!row) return;
+    let nextDebit = side === "debit" ? value : row.compte_debit;
+    let nextCredit = side === "credit" ? value : row.compte_credit;
+    if (side === "debit" && value !== "512000" && nextCredit !== "512000") {
+      nextCredit = "512000";
+    }
+    if (side === "credit" && value !== "512000" && nextDebit !== "512000") {
+      nextDebit = "512000";
+    }
+    let sens = line.sens;
+    let counterpart = line.compte_contrepartie;
+    if (nextDebit === "512000") {
+      sens = "debit";
+      counterpart = nextCredit;
+    } else if (nextCredit === "512000") {
+      sens = "credit";
+      counterpart = nextDebit;
+    } else if (side === "debit") {
+      sens = "credit";
+      counterpart = nextDebit;
+    } else {
+      sens = "debit";
+      counterpart = nextCredit;
+    }
+    setReviewRows((rows) => rows.map((item) => item.ligne_num === rowNumber
+      ? { ...item, compte_debit: nextDebit, compte_credit: nextCredit }
+      : item));
+    setExtraction({
+      ...extraction,
+      lignes: extraction.lignes.map((current, idx) => idx === i
+        ? { ...current, sens, compte_contrepartie: counterpart }
+        : current),
+    });
+  };
+  const addLigne = () => {
+    const rowNumber = extraction.lignes.length + 1;
     setExtraction({ ...extraction, lignes: [...extraction.lignes, emptyLigne()] });
-  const removeLigne = (i: number) =>
+    setReviewRows((rows) => [...rows, {
+      date: "",
+      libelle: "",
+      compte_debit: "512000",
+      compte_credit: "",
+      montant: "0",
+      counterpart: "",
+      tiers: "",
+      ligne_num: rowNumber,
+      sens: "debit",
+    }]);
+  };
+  const removeLigne = (i: number) => {
+    const removedRow = i + 1;
     setExtraction({
       ...extraction,
       lignes: extraction.lignes.filter((_, idx) => idx !== i),
     });
+    setReviewRows((rows) => rows
+      .filter((row) => row.ligne_num !== removedRow)
+      .map((row) => row.ligne_num > removedRow ? { ...row, ligne_num: row.ligne_num - 1 } : row));
+  };
 
   return (
     <div className="mx-auto max-w-4xl space-y-4">
@@ -308,9 +383,15 @@ export function BankStatementFlow({
           <h2 className="text-lg font-bold text-brand">{t("propositionEcriture")}</h2>
           <ConfidenceBadge score={lowestConfidence(extraction.lignes)} />
         </div>
-        <div className="flex items-center justify-between gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">
-          <span>{t("numeroCompteReleve")}</span>
-          <span className="font-mono font-semibold">{extraction.numero_compte}</span>
+        <div className="grid gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700 sm:grid-cols-2">
+          <div>
+            <span className="block text-xs uppercase tracking-wide">Nom de la banque</span>
+            <span className="font-semibold">{extraction.nom_banque}</span>
+          </div>
+          <div>
+            <span className="block text-xs uppercase tracking-wide">Nom de l'entreprise</span>
+            <span className="font-semibold">{extraction.nom_entreprise}</span>
+          </div>
         </div>
         {level === "yellow" && (
           <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-warning">
@@ -325,42 +406,35 @@ export function BankStatementFlow({
       </Card>
 
       <Card className="overflow-x-auto p-0">
-        <table className="w-full text-sm">
-          <thead className="bg-brand text-left text-white">
+        <table className="w-full min-w-[1060px] text-sm">
+          <thead className="bg-neutral-950 text-left text-white">
             <tr>
-              <th className="p-2">{t("date")}</th>
-              <th className="p-2">{t("libelle")}</th>
-              <th className="p-2">{t("numeroPiece")}</th>
-              <th className="p-2">{t("sens")}</th>
-              <th className="p-2 text-right">{t("montant")}</th>
-              <th className="p-2">{t("compteContrepartie")}</th>
-              <th className="p-2">{t("tiers")}</th>
-              <th className="p-2"></th>
+              <th className="w-40 p-3">Date</th>
+              <th className="w-36 p-3">Compte Débit</th>
+              <th className="w-36 p-3">Compte Crédit</th>
+              <th className="p-3">Libellé et intitulé</th>
+              <th className="w-44 p-3 text-right">Montant (DZD)</th>
+              <th className="w-48 p-3">Tiers / Réf</th>
+              <th className="w-12 p-3"></th>
             </tr>
           </thead>
           <tbody>
             {extraction.lignes.map((l, i) => {
               const invalid = invalidLignes.includes(l);
+              const row = reviewRows.find((item) => item.ligne_num === i + 1);
               return (
                 <tr key={i} className={invalid ? "border-t bg-red-50" : "border-t"}>
                   <td className="p-2">
                     <Input value={l.date} placeholder="JJ/MM/AAAA" onChange={(e) => updateLigne(i, { date: e.target.value })} />
                   </td>
                   <td className="p-2">
-                    <Input value={l.libelle} onChange={(e) => updateLigne(i, { libelle: e.target.value })} />
+                    <Input value={row?.compte_debit ?? ""} aria-label="Compte Débit" onChange={(e) => updateAccount(i, "debit", e.target.value)} />
                   </td>
                   <td className="p-2">
-                    <Input value={l.reference} onChange={(e) => updateLigne(i, { reference: e.target.value })} />
+                    <Input value={row?.compte_credit ?? ""} aria-label="Compte Crédit" onChange={(e) => updateAccount(i, "credit", e.target.value)} />
                   </td>
                   <td className="p-2">
-                    <select
-                      value={l.sens}
-                      onChange={(e) => updateLigne(i, { sens: e.target.value as "debit" | "credit" })}
-                      className="h-10 w-full rounded-lg border border-gray-300 px-2 text-sm"
-                    >
-                      <option value="debit">{t("debit")}</option>
-                      <option value="credit">{t("credit")}</option>
-                    </select>
+                    <Input value={l.libelle} aria-label="Libellé et intitulé" onChange={(e) => updateLigne(i, { libelle: e.target.value })} />
                   </td>
                   <td className="p-2 text-right">
                     <Input
@@ -371,12 +445,14 @@ export function BankStatementFlow({
                   </td>
                   <td className="p-2">
                     <Input
-                      value={l.compte_contrepartie}
-                      onChange={(e) => updateLigne(i, { compte_contrepartie: e.target.value })}
+                      value={[l.tiers, l.reference].filter(Boolean).join(" / ")}
+                      placeholder="Tiers / Réf"
+                      aria-label="Tiers / Réf"
+                      onChange={(e) => {
+                        const [tiers = "", ...referenceParts] = e.target.value.split("/");
+                        updateLigne(i, { tiers: tiers.trim(), reference: referenceParts.join("/").trim() });
+                      }}
                     />
-                  </td>
-                  <td className="p-2">
-                    <Input value={l.tiers} onChange={(e) => updateLigne(i, { tiers: e.target.value })} />
                   </td>
                   <td className="p-2 text-center">
                     <button onClick={() => removeLigne(i)} className="text-danger" aria-label="Supprimer">

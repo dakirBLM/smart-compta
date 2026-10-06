@@ -8,7 +8,6 @@ import {
   Pencil,
   Plus,
   RotateCcw,
-  Sparkles,
   Trash2,
   Upload,
 } from "lucide-react";
@@ -120,10 +119,21 @@ export function ScannerFlow({
     setSubmitting(true);
     setError("");
     try {
+      const normalized = {
+        ...extraction,
+        numero_facture: extraction.numero_facture || `RELEV-${new Date().toISOString().slice(0, 10).replace(/-/g, "")}`,
+        lignes: (extraction.lignes || []).map((l) => ({
+          ...l,
+          compte: l.compte || "",
+          libelle: l.libelle || "",
+          debit: Number(l.debit || 0),
+          credit: Number(l.credit || 0),
+        })),
+      };
       // Send the image too so the comptabilisé facture is archived as an image.
       const fd = new FormData();
       fd.append("entreprise", String(entrepriseId));
-      fd.append("data", JSON.stringify(extraction));
+      fd.append("data", JSON.stringify(normalized));
       if (file) fd.append("file", file);
       await api.post("/api/scanner/confirm/", fd);
       setPhase("success");
@@ -156,24 +166,33 @@ export function ScannerFlow({
     };
   }, [phase, router, afterSuccess]);
 
-  // ---- CAPTURE ----
-  if (phase === "capture")
+  useEffect(() => {
+    if (!extraction) return;
+    const journalStr = String(extraction.journal || "").toLowerCase();
+    const hintStr = journalHint.toLowerCase();
+    const isBankStmt =
+      journalStr.includes("banque") ||
+      journalStr.includes("relev") ||
+      hintStr.includes("banque") ||
+      hintStr.includes("relev");
+    const hasMeaningfulRows = (extraction.lignes ?? []).some((l) => Number(l.debit || 0) > 0 || Number(l.credit || 0) > 0);
+    if (phase === "review" && isBankStmt && !hasMeaningfulRows) {
+      setExtraction((prev) =>
+        prev
+          ? {
+              ...prev,
+              lignes: prev.lignes?.length ? prev.lignes : [{ compte: "512000", libelle: "", debit: 0, credit: 0 }],
+            }
+          : prev
+      );
+      setPhase("edit");
+    }
+  }, [extraction, journalHint, phase]);
+
   // ---- CAPTURE ----
   if (phase === "capture")
     return (
-      <Card className="mx-auto max-w-xl p-6 sm:p-8">
-        {/* Maiase banner */}
-        <div className="mb-6 flex items-center gap-3 rounded-2xl bg-lime-light/60 border border-lime/30 p-3.5 text-left">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/maiase.png" alt="Maiase AI" className="h-12 w-12 rounded-xl object-contain bg-white/80 p-1 shrink-0 ring-2 ring-lime" />
-          <div>
-            <div className="text-xs font-bold text-brand uppercase tracking-wider">Assistant Maiase · Scan Intelligent</div>
-            <p className="text-xs text-brand/80 mt-0.5">
-              Déposez votre facture. L&apos;IA détectera automatiquement le fournisseur, les montants, la TVA et générera l&apos;écriture comptable SCF.
-            </p>
-          </div>
-        </div>
-
+      <Card className="mx-auto max-w-xl text-center">
         {/* Camera (mobile) */}
         <input
           ref={inputRef}
@@ -191,77 +210,54 @@ export function ScannerFlow({
           onChange={pickFile}
         />
         {preview ? (
-          <div className="relative mb-4">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={preview} alt="facture" className="mx-auto max-h-80 rounded-2xl border border-gray-200 object-contain shadow-md" />
-            <button
-              onClick={() => {
-                setFile(null);
-                setPreview(null);
-              }}
-              className="absolute top-2 right-2 rounded-full bg-rose-600 p-1.5 text-white hover:bg-rose-700 shadow-md"
-            >
-              <Trash2 size={16} />
-            </button>
-          </div>
+          <img src={preview} alt="facture" className="mx-auto mb-4 max-h-80 rounded-lg" />
         ) : file && isPdf ? (
-          <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-brand/30 bg-[#F7FAF7] text-brand">
-            <div className="rounded-2xl bg-brand p-4 text-lime mb-2 shadow-brand-glow">
-              <FileText size={40} />
-            </div>
-            <p className="max-w-xs truncate px-4 text-sm font-bold text-brand">{file.name}</p>
-            <p className="text-xs text-gray-400 mt-1">Document PDF prêt pour l&apos;analyse IA</p>
+          <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed text-brand">
+            <FileText size={48} />
+            <p className="mt-2 max-w-xs truncate px-4 text-sm">{file.name}</p>
+            <p className="text-xs text-gray-400">PDF — toutes les pages seront analysées</p>
           </div>
         ) : (
           <div
-            onClick={() => importRef.current?.click()}
-            className="mx-auto mb-4 flex h-64 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-[#F7FAF7] hover:border-lime hover:bg-lime-light/20 transition-all text-gray-500"
+            onClick={() => inputRef.current?.click()}
+            className="mx-auto mb-4 flex h-64 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed text-gray-400"
           >
-            <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-lime-light text-brand shadow-glow-sm mb-3">
-              <Upload size={32} />
-            </div>
-            <p className="font-bold text-brand text-sm">Glissez un fichier ou cliquez ici</p>
-            <p className="text-xs text-gray-400 mt-1">PDF, JPG, PNG (Max 15MB)</p>
+            <Camera size={48} />
+            <p className="mt-2">{t("prendrePhoto")}</p>
           </div>
         )}
-
         {/* Optional: pre-select the journal to help the AI classify (facultatif) */}
-        <div className="mx-auto mb-4 max-w-sm text-left">
-          <label className="mb-1.5 block text-xs font-bold uppercase tracking-wider text-gray-500">
-            Journal comptable suggéré (facultatif)
+        <div className="mx-auto mb-3 max-w-xs text-left">
+          <label className="mb-1 block text-xs text-gray-500">
+            Journal (facultatif — aide l'IA)
           </label>
           <select
             value={journalHint}
             onChange={(e) => setJournalHint(e.target.value)}
-            className="h-10 w-full rounded-xl border border-gray-200 bg-white px-3 text-xs font-semibold text-brand outline-none focus:border-brand focus:ring-2 focus:ring-lime/40"
+            className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm"
           >
-            <option value="">✨ Détection automatique par Maiase</option>
-            <option value="Achats">Achats (Fournisseurs / Charges)</option>
-            <option value="Ventes">Ventes (Clients / Produits)</option>
-            <option value="Banque">Banque (Règlements & Virements)</option>
-            <option value="Caisse">Caisse (Espèces)</option>
-            <option value="OD">Opérations diverses (Salaires, Taxes)</option>
+            <option value="">Détection automatique</option>
+            <option value="Achats">Achats</option>
+            <option value="Ventes">Ventes</option>
+            <option value="Banque">Relevé bancaire (Banque)</option>
+            <option value="Caisse">Caisse</option>
+            <option value="OD">Opérations diverses</option>
           </select>
         </div>
 
-        {error && (
-          <div className="mb-4 rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-semibold text-rose-700 text-left">
-            {error}
-          </div>
-        )}
-
-        <div className="flex flex-wrap justify-center gap-2.5">
-          <Button variant="outline" onClick={() => setShowCamera(true)} className="text-xs font-bold gap-1.5">
-            <Camera size={16} /> Caméra guidée
+        {error && <p className="mb-3 text-sm text-danger">{error}</p>}
+        <div className="flex flex-wrap justify-center gap-2">
+          <Button variant="success" onClick={() => setShowCamera(true)}>
+            <Camera size={16} /> Scanner (caméra guidée)
           </Button>
-          <Button variant="outline" onClick={() => inputRef.current?.click()} className="text-xs font-bold gap-1.5">
+          <Button variant="outline" onClick={() => inputRef.current?.click()}>
             <Camera size={16} /> Photo
           </Button>
-          <Button variant="outline" onClick={() => importRef.current?.click()} className="text-xs font-bold gap-1.5">
-            <Upload size={16} /> Importer fichier
+          <Button variant="outline" onClick={() => importRef.current?.click()}>
+            <Upload size={16} /> Importer (PDF / Image)
           </Button>
-          <Button variant="primary" onClick={send} disabled={!file} className="text-xs font-bold gap-1.5 shadow-glow-sm">
-            <Sparkles size={16} /> {t("envoyer")} à Maiase
+          <Button variant="success" onClick={send} disabled={!file}>
+            {t("envoyer")}
           </Button>
         </div>
         {showCamera && (
@@ -279,37 +275,20 @@ export function ScannerFlow({
   // ---- LOADING ----
   if (phase === "loading")
     return (
-      <Card className="mx-auto max-w-lg p-8 text-center">
-        {/* Maiase Radar Animation */}
-        <div className="relative mx-auto mb-6 flex h-32 w-32 items-center justify-center">
-          <div className="absolute inset-0 rounded-full border border-lime/40 animate-ping opacity-75" />
-          <div className="absolute inset-2 rounded-full border-2 border-dashed border-lime animate-spin" />
-          <div className="relative flex h-20 w-20 items-center justify-center rounded-full bg-brand shadow-brand-glow">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src="/maiase.png" alt="Maiase" className="h-14 w-14 object-contain animate-float" />
-          </div>
+      <Card className="mx-auto max-w-xl">
+        <div className="mb-6 flex items-center justify-center gap-3 text-brand">
+          <Spinner className="h-6 w-6" />
+          <span className="text-lg font-semibold">{t("extractionEnCours")}</span>
         </div>
-
-        <h3 className="text-lg font-extrabold text-brand mb-1">
-          {t("extractionEnCours")}
-        </h3>
-        <p className="text-xs text-gray-500 mb-6">
-          Maiase analyse les données et prépare les écritures…
-        </p>
-
-        <div className="space-y-3 rounded-2xl bg-[#F7FAF7] p-5 text-left border border-gray-100">
+        <div className="space-y-3">
           {STEPS.map((s, i) => (
             <div key={s.key} className="flex items-center gap-3">
               {i < stepDone ? (
-                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-lime text-brand">
-                  <CheckCircle2 size={16} />
-                </div>
-              ) : i === stepDone ? (
-                <Spinner className="h-5 w-5 text-brand" />
+                <CheckCircle2 className="text-success" size={20} />
               ) : (
                 <Circle className="text-gray-300" size={20} />
               )}
-              <span className={i <= stepDone ? "font-bold text-xs text-brand" : "text-xs text-gray-400"}>
+              <span className={i < stepDone ? "text-brand" : "text-gray-400"}>
                 {t(s.labelKey)}
               </span>
             </div>
@@ -352,41 +331,54 @@ export function ScannerFlow({
 
   // ---- REVIEW / EDIT ----
   if (!extraction) return null;
+  const journalStr = String(extraction.journal || "").toLowerCase();
+  const hintStr = journalHint.toLowerCase();
+  // Detect bank statement from AI response OR from the user's pre-selected journal hint
+  const isBankStmt =
+    journalStr.includes("banque") ||
+    journalStr.includes("relev") ||
+    hintStr.includes("banque") ||
+    hintStr.includes("relev");
+
+  const lignes = Array.isArray(extraction.lignes) ? extraction.lignes : [];
   const level = confidenceLevel(extraction.confiance);
-  const totals = sumLignes(extraction.lignes);
-  const hasAmounts = totals.debit > 0.009 || totals.credit > 0.009;
-  // If the AI says the scanning company isn't the issuer/client on the invoice,
-  // the wrong file was scanned — block confirmation and ask to re-scan.
-  const wrongCompany = (erreurs ?? []).some((e) => {
-    const s = (e || "").toLowerCase();
-    return (
-      (s.includes("n'appara") || s.includes("napparaît") || s.includes("ne figure") ||
-        s.includes("n'est pas mentionn") || s.includes("par défaut")) &&
-      (s.includes("émetteur") || s.includes("emetteur") || s.includes("client") ||
-        s.includes("facture"))
-    );
-  });
-  // A valid entry must balance and carry real amounts. AI "erreurs" are often
-  // just explanatory notes (e.g. "timbre fiscal ajouté"), so they no longer
-  // block a balanced entry — only a broken one (unbalanced / all-zero) does.
-  const valid = totals.balanced && hasAmounts && !wrongCompany;
+  const totals = sumLignes(lignes);
+  const hasAmounts = isBankStmt
+    ? (lignes.length > 0 && lignes.some((l) => Number(l.debit || 0) > 0 || Number(l.credit || 0) > 0))
+    : (totals.debit > 0.009 || totals.credit > 0.009);
+
+  const wrongCompany = isBankStmt
+    ? false
+    : (erreurs ?? []).some((e) => {
+        const s = (e || "").toLowerCase();
+        return (
+          (s.includes("n'appara") || s.includes("napparaît") || s.includes("ne figure") ||
+            s.includes("n'est pas mentionn") || s.includes("par défaut")) &&
+          (s.includes("émetteur") || s.includes("emetteur") || s.includes("client") ||
+            s.includes("facture"))
+        );
+      });
+
+  const valid = isBankStmt
+    ? hasAmounts
+    : (totals.balanced && hasAmounts && !wrongCompany);
   const blocked = !valid;
-  const canConfirm = level === "green" && valid;
+  const canConfirm = valid;
 
   const updateLigne = (i: number, patch: Partial<AIExtraction["lignes"][0]>) =>
     setExtraction({
       ...extraction,
-      lignes: extraction.lignes.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
+      lignes: lignes.map((l, idx) => (idx === i ? { ...l, ...patch } : l)),
     });
   const addLigne = () =>
     setExtraction({
       ...extraction,
-      lignes: [...extraction.lignes, { compte: "", libelle: "", debit: 0, credit: 0 }],
+      lignes: [...lignes, { compte: "", libelle: "", debit: 0, credit: 0 }],
     });
   const removeLigne = (i: number) =>
     setExtraction({
       ...extraction,
-      lignes: extraction.lignes.filter((_, idx) => idx !== i),
+      lignes: lignes.filter((_, idx) => idx !== i),
     });
 
   return (
@@ -404,32 +396,57 @@ export function ScannerFlow({
             que vous avez scanné ou choisi le bon fichier, puis recommencez.
           </div>
         )}
-        {level === "yellow" && !wrongCompany && (
+        {isBankStmt && hasAmounts && (
+          <p className="mb-3 rounded-lg bg-green-50 p-3 text-sm text-success">
+            ✅ Relevé bancaire détecté — {lignes.length} opération(s) identifiée(s). Vérifiez puis confirmez.
+          </p>
+        )}
+        {!isBankStmt && level === "yellow" && !wrongCompany && (
           <p className="mb-3 rounded-lg bg-amber-50 p-3 text-sm text-warning">
             ⚠ {t("confiance")} moyenne — vérifiez les champs avant de confirmer.
           </p>
         )}
-        {level === "red" && (
+        {!isBankStmt && level === "red" && (
           <p className="mb-3 rounded-lg bg-red-50 p-3 text-sm text-danger">
             ⛔ {t("confiance")} faible — révision manuelle complète requise.
           </p>
         )}
-        {erreurs.length > 0 && (
-          <div
-            className={`mb-3 rounded-lg p-3 text-sm ${
-              valid ? "bg-amber-50 text-warning" : "bg-red-50 text-danger"
-            }`}
-          >
-            <div className="mb-1 font-semibold">
-              {valid ? "ℹ Remarques de l'IA" : "⛔ Problèmes à corriger"}
+        {erreurs.length > 0 && (() => {
+          // For bank statements: filter out invoice-specific complaints
+          const displayErreurs = isBankStmt
+            ? erreurs.filter((e) => {
+                const s = (e || "").toLowerCase();
+                return !(
+                  s.includes("non une facture") ||
+                  s.includes("pas une facture") ||
+                  s.includes("relevé d'opérations") ||
+                  s.includes("releve d'operations") ||
+                  s.includes("ht/tva/ttc") ||
+                  s.includes("montant ht") ||
+                  s.includes("montant tva") ||
+                  (s.includes("n'apparaît pas") && (s.includes("facture") || s.includes("société"))) ||
+                  (s.includes("n'apparait pas") && (s.includes("facture") || s.includes("société")))
+                );
+              })
+            : erreurs;
+          if (displayErreurs.length === 0) return null;
+          return (
+            <div
+              className={`mb-3 rounded-lg p-3 text-sm ${
+                valid ? "bg-amber-50 text-warning" : "bg-red-50 text-danger"
+              }`}
+            >
+              <div className="mb-1 font-semibold">
+                {valid ? "ℹ Remarques de l'IA" : "⛔ Problèmes à corriger"}
+              </div>
+              <ul className="list-inside list-disc">
+                {displayErreurs.map((e, i) => (
+                  <li key={i}>{e}</li>
+                ))}
+              </ul>
             </div>
-            <ul className="list-inside list-disc">
-              {erreurs.map((e, i) => (
-                <li key={i}>{e}</li>
-              ))}
-            </ul>
-          </div>
-        )}
+          );
+        })()}
 
         {phase === "edit" ? (
           <div className="grid grid-cols-2 gap-3">
@@ -467,7 +484,7 @@ export function ScannerFlow({
             </tr>
           </thead>
           <tbody>
-            {extraction.lignes.map((l, i) => (
+            {lignes.map((l, i) => (
               <tr key={i} className="border-t">
                 <td className="p-2 font-mono">
                   {phase === "edit" ? (

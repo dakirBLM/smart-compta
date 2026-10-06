@@ -178,12 +178,11 @@ export async function scannerUpload(
 }
 
 /** Upload a bank statement (image or PDF) for AI extraction. The backend
- * rejects it up front (400) if the account on the statement doesn't match
- * the entreprise's registered bank account. */
+ * rejects it up front if the bank or enterprise identity does not match. */
 export async function bankStatementUpload(
   file: File,
   entrepriseId: number
-): Promise<{ data: BankStatementExtraction; numero_compte_valide: boolean; ecritures_preview?: EcrituresPreviewRow[]; image_url?: string }> {
+): Promise<{ data: BankStatementExtraction; nom_banque_valide: boolean; nom_entreprise_valide: boolean; ecritures_preview?: EcrituresPreviewRow[]; image_url?: string }> {
   if (file.size > MAX_UPLOAD_BYTES) {
     const mb = (file.size / 1024 / 1024).toFixed(1);
     throw new ApiError(

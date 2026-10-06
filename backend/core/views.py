@@ -1,6 +1,5 @@
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Q
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status
@@ -9,22 +8,10 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
-from .account_helpers import (
-    apply_scf_subaccounts,
-    apply_tiers_account,
-    get_or_create_client_comptable,
-    get_or_create_fournisseur,
-)
-from .bank_statements import (
-    BankStatementError,
-    import_bank_statement,
-    preview_entries,
-    validate_statement_account,
-)
+from .account_helpers import get_or_create_client_comptable
 from .models import (
     ClientAccess,
     ClientComptable,
-    SCFAccount,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
@@ -33,6 +20,14 @@ from .models import (
     Journal,
     LigneEcriture,
     Message,
+    SCFAccount,
+)
+from .bank_statements import (
+    BankStatementError,
+    fill_missing_statement_identity,
+    import_bank_statement,
+    preview_entries,
+    validate_statement_identity,
 )
 from .permissions import IsAccountant, IsClient
 from .reports import (
@@ -47,6 +42,7 @@ from .scanner import (
     call_webhook,
     pdf_to_jpeg,
     persist_extraction,
+    sanitize_bank_statement_data,
     upload_invoice_image,
     validate_extraction,
 )
@@ -72,151 +68,92 @@ def _accountant_entreprise(request, pk):
     return get_object_or_404(Entreprise, pk=pk, accountant=request.user)
 
 
-def _assert_unique_piece(entreprise, numero, exclude_id=None, date_ecriture=None, 
-                         libelle=None, montant=None):
-    """Check for duplicate operations with conditional logic:
-    
-    - If libelle contains "SORT CHQ" → Check all 4 criteria:
-      1. Date (date_ecriture)
-      2. N° de pièce (numero_piece) 
-      3. Libellé
-      4. Montant
-      All four must match to be considered a duplicate.
-    
-    - Otherwise → Only check numero_piece uniqueness (legacy behavior)
-    """
+def _assert_unique_piece(entreprise, numero, exclude_id=None, allow_ids=()):
+    """Reject a duplicate invoice number within the same entreprise."""
     from rest_framework.exceptions import ValidationError
-    from decimal import Decimal, InvalidOperation
-    from datetime import date
-    
     numero = (numero or "").strip()
     if not numero:
         return
-    
-    libelle_normalized = (libelle or "").upper() if libelle else ""
-    is_sort_chq = "SORT CHQ" in libelle_normalized
-    
-    # For SORT CHQ operations: check all 4 criteria
-    if is_sort_chq and date_ecriture is not None and libelle is not None and montant is not None:
-        try:
-            # Convert montant to Decimal if needed
-            if isinstance(montant, str):
-                montant = Decimal(montant)
-            elif not isinstance(montant, Decimal):
-                montant = Decimal(str(montant))
-            
-            # Ensure date_ecriture is a date object
-            if not isinstance(date_ecriture, date):
-                return  # Skip duplicate check if date is invalid
-            
-            # Search for existing ecriture with the same date, numero_piece, and libelle
-            from django.db.models import Q
-            
-            existing = Ecriture.objects.filter(
-                journal__entreprise=entreprise,
-                date_ecriture=date_ecriture,
-                numero_piece=numero,
-            ).exclude(pk=exclude_id) if exclude_id else Ecriture.objects.filter(
-                journal__entreprise=entreprise,
-                date_ecriture=date_ecriture,
-                numero_piece=numero,
-            )
-            
-            for ecriture in existing:
-                # Check if any ligne has matching libelle and montant (as debit or credit)
-                if ecriture.lignes.filter(
-                    libelle=libelle
-                ).filter(
-                    Q(montant_debit=montant) | Q(montant_credit=montant)
-                ).exists():
-                    date_str = date_ecriture.strftime('%d/%m/%Y') if hasattr(date_ecriture, 'strftime') else str(date_ecriture)
-                    raise ValidationError({
-                        "numero_piece": f"Doublon détecté : Une écriture du {date_str} "
-                        f"avec la référence « {numero} », le libellé « {libelle} » "
-                        f"et le montant {montant} DZD existe déjà."
-                    })
-            return
-        except (InvalidOperation, ValueError):
-            return  # Skip duplicate check if montant is invalid
-    
-    # For non-SORT CHQ operations: only check numero_piece uniqueness
-    if not is_sort_chq or (is_sort_chq and not (date_ecriture and libelle and montant)):
-        qs = Ecriture.objects.filter(
-            journal__entreprise=entreprise, numero_piece=numero
+    qs = Ecriture.objects.filter(
+        journal__entreprise=entreprise, numero_piece=numero
+    )
+    if exclude_id:
+        qs = qs.exclude(pk=exclude_id)
+    if allow_ids:
+        qs = qs.exclude(pk__in=allow_ids)
+    if qs.exists():
+        raise ValidationError(
+            {"numero_piece": f"Une écriture avec le numéro « {numero} » existe déjà."}
         )
-        if exclude_id:
-            qs = qs.exclude(pk=exclude_id)
-        if qs.exists():
-            raise ValidationError(
-                {"numero_piece": f"Une écriture avec le numéro « {numero} » existe déjà."}
-            )
+
+
+def _reusable_accounted_facture(entreprise, numero):
+    """Return the sole validated, unlinked facture for reuse, rejecting other duplicates."""
+    from rest_framework.exceptions import ValidationError
+
+    numero = (numero or "").strip()
+    if not numero:
+        return None
+
+    matches = Facture.objects.select_for_update().filter(
+        entreprise=entreprise, numero_facture=numero
+    )
+    reusable = matches.filter(
+        statut=Facture.Statut.VALIDE, ecriture__isnull=True
+    ).first()
+    if reusable and not matches.exclude(pk=reusable.pk).exists():
+        return reusable
+    if matches.exists():
+        raise ValidationError(
+            {"numero_facture": f"Une facture N° « {numero} » existe déjà."}
+        )
+    return None
+
+
+def _matching_invoice_payment(entreprise, facture):
+    """Find the unique generated payment entry belonging to an orphaned invoice."""
+    mode = (facture.mode_paiement or "").strip().lower()
+    cash_modes = {"espèce", "espèces", "espece", "especes", "cash", "caisse", "liquide"}
+    bank_modes = {
+        "chèque", "cheque", "virement", "transfer", "transfert",
+        "carte", "carte bancaire", "cb", "cheque bancaire", "banque",
+    }
+    if any(value in mode for value in cash_modes):
+        journal_type, treasury_account = Journal.Type.CAISSE, "530000"
+    elif any(value in mode for value in bank_modes):
+        journal_type, treasury_account = Journal.Type.BANQUE, "512000"
+    else:
+        return None
+
+    if not facture.numero_facture or not facture.date_facture:
+        return None
+
+    candidates = Ecriture.objects.filter(
+        journal__entreprise=entreprise,
+        journal__type_journal=journal_type,
+        numero_piece=facture.numero_facture,
+        date_ecriture=facture.date_facture,
+        fournisseur_client__iexact=facture.fournisseur_client,
+        mode_paiement__iexact=facture.mode_paiement,
+        source__in=(Ecriture.Source.SCANNER, Ecriture.Source.IMPORT),
+    ).prefetch_related("lignes")
+    matches = []
+    for entry in candidates:
+        lines = list(entry.lignes.all())
+        has_ttc_treasury_line = any(
+            line.numero_compte == treasury_account
+            and (line.montant_debit == facture.montant_ttc
+                 or line.montant_credit == facture.montant_ttc)
+            for line in lines
+        )
+        if len(lines) == 2 and has_ttc_treasury_line:
+            matches.append(entry)
+    return matches[0] if len(matches) == 1 else None
 
 
 # --------------------------------------------------------------------------- #
 # Entreprises
 # --------------------------------------------------------------------------- #
-
-
-class SCFListView(APIView):
-    """Return SCF accounts grouped by Classe 1..7.
-
-    - GET /api/scf/ -> global accounts (entreprise is null)
-    - GET /api/entreprises/<pk>/scf/ -> global + entreprise-specific accounts
-    """
-    permission_classes = [AllowAny]
-
-    def get(self, request, pk=None):
-        entreprise = None
-        if pk:
-            try:
-                entreprise = Entreprise.objects.get(pk=pk)
-            except Entreprise.DoesNotExist:
-                return Response(status=status.HTTP_404_NOT_FOUND)
-
-        qs = SCFAccount.objects.filter(entreprise__isnull=True)
-        local_accounts = {}
-        if entreprise:
-            local_accounts = {
-                account.numero_compte: account
-                for account in SCFAccount.objects.filter(entreprise=entreprise)
-            }
-        global_numbers = set(qs.values_list("numero_compte", flat=True))
-
-        accounts = []
-        for account in qs.order_by("classe", "numero_compte"):
-            accounts.append(local_accounts.get(account.numero_compte, account))
-        accounts.extend(
-            account for numero, account in local_accounts.items()
-            if numero not in global_numbers
-        )
-        data = SCFAccountSerializer(accounts, many=True).data
-
-        # Keep every dynamic account under the longest matching master account.
-        # The response remains grouped by class for compatibility with clients.
-        master_numbers = set(qs.values_list("numero_compte", flat=True))
-        for account in data:
-            numero = account["numero_compte"]
-            account["parent"] = next(
-                (
-                    numero[:length]
-                    for length in range(len(numero) - 1, 0, -1)
-                    if numero[:length] in master_numbers
-                ),
-                None,
-            )
-
-        # Group by classe 1..7
-        result = {str(i): [] for i in range(1, 8)}
-        for a in data:
-            classe = str(a.get("classe") or 0)
-            if classe in result:
-                result[classe].append({
-                    "numero_compte": a["numero_compte"],
-                    "libelle": a["libelle"],
-                    "parent": a.get("parent"),
-                })
-        return Response(result)
-
 class EntrepriseListCreateView(APIView):
     permission_classes = [IsAccountant]
 
@@ -225,17 +162,17 @@ class EntrepriseListCreateView(APIView):
         return Response(EntrepriseSerializer(qs, many=True).data)
 
     def post(self, request):
-        serializer = EntrepriseSerializer(data=request.data, context={"request": request})
+        serializer = EntrepriseSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         entreprise = serializer.save(accountant=request.user)
-        # Seed the first fiscal year from exercice_comptable if it is a year, or current year.
+        # Seed the first fiscal year from exercice_comptable if it is a year.
         try:
             annee = int(str(entreprise.exercice_comptable)[:4])
+            ExerciceAnnee.objects.create(
+                entreprise=entreprise, annee=annee, is_active=True
+            )
         except (ValueError, TypeError):
-            annee = timezone.now().year
-        ExerciceAnnee.objects.get_or_create(
-            entreprise=entreprise, annee=annee, defaults={"is_active": True}
-        )
+            pass
         return Response(EntrepriseSerializer(entreprise).data,
                         status=status.HTTP_201_CREATED)
 
@@ -249,8 +186,7 @@ class EntrepriseDetailView(APIView):
 
     def put(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
-        serializer = EntrepriseSerializer(entreprise, data=request.data, partial=True,
-                                          context={"request": request})
+        serializer = EntrepriseSerializer(entreprise, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
@@ -614,24 +550,14 @@ class JournalEcrituresView(APIView):
     def get(self, request, pk, journal_id):
         entreprise = _accountant_entreprise(request, pk)
         journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
-        
-        # For Banque and Caisse journals, retrieve all ecritures of that
-        # type for the entreprise regardless of the selected fiscal year so
-        # entries remain visible even when multiple year-specific journals
-        # exist. Other standard journals are scoped to the journal's year.
-        if journal.type_journal in (Journal.Type.BANQUE, Journal.Type.CAISSE):
-            qs = Ecriture.objects.filter(
-                journal__entreprise=entreprise,
-                journal__type_journal=journal.type_journal,
-            ).prefetch_related("lignes").order_by("-date_ecriture", "-id")
-        elif journal.type_journal in (Journal.Type.ACHAT, Journal.Type.VENTE, Journal.Type.OD):
-            qs = Ecriture.objects.filter(
-                journal__entreprise=entreprise,
-                journal__type_journal=journal.type_journal,
-                journal__annee=journal.annee,
-            ).prefetch_related("lignes").order_by("-date_ecriture", "-id")
-        else:
-            qs = journal.ecritures.prefetch_related("lignes").order_by("-date_ecriture", "-id")
+        qs = journal.ecritures.prefetch_related("lignes")
+
+        # Journal Banque must expose only the bank-statement movements coming from
+        # imported/scanned bank statements. Invoice settlements made by virement/
+        # chèque/carte are already represented by the bank statement and must not
+        # appear as extra entries in the Banque journal.
+        if journal.type_journal == Journal.Type.BANQUE:
+            qs = qs.filter(mode_paiement="relevé bancaire")
 
         # Optional filters: ?compte=... &date=YYYY-MM-DD
         compte = request.query_params.get("compte")
@@ -643,94 +569,13 @@ class JournalEcrituresView(APIView):
         return Response(EcritureSerializer(qs, many=True).data)
 
     def post(self, request, pk, journal_id):
-        from datetime import datetime
-        from decimal import Decimal
-        import logging
-        
-        logger = logging.getLogger(__name__)
-        
-        try:
-            entreprise = _accountant_entreprise(request, pk)
-            journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
-            
-            # Extract the 4 criteria for duplicate detection
-            numero_piece = request.data.get("numero_piece", "").strip()
-            
-            # Parse date_ecriture (convert string to date object if needed)
-            date_ecriture = None
-            date_str = request.data.get("date_ecriture")
-            if date_str:
-                try:
-                    if isinstance(date_str, str):
-                        # Try different date formats
-                        for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
-                            try:
-                                date_ecriture = datetime.strptime(date_str, fmt).date()
-                                break
-                            except ValueError:
-                                continue
-                    else:
-                        # Already a date object
-                        date_ecriture = date_str
-                except Exception as e:
-                    logger.warning(f"Error parsing date: {e}")
-                    date_ecriture = None
-            
-            # Get libelle from the first ligne (or use fournisseur_client as fallback)
-            libelle = ""
-            lignes_data = request.data.get("lignes", [])
-            if lignes_data and isinstance(lignes_data, list) and len(lignes_data) > 0:
-                libelle = (lignes_data[0].get("libelle") or "").strip()
-            if not libelle:
-                libelle = (request.data.get("fournisseur_client") or "").strip()
-            
-            # Calculate total montant from lignes
-            montant_total = None
-            if lignes_data:
-                for ligne in lignes_data:
-                    try:
-                        debit = ligne.get("montant_debit")
-                        credit = ligne.get("montant_credit")
-                        if debit and debit != "0" and debit != 0:
-                            montant_total = Decimal(str(debit))
-                            break
-                        elif credit and credit != "0" and credit != 0:
-                            montant_total = Decimal(str(credit))
-                            break
-                    except (ValueError, TypeError, AttributeError) as e:
-                        logger.warning(f"Error parsing montant: {e}")
-                        pass
-            
-            # Check for duplicates using all 4 criteria
-            if numero_piece and date_ecriture and libelle and montant_total is not None:
-                _assert_unique_piece(
-                    entreprise, 
-                    numero_piece,
-                    date_ecriture=date_ecriture,
-                    libelle=libelle,
-                    montant=montant_total
-                )
-            
-            serializer = EcritureSerializer(
-                data=request.data,
-                context={"request": request, "entreprise": entreprise},
-            )
-            if not serializer.is_valid():
-                return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-            
-            ecriture = serializer.save(journal=journal)
-            
-            return Response({
-                "message": "Écriture ajoutée avec succès",
-                "ecriture": EcritureSerializer(ecriture).data
-            }, status=status.HTTP_201_CREATED)
-        
-        except Exception as e:
-            logger.error(f"Error in JournalEcrituresView.post: {str(e)}", exc_info=True)
-            return Response(
-                {"error": f"Erreur serveur: {str(e)}"}, 
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR
-            )
+        entreprise = _accountant_entreprise(request, pk)
+        journal = get_object_or_404(Journal, pk=journal_id, entreprise=entreprise)
+        _assert_unique_piece(entreprise, request.data.get("numero_piece"))
+        serializer = EcritureSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save(journal=journal)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
 class EcritureDetailView(APIView):
@@ -746,12 +591,7 @@ class EcritureDetailView(APIView):
 
     def put(self, request, pk):
         ecriture = self._get(request, pk)
-        serializer = EcritureSerializer(
-            ecriture,
-            data=request.data,
-            partial=True,
-            context={"request": request, "entreprise": ecriture.journal.entreprise},
-        )
+        serializer = EcritureSerializer(ecriture, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response(serializer.data)
@@ -835,39 +675,20 @@ class ScannerUploadView(APIView):
             return Response({"error": str(exc)},
                             status=status.HTTP_502_BAD_GATEWAY)
 
-        # Resolve dynamic SCF accounts before displaying the review screen.
-        # The confirmed payload therefore already contains the exact account
-        # numbers that will appear in the SCF table and the grand livre.
-        entreprise = None
-        if request.user.role == "accountant":
-            entreprise_id = request.data.get("entreprise")
-            if entreprise_id:
-                entreprise = Entreprise.objects.filter(
-                    id=entreprise_id, accountant=request.user
-                ).first()
-        elif request.user.role == "client":
-            access = (ClientAccess.objects.filter(client=request.user)
-                      .select_related("entreprise").first())
-            entreprise = access.entreprise if access else None
-        if entreprise and data.get("lignes"):
-            try:
-                journal = str(data.get("journal", "")).strip().lower()
-                tiers_nom = (data.get("fournisseur") or "").strip()
-                if tiers_nom and journal in {"achats", "achat"}:
-                    tiers = get_or_create_fournisseur(entreprise, tiers_nom)
-                    data["lignes"] = apply_tiers_account(
-                        data["lignes"], tiers.numero_compte, "401"
-                    )
-                elif tiers_nom and journal in {"ventes", "vente"}:
-                    tiers = get_or_create_client_comptable(entreprise, tiers_nom)
-                    data["lignes"] = apply_tiers_account(
-                        data["lignes"], tiers.numero_compte, "411"
-                    )
-                data["lignes"] = apply_scf_subaccounts(entreprise, data["lignes"])
-            except (ValidationError, ValueError) as exc:
-                return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        ent = None
+        eid = request.data.get("entreprise")
+        if request.user.role == "accountant" and eid:
+            ent = Entreprise.objects.filter(id=eid, accountant=request.user).first()
 
-        errors = validate_extraction(data)
+        # Inject the user's journal hint into data so sanitize_bank_statement_data
+        # can detect bank statements even when the AI didn't return "Banque".
+        hint = (request.data.get("journal_hint") or "").strip()
+        if hint and isinstance(data, dict):
+            data.setdefault("journal_hint", hint)
+
+        data = sanitize_bank_statement_data(data, entreprise=ent)
+
+        errors = validate_extraction(data, entreprise=ent)
         return Response({"data": data, "erreurs": errors,
                          "confiance": data.get("confiance")})
 
@@ -877,11 +698,9 @@ class ScannerConfirmView(APIView):
 
     permission_classes = [IsAccountant]
 
+    @transaction.atomic
     def post(self, request):
         import json as _json
-        from datetime import datetime
-        from decimal import Decimal
-        
         entreprise_id = request.data.get("entreprise")
         raw = request.data.get("data")
         if isinstance(raw, str):
@@ -891,56 +710,33 @@ class ScannerConfirmView(APIView):
                 data = {}
         else:
             data = raw or request.data
-        
         entreprise = _accountant_entreprise(request, entreprise_id)
-        
-        # Extract the 4 criteria for duplicate detection on factures
-        numero_facture = data.get("numero_facture") or data.get("numero_piece", "")
-        
-        # Try to parse the date
-        date_facture = None
-        try:
-            date_str = data.get("date_facture")
-            if date_str:
-                # Handle various date formats
-                for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
-                    try:
-                        date_facture = datetime.strptime(str(date_str), fmt).date()
-                        break
-                    except (ValueError, TypeError):
-                        continue
-        except Exception:
-            pass
-        
-        # Get libelle from fournisseur or description
-        libelle = (data.get("fournisseur") or data.get("description") or "").strip()
-        
-        # Get montant (use montant_ttc or montant_ht)
-        montant_total = None
-        try:
-            montant_ttc = data.get("montant_ttc")
-            montant_ht = data.get("montant_ht")
-            if montant_ttc:
-                montant_total = Decimal(str(montant_ttc))
-            elif montant_ht:
-                montant_total = Decimal(str(montant_ht))
-        except (ValueError, TypeError, AttributeError):
-            pass
-        
-        # Check for duplicates using all 4 criteria if we have them
-        _assert_unique_piece(
-            entreprise, 
-            numero_facture,
-            date_ecriture=date_facture if date_facture else None,
-            libelle=libelle if libelle else None,
-            montant=montant_total
+        data = sanitize_bank_statement_data(data, entreprise=entreprise)
+        numero = data.get("numero_facture") or data.get("numero_piece")
+        reusable_facture = _reusable_accounted_facture(
+            entreprise, data.get("numero_facture")
         )
-        
+        payment_entry = (
+            _matching_invoice_payment(entreprise, reusable_facture)
+            if reusable_facture else None
+        )
+        _assert_unique_piece(
+            entreprise, numero,
+            allow_ids=(payment_entry.pk,) if payment_entry else (),
+        )
+        accounting_data = data
+        if payment_entry:
+            accounting_data = {**data, "mode_paiement": ""}
         try:
-            ecriture = persist_extraction(entreprise, data, source="scanner")
+            ecriture = persist_extraction(entreprise, accounting_data, source="scanner")
         except WebhookError as exc:
             return Response({"error": str(exc)},
                             status=status.HTTP_400_BAD_REQUEST)
+        if payment_entry:
+            ecriture.mode_paiement = (
+                data.get("mode_paiement") or reusable_facture.mode_paiement
+            )
+            ecriture.save(update_fields=["mode_paiement"])
 
         # Archive the comptabilisé invoice as an image in "Mes factures".
         image_url = ""
@@ -949,162 +745,149 @@ class ScannerConfirmView(APIView):
                 image_url = upload_invoice_image(request.FILES["file"].read())
             except WebhookError:
                 image_url = ""
-        try:
-            Facture.objects.create(
-                entreprise=entreprise,
-                client=request.user,
-                numero_facture=data.get("numero_facture", "") or "",
-                date_facture=_parse_date(data.get("date_facture")),
-                montant_ht=data.get("montant_ht", 0) or 0,
-                tva_pourcentage=data.get("tva_pourcentage", 19) or 0,
-                montant_tva=data.get("montant_tva", 0) or 0,
-                montant_ttc=data.get("montant_ttc", 0) or 0,
-                image_url=image_url,
-                statut=Facture.Statut.VALIDE,
-                confiance_ia=int(data.get("confiance", 0) or 0),
-                ecriture=ecriture,
-                fournisseur_client=data.get("fournisseur", "") or "",
-                type_facture="vente" if "vente" in str(data.get("journal")).lower() else "achat",
-                mode_paiement=data.get("mode_paiement", "") or "",
-            )
-        except Exception:
-            pass  # never fail the écriture because of facture archiving
+        facture_fields = {
+            "entreprise": entreprise,
+            "client": request.user,
+            "numero_facture": data.get("numero_facture", "") or "",
+            "date_facture": _parse_date(data.get("date_facture")),
+            "montant_ht": data.get("montant_ht", 0) or 0,
+            "tva_pourcentage": data.get("tva_pourcentage", 19) or 0,
+            "montant_tva": data.get("montant_tva", 0) or 0,
+            "montant_ttc": data.get("montant_ttc", 0) or 0,
+            "image_url": image_url or (
+                reusable_facture.image_url if reusable_facture else ""
+            ),
+            "statut": Facture.Statut.VALIDE,
+            "confiance_ia": int(data.get("confiance", 0) or 0),
+            "ecriture": ecriture,
+            "fournisseur_client": data.get("fournisseur", "") or "",
+            "type_facture": "banque" if any(
+                k in str(data.get("journal")).lower() for k in ("banque", "relev")
+            ) else ("vente" if "vente" in str(data.get("journal")).lower() else "achat"),
+            "mode_paiement": (
+                data.get("mode_paiement") or reusable_facture.mode_paiement
+                if reusable_facture else data.get("mode_paiement", "") or ""
+            ),
+        }
+        if reusable_facture:
+            for field, value in facture_fields.items():
+                setattr(reusable_facture, field, value)
+            reusable_facture.save()
+        else:
+            try:
+                Facture.objects.create(**facture_fields)
+            except Exception:
+                pass  # never fail the écriture because of facture archiving
 
         return Response(EcritureSerializer(ecriture).data,
                         status=status.HTTP_201_CREATED)
 
 
-# --------------------------------------------------------------------------- #
-# Bank statements
-# --------------------------------------------------------------------------- #
 class BankStatementUploadView(APIView):
-    """Extract a bank statement with Make, but reject a wrong account early."""
-
     permission_classes = [IsAccountant]
 
     def post(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
         if "file" not in request.FILES:
-            return Response({"error": "Aucun relevé bancaire fourni."},
-                            status=status.HTTP_400_BAD_REQUEST)
-        f = request.FILES["file"]
-        raw = f.read()
-        name = (f.name or "releve-bancaire").lower()
-        is_pdf = (
-            f.content_type == "application/pdf" or name.endswith(".pdf") or raw[:5] == b"%PDF-"
-        )
-        is_image = f.content_type in ("image/jpeg", "image/png") or name.endswith((".jpg", ".jpeg", ".png"))
+            return Response({"error": "Aucun relevé fourni."}, status=status.HTTP_400_BAD_REQUEST)
+
+        uploaded = request.FILES["file"]
+        raw = uploaded.read()
+        name = (uploaded.name or "").lower()
+        is_pdf = uploaded.content_type == "application/pdf" or name.endswith(".pdf") or raw[:5] == b"%PDF-"
+        is_image = uploaded.content_type in ("image/jpeg", "image/png") or name.endswith((".jpg", ".jpeg", ".png"))
         if not is_pdf and not is_image:
             return Response(
                 {"error": "Format non supporté. Utilisez PDF, JPG, JPEG ou PNG."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        context = {
+            "entreprise_nom": entreprise.nom,
+            "banque": entreprise.banque,
+            "banque2": entreprise.banque2,
+            "document_type": "releve_bancaire",
+            "journal_hint": "Banque",
+            "required_fields": "nom_banque,nom_entreprise",
+        }
         try:
             if is_pdf:
                 raw = pdf_to_jpeg(raw)
-                name = "releve-bancaire.jpg"
-            # Rich context so the AI can auto-classify counterpart accounts.
-            ai_context = {
-                "document_type": "releve_bancaire",
-                "entreprise_nom": entreprise.nom,
-                "numero_compte_bancaire": entreprise.numero_compte or "",
-                "banque": entreprise.banque or "",
-                "activite": ", ".join(filter(None, [entreprise.activite, entreprise.activite2])),
-                "marchandise": entreprise.marchandise or "",
-                "releve_schema": (
-                    "Tu es un assistant comptable IA expert en comptabilité SCF algérienne. "
-                    "Analyse ce relevé bancaire (quelle que soit la banque, le format, la mise en page ou les entêtes de colonnes). "
-                    "Extrais un objet JSON avec : "
-                    "numero_compte (str: le numéro de compte bancaire figurant sur le relevé), "
-                    "lignes (liste d'opérations bancaires individuelles, une par ligne d'opération). "
-                    "Chaque objet d'opération contient : "
-                    "date (str au format JJ/MM/AAAA ou YYYY-MM-DD), "
-                    "libelle (str: la description de l'opération), "
-                    "reference (str: numéro de chèque, virement ou référence si présent), "
-                    "sens ('debit' si la banque est créditée/encaissement, 'credit' si la banque est débitée/décaissement), "
-                    "montant (nombre positif), "
-                    "compte_contrepartie (str: numéro de compte SCF 3 à 6 chiffres adapté au libellé ex. 401000 pour fournisseur, 411000 pour client, 581000 pour virement/dépôt, 627000 pour frais bancaires, 6xx pour charges, 7xx pour produits), "
-                    "tiers (str: nom du tiers, client ou fournisseur si présent), "
-                    "confiance (int: 0 à 100). "
-                    "Traite toutes les opérations ligne par ligne sans les regrouper."
-                ),
-            }
-            data = call_webhook(
-                image_bytes=raw,
-                filename=name,
-                context=ai_context,
-            )
-            account = data.get("numero_compte") or data.get("account_number") or data.get("compte_bancaire")
-            validate_statement_account(entreprise, account)
+                data = call_webhook(image_bytes=raw, filename="releve-bancaire.jpg", context=context)
+            else:
+                data = call_webhook(image_bytes=raw, filename=uploaded.name, context=context)
+            if isinstance(data, dict) and isinstance(data.get("data"), dict):
+                data = data["data"]
+            if not isinstance(data, dict):
+                raise BankStatementError(
+                    "Les données d'identité du relevé sont absentes. Import rejeté."
+                )
+            fill_missing_statement_identity(entreprise, data)
+            nom_banque, nom_entreprise = validate_statement_identity(entreprise, data)
+            data["nom_banque"] = nom_banque
+            data["nom_entreprise"] = nom_entreprise
         except (WebhookError, BankStatementError) as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        image_url = ""
-        image_url = str(
-            data.get("image_url") or
-            data.get("file_url") or
-            data.get("image") or
-            ""
-        )
-        if not image_url:
-            try:
-                image_url = upload_invoice_image(raw, filename=name) or ""
-            except WebhookError:
-                image_url = ""
-
-        # Compute accounting preview so the frontend can show the double-entry
-        # table before the accountant confirms (no DB writes at this stage).
-        ecritures_preview = preview_entries(data)
-
         return Response({
             "data": data,
-            "numero_compte_valide": True,
-            "ecritures_preview": ecritures_preview,
-            "image_url": image_url,
+            "nom_banque_valide": True,
+            "nom_entreprise_valide": True,
+            "ecritures_preview": preview_entries(data),
+            "confiance": data.get("confiance"),
         })
 
 
 class BankStatementImportView(APIView):
-    """Persist a reviewed AI extraction as chronological double entries.
-
-    Called after the accountant has reviewed the extraction in the frontend
-    and clicked the confirm button. Every created Ecriture is marked VALIDE.
-    """
-
     permission_classes = [IsAccountant]
 
     def post(self, request, pk):
-        import json as _json
-
         entreprise = _accountant_entreprise(request, pk)
-        data = request.data.get("data", request.data)
-        if isinstance(data, str):
-            try:
-                data = _json.loads(data)
-            except ValueError:
-                return Response({"error": "Les données du relevé ne sont pas un JSON valide."},
-                                status=status.HTTP_400_BAD_REQUEST)
+        data = request.data.get("data") or request.data
         if not isinstance(data, dict):
-            return Response({"error": "Les données du relevé sont invalides."},
-                            status=status.HTTP_400_BAD_REQUEST)
+            return Response({"error": "Données de relevé invalides."}, status=status.HTTP_400_BAD_REQUEST)
+        fill_missing_statement_identity(entreprise, data)
         try:
             entries = import_bank_statement(entreprise, data)
         except BankStatementError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        except Exception as exc:
-            # Catch unexpected DB or validation errors and surface them clearly
-            # rather than returning an opaque 500 or losing the result silently.
-            return Response(
-                {"error": f"Erreur lors de l'enregistrement des écritures : {exc}"},
-                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            )
 
-        serialized = EcritureSerializer(entries, many=True).data
         return Response({
-            "numero_compte_valide": True,
+            "nom_banque_valide": True,
+            "nom_entreprise_valide": True,
             "ecritures_creees": len(entries),
-            "ecritures": serialized,
+            "ecritures": EcritureSerializer(entries, many=True).data,
         }, status=status.HTTP_201_CREATED)
+
+
+class SCFListView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk=None):
+        if pk is None:
+            queryset = SCFAccount.objects.filter(entreprise__isnull=True)
+        else:
+            entreprise = _accountant_entreprise(request, pk)
+            queryset = SCFAccount.objects.filter(
+                entreprise__isnull=True
+            ) | SCFAccount.objects.filter(entreprise=entreprise)
+        global_accounts = list(queryset.filter(entreprise__isnull=True))
+        grouped = {str(classe): [] for classe in range(1, 9)}
+        for account in queryset.distinct().order_by("classe", "numero_compte"):
+            item = {
+                "numero_compte": account.numero_compte,
+                "libelle": account.libelle,
+            }
+            if account.entreprise_id:
+                parents = [
+                    parent.numero_compte
+                    for parent in global_accounts
+                    if account.numero_compte.startswith(parent.numero_compte)
+                ]
+                if parents:
+                    item["parent"] = max(parents, key=len)
+            grouped.setdefault(str(account.classe), []).append(item)
+        return Response(grouped)
 
 
 # --------------------------------------------------------------------------- #
@@ -1136,12 +919,31 @@ class FactureListCreateView(APIView):
             return Response({"error": "Aucune entreprise associée."},
                             status=status.HTTP_400_BAD_REQUEST)
 
-        entreprise = get_object_or_404(Entreprise, id=entreprise_id)
+        if request.user.role == "accountant":
+            entreprise = get_object_or_404(
+                Entreprise, id=entreprise_id, accountant=request.user
+            )
+        else:
+            entreprise = get_object_or_404(
+                Entreprise, id=entreprise_id,
+                client_accesses__client=request.user,
+            )
 
-        # Duplicate invoice number guard (per entreprise).
         numero = (request.data.get("numero_facture") or "").strip()
-        if numero and Facture.objects.filter(
-            entreprise_id=entreprise_id, numero_facture=numero
+        reusable_facture = None
+        payment_entry = None
+        if request.user.role == "accountant":
+            reusable_facture = _reusable_accounted_facture(entreprise, numero)
+            if reusable_facture:
+                payment_entry = _matching_invoice_payment(
+                    entreprise, reusable_facture
+                )
+            _assert_unique_piece(
+                entreprise, numero,
+                allow_ids=(payment_entry.pk,) if payment_entry else (),
+            )
+        elif numero and Facture.objects.filter(
+            entreprise=entreprise, numero_facture=numero
         ).exists():
             return Response(
                 {"numero_facture": f"Une facture N° « {numero} » existe déjà."},
@@ -1183,7 +985,10 @@ class FactureListCreateView(APIView):
 
         fournisseur_client = extraction_data["fournisseur"]
         type_facture = request.data.get("type_facture") or "achat"
-        mode_paiement = extraction_data["mode_paiement"]
+        mode_paiement = (
+            extraction_data["mode_paiement"]
+            or (reusable_facture.mode_paiement if reusable_facture else "")
+        )
 
         # Si l'utilisateur est un CLIENT (role != "accountant"), la facture est enregistrée
         # en statut "EN_COURS" dans "Mes factures". Le comptable la validera manuellement.
@@ -1210,31 +1015,45 @@ class FactureListCreateView(APIView):
             return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
 
         # Si l'utilisateur est un COMPTABLE, comptabilisation automatique directe
+        accounting_data = extraction_data
+        if payment_entry:
+            accounting_data = {**extraction_data, "mode_paiement": ""}
         try:
-            ecriture = persist_extraction(entreprise, extraction_data, source="import")
+            ecriture = persist_extraction(entreprise, accounting_data, source="import")
         except Exception as exc:
             return Response({"error": f"Erreur lors de la comptabilisation: {str(exc)}"},
                             status=status.HTTP_400_BAD_REQUEST)
+        if payment_entry:
+            ecriture.mode_paiement = mode_paiement
+            ecriture.save(update_fields=["mode_paiement"])
 
-        # Create the Facture as VALIDE immediately
-        facture = Facture.objects.create(
-            entreprise=entreprise,
-            client=request.user,
-            numero_facture=numero,
-            date_facture=ecriture.date_ecriture,
-            montant_ht=extraction_data["montant_ht"],
-            tva_pourcentage=extraction_data["tva_pourcentage"],
-            montant_tva=extraction_data["montant_tva"],
-            montant_ttc=extraction_data["montant_ttc"],
-            image_url=image_url,
-            statut=Facture.Statut.VALIDE,
-            confiance_ia=extraction_data["confiance"],
-            ecriture=ecriture,
-            fournisseur_client=fournisseur_client,
-            type_facture=type_facture,
-            mode_paiement=mode_paiement,
-        )
+        facture_fields = {
+            "entreprise": entreprise,
+            "client": request.user,
+            "numero_facture": numero,
+            "date_facture": ecriture.date_ecriture,
+            "montant_ht": extraction_data["montant_ht"],
+            "tva_pourcentage": extraction_data["tva_pourcentage"],
+            "montant_tva": extraction_data["montant_tva"],
+            "montant_ttc": extraction_data["montant_ttc"],
+            "image_url": image_url or (
+                reusable_facture.image_url if reusable_facture else ""
+            ),
+            "statut": Facture.Statut.VALIDE,
+            "confiance_ia": extraction_data["confiance"],
+            "ecriture": ecriture,
+            "fournisseur_client": fournisseur_client,
+            "type_facture": type_facture,
+            "mode_paiement": mode_paiement,
+        }
+        if reusable_facture:
+            for field, value in facture_fields.items():
+                setattr(reusable_facture, field, value)
+            reusable_facture.save()
+        else:
+            facture = Facture.objects.create(**facture_fields)
 
+        facture = reusable_facture or facture
         return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
 
 
@@ -1248,52 +1067,6 @@ class FactureDetailView(APIView):
         else:
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
         return Response(FactureSerializer(facture).data)
-
-    @transaction.atomic
-    def delete(self, request, pk):
-        if request.user.role == "accountant":
-            facture = get_object_or_404(
-                Facture, pk=pk, entreprise__accountant=request.user)
-        else:
-            facture = get_object_or_404(Facture, pk=pk, client=request.user)
-
-        ecriture = facture.ecriture
-        if ecriture:
-            caisse_identifiers = {
-                "entreprise_id": ecriture.journal.entreprise_id,
-                "annee_id": ecriture.journal.annee_id,
-                "date_ecriture": ecriture.date_ecriture,
-                "numero_piece": ecriture.numero_piece,
-                "fournisseur_client": ecriture.fournisseur_client,
-                "source": ecriture.source,
-                "confiance_ia": ecriture.confiance_ia,
-                "statut": ecriture.statut,
-                "mode_paiement": ecriture.mode_paiement,
-            }
-            montant_ttc = facture.montant_ttc
-            ecriture.delete()
-
-            caisse_entries = Ecriture.objects.filter(
-                journal__entreprise_id=caisse_identifiers["entreprise_id"],
-                journal__annee_id=caisse_identifiers["annee_id"],
-                journal__type_journal=Journal.Type.CAISSE,
-                date_ecriture=caisse_identifiers["date_ecriture"],
-                numero_piece=caisse_identifiers["numero_piece"],
-                fournisseur_client=caisse_identifiers["fournisseur_client"],
-                source=caisse_identifiers["source"],
-                confiance_ia=caisse_identifiers["confiance_ia"],
-                statut=caisse_identifiers["statut"],
-                mode_paiement=caisse_identifiers["mode_paiement"],
-                lignes__numero_compte="530000",
-            ).filter(
-                Q(lignes__montant_debit=montant_ttc)
-                | Q(lignes__montant_credit=montant_ttc)
-            ).distinct()
-            if caisse_entries.count() == 1:
-                caisse_entries.first().delete()
-
-        facture.delete()
-        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # --------------------------------------------------------------------------- #
@@ -1326,34 +1099,34 @@ class FactureValidateView(APIView):
 
         # Determine which journal to post to
         is_vente = facture.type_facture == "vente"
-        journal_name = "Ventes" if is_vente else "Achats"
+        is_banque = facture.type_facture == "banque"
+        journal_name = "Banque" if is_banque else ("Ventes" if is_vente else "Achats")
         
-        # Vérification : le tiers ne peut pas être l'entreprise elle-même
-        tiers_nom = facture.fournisseur_client or ""
-        if tiers_nom:
-            try:
-                _validate_not_self(entreprise, tiers_nom, "client" if is_vente else "fournisseur")
-            except ValidationError as e:
-                return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-        else:
-            return Response(
-                {"error": "Le nom du client/fournisseur est obligatoire pour valider la facture."},
-                status=status.HTTP_400_BAD_REQUEST
-            )
+        tiers_nom = facture.fournisseur_client or ("Banque" if is_banque else "")
+        if not is_banque:
+            if tiers_nom:
+                try:
+                    _validate_not_self(entreprise, tiers_nom, "client" if is_vente else "fournisseur")
+                except ValidationError as e:
+                    return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            else:
+                return Response(
+                    {"error": "Le nom du client/fournisseur est obligatoire pour valider la facture."},
+                    status=status.HTTP_400_BAD_REQUEST
+                )
 
         # Re-run automated accounting using updated persist_extraction
-        extraction_data = {
-            "fournisseur": tiers_nom,
-            "date_facture": str(facture.date_facture) if facture.date_facture else "",
-            "numero_facture": facture.numero_facture,
-            "montant_ht": float(facture.montant_ht),
-            "tva_pourcentage": float(facture.tva_pourcentage),
-            "montant_tva": float(facture.montant_tva),
-            "montant_ttc": float(facture.montant_ttc),
-            "journal": journal_name,
-            "confiance": int(facture.confiance_ia or 95),
-            "mode_paiement": mode,
-            "lignes": [
+        if is_banque:
+            lignes = [
+                {
+                    "libelle": f"Mouvement bancaire — {tiers_nom or 'Opération'}",
+                    "debit": float(facture.montant_ttc),
+                    "credit": 0,
+                    "tiers": tiers_nom,
+                }
+            ]
+        else:
+            lignes = [
                 {
                     "compte": "411" if is_vente else "401",
                     "libelle": tiers_nom,
@@ -1367,14 +1140,28 @@ class FactureValidateView(APIView):
                     "credit": float(facture.montant_ht) if is_vente else 0,
                 }
             ]
+            if float(facture.montant_tva) > 0:
+                lignes.append({
+                    "compte": "445700" if is_vente else "44566",
+                    "libelle": "TVA collectée" if is_vente else "TVA déductible",
+                    "debit": 0 if is_vente else float(facture.montant_tva),
+                    "credit": float(facture.montant_tva) if is_vente else 0,
+                })
+
+        extraction_data = {
+            "fournisseur": tiers_nom,
+            "date_facture": str(facture.date_facture) if facture.date_facture else "",
+            "numero_facture": facture.numero_facture,
+            "montant_ht": float(facture.montant_ht),
+            "tva_pourcentage": float(facture.tva_pourcentage),
+            "montant_tva": float(facture.montant_tva),
+            "montant_ttc": float(facture.montant_ttc),
+            "journal": journal_name,
+            "confiance": int(facture.confiance_ia or 95),
+            "mode_paiement": mode,
+            "lignes": lignes,
         }
-        if float(facture.montant_tva) > 0:
-            extraction_data["lignes"].append({
-                "compte": "445700" if is_vente else "445600",
-                "libelle": "TVA collectée" if is_vente else "TVA déductible",
-                "debit": 0 if is_vente else float(facture.montant_tva),
-                "credit": float(facture.montant_tva) if is_vente else 0,
-            })
+
 
         try:
             ecriture = persist_extraction(entreprise, extraction_data, source="import")
@@ -1451,79 +1238,41 @@ class MockWebhookView(APIView):
     authentication_classes = []
 
     def post(self, request):
-        if str(request.data.get("document_type") or "") == "releve_bancaire":
-            # Echo the real entreprise's own account so the demo passes the
-            # step-1 account check out of the box (a real AI reads it off
-            # the statement image; here we just look the entreprise up).
-            nom = request.data.get("entreprise_nom") or ""
-            entreprise = Entreprise.objects.filter(nom=nom).first()
-            numero_compte = (entreprise.numero_compte if entreprise else "") or "00123456"
-            return Response({
-                "numero_compte": numero_compte,
-                "lignes": [
-                    {
-                        # CHQ RETOUR: chèque fournisseur impayé revient → débit 401 / crédit 512
-                        # Direction 512: credit (argent sort — le chèque est retourné impayé)
-                        "date": "04/02/2026",
-                        "libelle": "CHQ RETOUR 8042359",
-                        "reference": "CHQ-8042359",
-                        "sens": "credit",
-                        "montant": "866041.72",
-                        "compte_contrepartie": "401000",
-                        "tiers": "SARL FOURNISSEUR",
-                        "confiance": 92,
-                    },
-                    {
-                        # VERSEMENT: dépôt d'espèces sur le compte → débit 512 / crédit 581
-                        "date": "08/02/2026",
-                        "libelle": "VERSEMENT ESPECES",
-                        "reference": "",
-                        "sens": "debit",
-                        "montant": "8000000.00",
-                        "compte_contrepartie": "581000",
-                        "tiers": "",
-                        "confiance": 95,
-                    },
-                    {
-                        # SORT CHQ: paiement par chèque fournisseur → crédit 512 / débit 401
-                        "date": "09/02/2026",
-                        "libelle": "SORT CHQ 2228966",
-                        "reference": "CHQ-2228966",
-                        "sens": "credit",
-                        "montant": "142.80",
-                        "compte_contrepartie": "627000",
-                        "tiers": "",
-                        "confiance": 88,
-                    },
-                    {
-                        # SORT CHQ: règlement client encaissé → débit 512 / crédit 411
-                        "date": "09/02/2026",
-                        "libelle": "SORT CHQ 9611823",
-                        "reference": "CHQ-9611823",
-                        "sens": "debit",
-                        "montant": "1185556.08",
-                        "compte_contrepartie": "411000",
-                        "tiers": "CLIENT SPA",
-                        "confiance": 91,
-                    },
-                    {
-                        # CHQ RETOUR: frais bancaires → débit 627 / crédit 512
-                        "date": "09/02/2026",
-                        "libelle": "CH NOS CLT 5548099",
-                        "reference": "CLT-5548099",
-                        "sens": "credit",
-                        "montant": "147194.69",
-                        "compte_contrepartie": "411000",
-                        "tiers": "CLIENT NORD",
-                        "confiance": 89,
-                    },
-                ],
-            })
-
         hint = str(request.data.get("journal_hint") or request.data.get("journal") or "").lower()
         is_vente = "vente" in hint
+        is_banque = (
+            "banque" in hint
+            or "relev" in hint
+            or str(request.data.get("document_type") or "").lower() == "releve_bancaire"
+        )
+
+        if is_banque:
+            return Response({
+                "journal": "Banque",
+                "type_facture": "banque",
+                "nom_banque": request.data.get("banque") or "BNA",
+                "nom_entreprise": request.data.get("entreprise_nom") or "Entreprise test",
+                "fournisseur": "Banque CPA",
+                "date_facture": "28/02/2026",
+                "numero_facture": "RELEV-20260228",
+                "numero_releve": "2026-02",
+                "montant_ht": 0,
+                "tva_pourcentage": 0,
+                "montant_tva": 0,
+                "montant_ttc": 150000.00,
+                "mode_paiement": "Virement",
+                "confiance": 95,
+                "lignes": [
+                    {"date": "07/02/2026", "libelle": "Virement client SARL Dupont", "tiers": "SARL Dupont", "debit": 0, "credit": 85000.00},
+                    {"date": "12/02/2026", "libelle": "Règlement fournisseur EURL Matériaux", "tiers": "EURL Matériaux", "debit": 45000.00, "credit": 0},
+                    {"date": "20/02/2026", "libelle": "Frais bancaires — tenue de compte", "tiers": "Banque CPA", "debit": 1500.00, "credit": 0},
+                    {"date": "28/02/2026", "libelle": "Virement client Mohamed Seghir", "tiers": "Mohamed Seghir", "debit": 0, "credit": 65000.00},
+                ],
+                "erreurs": [],
+            })
+
         mode_paiement = "espèces"
-        if "banque" in hint or "virement" in hint or "chèque" in hint:
+        if is_banque or "virement" in hint or "chèque" in hint:
             mode_paiement = "chèque"
 
         if is_vente:
@@ -1561,7 +1310,7 @@ class MockWebhookView(APIView):
                 "lignes": [
                     {"compte": "6011", "libelle": "Achats de marchandises",
                      "debit": 100000.00, "credit": 0.00},
-                    {"compte": "445600", "libelle": "TVA déductible",
+                    {"compte": "44566", "libelle": "TVA déductible",
                      "debit": 19000.00, "credit": 0.00},
                     {"compte": "4011", "libelle": "Fournisseurs",
                      "debit": 0.00, "credit": 119000.00},

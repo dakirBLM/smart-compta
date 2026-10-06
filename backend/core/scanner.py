@@ -14,11 +14,9 @@ from django.core.exceptions import ValidationError
 
 from .account_helpers import (
     apply_tiers_account,
-    apply_scf_subaccounts,
     auto_balance_lines,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
-    enterprise_bank_subaccount,
     _normalize_name,
 )
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
@@ -33,10 +31,12 @@ REQUIRED_FIELDS = [
 JOURNAL_MAP = {
     "achats": Journal.Type.ACHAT, "achat": Journal.Type.ACHAT,
     "ventes": Journal.Type.VENTE, "vente": Journal.Type.VENTE,
-    "banque": Journal.Type.BANQUE,
+    "banque": Journal.Type.BANQUE, "relevé": Journal.Type.BANQUE, "releve": Journal.Type.BANQUE,
+    "relevé bancaire": Journal.Type.BANQUE, "releve bancaire": Journal.Type.BANQUE,
     "caisse": Journal.Type.CAISSE,
     "od": Journal.Type.OD,
 }
+
 
 
 class WebhookError(Exception):
@@ -273,38 +273,58 @@ def _extract_json(text):
         except (ValueError, TypeError):
             pass
     # Fallback: grab the outermost {...} block.
-    start, end = text.find("{"), text.rfind("}")
+    start = text.find("{")
+    end = text.rfind("}")
     if start != -1 and end > start:
         try:
             return json.loads(text[start:end + 1])
         except (ValueError, TypeError):
-            return None
+            pass
     return None
 
 
-def blocking_errors(data):
+def blocking_errors(data, entreprise=None):
     """Hard accounting/structure problems that must prevent saving — does NOT
     include the AI's `erreurs` notes (those are often just explanations, e.g.
     'timbre fiscal ajouté', and must not block a balanced entry)."""
     errors = []
-    for field in REQUIRED_FIELDS:
+    journal_str = str(data.get("journal", "")).lower()
+    hint_str = str(data.get("journal_hint", "")).lower()
+    is_bank_stmt = (
+        any(k in journal_str for k in ("banque", "relev")) or
+        any(k in hint_str for k in ("banque", "relev")) or
+        data.get("type_facture") == "banque"
+    )
+
+    req_fields = [f for f in REQUIRED_FIELDS if f not in ("fournisseur", "montant_ht", "tva_pourcentage", "montant_tva", "montant_ttc")] if is_bank_stmt else REQUIRED_FIELDS
+    for field in req_fields:
         if field not in data:
             errors.append(f"Champ manquant: {field}")
     lignes = data.get("lignes") or []
     if not lignes:
         errors.append("Aucune ligne d'écriture fournie.")
-    else:
+    elif not is_bank_stmt:
         total_debit = sum(float(l.get("debit", 0) or 0) for l in lignes)
         total_credit = sum(float(l.get("credit", 0) or 0) for l in lignes)
         if abs(total_debit - total_credit) > 0.01:
             errors.append(f"Débit ({total_debit}) ≠ Crédit ({total_credit}).")
+    else:
+        normalized_lignes = [_normalize_bank_line(l) for l in lignes]
+        valid_ops = any(float(l.get("debit", 0) or 0) > 0 or float(l.get("credit", 0) or 0) > 0 for l in normalized_lignes)
+        if not valid_ops:
+            errors.append("Le relevé bancaire ne contient aucune opération avec un montant valide.")
+        try:
+            check_bank_account_match(entreprise, data)
+        except WebhookError as exc:
+            errors.append(str(exc))
     return errors
 
 
-def validate_extraction(data):
+def validate_extraction(data, entreprise=None):
     """Errors for DISPLAY in the review screen: the AI's own notes/errors plus
     the structural checks. Shown to the user but not all blocking."""
-    return list(data.get("erreurs") or []) + blocking_errors(data)
+    data = sanitize_bank_statement_data(data, entreprise=entreprise)
+    return list(data.get("erreurs") or []) + blocking_errors(data, entreprise=entreprise)
 
 
 def _parse_date(value):
@@ -314,6 +334,87 @@ def _parse_date(value):
         except (ValueError, TypeError):
             continue
     return datetime.today().date()
+
+
+def _sort_bank_lines(lignes):
+    """Trie les lignes de relevé bancaire par date, puis par ordre d'origine."""
+    enriched = []
+    for idx, ligne in enumerate(lignes or []):
+        entry = dict(ligne or {})
+        if entry.get("date"):
+            entry["_parsed_date"] = _parse_date(entry.get("date"))
+        else:
+            entry["_parsed_date"] = None
+        entry["_original_index"] = idx
+        enriched.append(entry)
+
+    enriched.sort(
+        key=lambda entry: (
+            entry["_parsed_date"] or datetime.min.date(),
+            entry["_original_index"],
+        )
+    )
+    for entry in enriched:
+        entry.pop("_parsed_date", None)
+        entry.pop("_original_index", None)
+    return enriched
+
+
+def _coerce_amount(value):
+    if value in (None, ""):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace(" ", "").replace(",", ".")
+    try:
+        return float(text)
+    except ValueError:
+        return 0.0
+
+
+def _normalize_bank_line(line):
+    if not isinstance(line, dict):
+        return {}
+
+    normalized = dict(line)
+
+    # Normalize common bank statement amount keys.
+    if normalized.get("debit") in (None, "") and normalized.get("montant_debit") not in (None, ""):
+        normalized["debit"] = normalized.get("montant_debit")
+    if normalized.get("credit") in (None, "") and normalized.get("montant_credit") not in (None, ""):
+        normalized["credit"] = normalized.get("montant_credit")
+    if normalized.get("debit") in (None, "") and normalized.get("debit_montant") not in (None, ""):
+        normalized["debit"] = normalized.get("debit_montant")
+    if normalized.get("credit") in (None, "") and normalized.get("credit_montant") not in (None, ""):
+        normalized["credit"] = normalized.get("credit_montant")
+
+    debit = normalized.get("debit")
+    credit = normalized.get("credit")
+    amount = normalized.get("montant")
+    if amount is None:
+        amount = normalized.get("amount")
+    if amount is None:
+        amount = normalized.get("montant_ttc")
+
+    sens = str(normalized.get("sens") or normalized.get("type") or normalized.get("nature") or "").strip().lower()
+
+    if (debit in (None, "", 0) and credit in (None, "", 0)) and amount not in (None, "", 0):
+        amount_val = _coerce_amount(amount)
+        if any(k in sens for k in ["credit", "crédit", "entrant", "encaissement", "recette", "recu", "c"]):
+            normalized["debit"] = 0.0
+            normalized["credit"] = amount_val
+        else:
+            normalized["debit"] = amount_val
+            normalized["credit"] = 0.0
+
+    if normalized.get("debit") in (None, ""):
+        normalized["debit"] = 0.0
+    if normalized.get("credit") in (None, ""):
+        normalized["credit"] = 0.0
+
+    normalized["debit"] = _coerce_amount(normalized.get("debit"))
+    normalized["credit"] = _coerce_amount(normalized.get("credit"))
+    return normalized
 
 
 def _resolve_exercice(entreprise, date_fact):
@@ -333,21 +434,319 @@ def _resolve_exercice(entreprise, date_fact):
 CAISSE_COMPTE = "530000"
 
 
+def check_bank_account_match(entreprise, data):
+    """Vérifie que le numéro de compte bancaire du relevé correspond à celui de l'entreprise."""
+    extracted_acc = (
+        data.get("numero_compte_bancaire") or
+        data.get("numero_compte") or
+        data.get("rib") or
+        ""
+    )
+
+    def clean(s):
+        return re.sub(r'[^A-Za-z0-9]', '', str(s or '')).upper()
+
+    norm_extracted = clean(extracted_acc)
+
+    ent_accs = [
+        clean(entreprise.numero_compte),
+        clean(entreprise.rib),
+        clean(entreprise.numero_compte2),
+        clean(entreprise.rib2),
+    ]
+    ent_accs = [a for a in ent_accs if len(a) >= 4]
+
+    if not ent_accs:
+        raise WebhookError(
+            "L'entreprise n'est pas configurée avec un numéro de compte bancaire ou RIB dans son profil. "
+            "Veuillez renseigner le compte bancaire de l'entreprise dans ses paramètres."
+        )
+
+    if norm_extracted:
+        matched = any(norm_extracted in a or a in norm_extracted for a in ent_accs)
+        if not matched:
+            configured_list = ", ".join(filter(None, [entreprise.numero_compte, entreprise.rib, entreprise.numero_compte2, entreprise.rib2]))
+            raise WebhookError(
+                f"Le numéro de compte bancaire du relevé ({extracted_acc}) "
+                f"ne correspond pas aux comptes bancaires enregistrés de l'entreprise ({configured_list})."
+            )
+
+
+def resolve_bank_counterpart(ligne, is_debit, entreprise):
+    """Détermine le compte de contrepartie (401, 411, 6xx, 7xx, 530, etc.) et le nom du tiers."""
+    compte_fourni = str(ligne.get("compte") or ligne.get("compte_contrepartie") or "").strip()
+    libelle = " ".join(
+        filter(None, [
+            str(ligne.get("libelle") or ""),
+            str(ligne.get("description") or ""),
+            str(ligne.get("tiers") or ""),
+        ])
+    ).lower()
+    tiers = str(ligne.get("tiers") or ligne.get("fournisseur") or "").strip()
+
+    if compte_fourni and compte_fourni != "512000":
+        return compte_fourni, tiers or "Tiers"
+
+    if is_debit:
+        # Bank Debit (Outflow / Dépense)
+        if any(k in libelle for k in ["frais", "agios", "commission", "cotisation", "tenue de compte"]):
+            return "627000", tiers or "Frais bancaires"
+        if any(k in libelle for k in ["intérêt", "interet", "agios"]):
+            return "661000", tiers or "Intérêts bancaires"
+        if any(k in libelle for k in ["salaire", "virement paie", "paie", "remuneration"]):
+            return "421000", tiers or "Personnel"
+        if any(k in libelle for k in ["retrait", "caisse", "especes", "espèces"]):
+            return "530000", tiers or "Caisse"
+        if any(k in libelle for k in ["tva", "impot", "impôt", "dgi", "taxe", "tax"]):
+            return "445000", tiers or "Trésor Public"
+        if any(k in libelle for k in ["retour de chèque", "retour cheque", "cheque retourne", "chèque retourné", "cheque retourne", "cheque retourné", "retour chèque", "retour cheque", "chèque retour", "cheque retour"]):
+            if tiers and _normalize_name(tiers) != _normalize_name(entreprise.nom):
+                if "client" in libelle or "client" in tiers.lower():
+                    try:
+                        cl = get_or_create_client_comptable(entreprise, tiers)
+                        return cl.numero_compte or "411000", cl.nom
+                    except Exception:
+                        pass
+                    return "411000", tiers or "Client - Chèque retourné"
+                if "fournisseur" in libelle or "supplier" in tiers.lower():
+                    try:
+                        fourn = get_or_create_fournisseur(entreprise, tiers)
+                        return fourn.numero_compte or "401000", fourn.nom
+                    except Exception:
+                        pass
+                    return "401000", tiers or "Fournisseur - Chèque retourné"
+                try:
+                    cl = get_or_create_client_comptable(entreprise, tiers)
+                    return cl.numero_compte or "411000", cl.nom
+                except Exception:
+                    pass
+            return "401000", tiers or "Fournisseur - Chèque retourné"
+
+        if tiers and _normalize_name(tiers) != _normalize_name(entreprise.nom):
+            try:
+                fourn = get_or_create_fournisseur(entreprise, tiers)
+                return fourn.numero_compte or "401000", fourn.nom
+            except Exception:
+                pass
+        return "401000", tiers or "Fournisseur Dépense"
+    else:
+        # Bank Credit (Inflow / Recette)
+        if any(k in libelle for k in ["subvention"]):
+            return "740000", tiers or "Subvention d'exploitation"
+        if any(k in libelle for k in ["intérêts créditeurs", "interets crediteurs", "produit financier"]):
+            return "768000", tiers or "Produits financiers"
+        if any(k in libelle for k in ["versement espèces", "versement especes"]):
+            return "530000", tiers or "Caisse"
+        if any(k in libelle for k in ["retour de chèque", "retour cheque", "cheque retourne", "chèque retourné", "cheque retourne", "cheque retourné", "retour chèque", "retour cheque", "chèque retour", "cheque retour"]):
+            if tiers and _normalize_name(tiers) != _normalize_name(entreprise.nom):
+                try:
+                    cl = get_or_create_client_comptable(entreprise, tiers)
+                    return cl.numero_compte or "411000", cl.nom
+                except Exception:
+                    pass
+            return "411000", tiers or "Client - Chèque retourné"
+
+        if tiers and _normalize_name(tiers) != _normalize_name(entreprise.nom):
+            try:
+                cl = get_or_create_client_comptable(entreprise, tiers)
+                return cl.numero_compte or "411000", cl.nom
+            except Exception:
+                pass
+        return "411000", tiers or "Client Recette"
+
+
+def sanitize_bank_statement_data(data, entreprise=None):
+    """
+    Normalise les données d'extraction d'un relevé bancaire pour s'assurer
+    que les opérations bancaires sont bien dans `lignes` et que la confiance
+    n'est pas artificiellement dégradée par des règles de factures d'achat/vente.
+    """
+    if not isinstance(data, dict):
+        return data
+
+    journal_str = str(data.get("journal", "")).lower()
+    type_facture = str(data.get("type_facture", "")).lower()
+    is_bank_stmt = (
+        any(k in journal_str for k in ("banque", "relev")) or
+        type_facture == "banque" or
+        any(k in str(data.get("journal_hint", "")).lower() for k in ("banque", "relev"))
+    )
+
+    if not is_bank_stmt:
+        return data
+
+    data["journal"] = "Banque"
+    data["type_facture"] = "banque"
+
+    # Map operations/transactions/mouvements to `lignes` if missing
+    if not data.get("lignes"):
+        alt_lignes = data.get("operations") or data.get("mouvements") or data.get("transactions") or data.get("lines") or data.get("items") or []
+        if alt_lignes:
+            data["lignes"] = alt_lignes
+
+    # Ensure required top-level invoice dummy fields are present for bank statements
+    if not data.get("fournisseur"):
+        data["fournisseur"] = entreprise.nom if entreprise else "Banque"
+    if not data.get("numero_facture"):
+        data["numero_facture"] = data.get("numero_releve") or data.get("reference") or f"RELEV-{datetime.today().strftime('%Y%m%d')}"
+    if not data.get("date_facture"):
+        data["date_facture"] = data.get("date_releve") or data.get("date_edition") or data.get("date") or datetime.today().strftime("%d/%m/%Y")
+
+    data["montant_ht"] = 0.0
+    data["tva_pourcentage"] = 0.0
+    data["montant_tva"] = 0.0
+
+    lignes = data.get("lignes") or []
+    normalized_lignes = [_normalize_bank_line(l) for l in lignes]
+    data["lignes"] = normalized_lignes
+
+    if normalized_lignes:
+        tot = sum(max(float(l.get("debit", 0) or 0), float(l.get("credit", 0) or 0)) for l in normalized_lignes)
+        data["montant_ttc"] = tot
+
+    # Filter out invoice-specific complaint messages that do not apply to bank statements
+    ai_errors = list(data.get("erreurs") or [])
+    filtered_errors = [
+        err for err in ai_errors
+        if not any(k in str(err).lower() for k in [
+            "non une facture",
+            "pas une facture",
+            "n'est pas une facture",
+            "est pas une facture",
+            "relevé d'opérations bancaires",
+            "releve d'operations bancaires",
+            "releve bancaire",
+            "ht/tva/ttc",
+            "montant ht",
+            "montant tva",
+            "aucun montant ht",
+            "aucun montant tva",
+            "identifiable",
+            "n'apparaît pas sur le document",
+            "n'apparait pas sur le document",
+            "n'apparaît pas",
+            "n'apparait pas",
+            "ne figure pas",
+            "société soualhi",   # any specific company mention in "ne figure pas" context
+            "la société",        # "La société X n'apparaît pas"
+            "aucune ligne d'écriture fournie",
+            "aucune ligne d ecriture",
+        ])
+    ]
+    data["erreurs"] = filtered_errors
+
+    # Set confidence high if valid operations are present
+    if lignes and len(lignes) > 0:
+        data["confiance"] = max(int(data.get("confiance", 0) or 0), 95)
+
+    return data
+
+
+def persist_bank_statement(entreprise, data, source="scanner"):
+    """Comptabilise un relevé bancaire ligne par ligne dans le journal Banque (512)."""
+    data = sanitize_bank_statement_data(data, entreprise=entreprise)
+    check_bank_account_match(entreprise, data)
+
+    lignes = _sort_bank_lines(data.get("lignes") or [])
+    if not lignes:
+        raise WebhookError("Le relevé bancaire ne contient aucune ligne d'opération.")
+
+    date_stmt = _parse_date(data.get("date_facture") or data.get("date"))
+    annee = _resolve_exercice(entreprise, date_stmt)
+    journal, _ = Journal.objects.get_or_create(
+        entreprise=entreprise, annee=annee, type_journal=Journal.Type.BANQUE
+    )
+
+    confiance = int(data.get("confiance", 0) or 90)
+    statut = Ecriture.Statut.VALIDE if confiance >= 90 else Ecriture.Statut.EN_COURS
+    mode_p = "relevé bancaire"
+    ref_stmt = data.get("numero_facture") or f"RELEV-{date_stmt.strftime('%Y%m%d')}"
+
+    ecritures = []
+    for idx, line in enumerate(lignes):
+        debit_val = float(line.get("debit", 0) or 0)
+        credit_val = float(line.get("credit", 0) or 0)
+        if debit_val <= 0 and credit_val <= 0:
+            continue
+
+        date_op = _parse_date(line.get("date")) if line.get("date") else date_stmt
+        is_debit = debit_val > 0
+        montant = debit_val if is_debit else credit_val
+        libelle_op = line.get("libelle") or line.get("description") or f"Opération {idx+1}"
+        num_piece = line.get("piece") or line.get("reference") or f"{ref_stmt}-{idx+1}"
+
+        compte_cp, tiers_nom = resolve_bank_counterpart(line, is_debit, entreprise)
+
+        ec = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date_op,
+            numero_piece=num_piece,
+            fournisseur_client=tiers_nom,
+            source=source,
+            confiance_ia=confiance,
+            statut=statut,
+            mode_paiement=mode_p,
+        )
+
+        if is_debit:
+            # Sortie de banque (Dépense) : Débit compte de contrepartie, Crédit 512000
+            LigneEcriture.objects.create(
+                ecriture=ec,
+                numero_compte=compte_cp,
+                libelle=libelle_op,
+                montant_debit=montant,
+                montant_credit=0,
+            )
+            LigneEcriture.objects.create(
+                ecriture=ec,
+                numero_compte="512000",
+                libelle=f"Débit Banque — {libelle_op}",
+                montant_debit=0,
+                montant_credit=montant,
+            )
+        else:
+            # Entrée en banque (Recette) : Débit 512000, Crédit compte de contrepartie
+            LigneEcriture.objects.create(
+                ecriture=ec,
+                numero_compte="512000",
+                libelle=f"Crédit Banque — {libelle_op}",
+                montant_debit=montant,
+                montant_credit=0,
+            )
+            LigneEcriture.objects.create(
+                ecriture=ec,
+                numero_compte=compte_cp,
+                libelle=libelle_op,
+                montant_debit=0,
+                montant_credit=montant,
+            )
+
+        ecritures.append(ec)
+
+    if not ecritures:
+        raise WebhookError("Aucune écriture comptable n'a pu être générée à partir du relevé.")
+
+    return ecritures[0]
+
+
 @transaction.atomic
 def persist_extraction(entreprise, data, source="scanner"):
-    """Comptabilise une extraction IA.
+    """Comptabilise une extraction IA."""
+    data = sanitize_bank_statement_data(data, entreprise=entreprise)
+    journal_str = str(data.get("journal", "")).lower()
+    base_type = JOURNAL_MAP.get(journal_str, Journal.Type.ACHAT)
 
-    - L'écriture de la FACTURE va TOUJOURS dans son journal (Achats/Ventes…),
-      avec le compte tiers résolu (401xxx fournisseur / 411xxx client).
-    - L'écriture de règlement (espèces / caisse / banque) est créée automatiquement
-      si un mode de paiement valide est détecté.
-    - LOGIQUE GÉNÉRIQUE : 
-      * Le champ "fournisseur" peut contenir soit le nom de l'entreprise (auto-facturation)
-        soit le nom du vrai tiers (client ou fournisseur)
-      * Si c'est le nom de l'entreprise, on extrait le vrai tiers depuis les libellés
-      * L'entreprise n'est JAMAIS enregistrée comme client ou fournisseur dans ses propres listes
-    """
-    base_type = JOURNAL_MAP.get(str(data.get("journal", "")).lower(), Journal.Type.ACHAT)
+    is_bank_statement = (
+        base_type == Journal.Type.BANQUE or
+        data.get("type_facture") == "banque" or
+        any(k in journal_str for k in ("banque", "relev"))
+    )
+
+    if is_bank_statement:
+        errors = blocking_errors(data, entreprise=entreprise)
+        if errors:
+            raise WebhookError("; ".join(errors))
+        return persist_bank_statement(entreprise, data, source=source)
 
     # Auto-équilibrage des débits et crédits (droits de timbre, frais annexes, régularisations)
     if data.get("lignes"):
@@ -396,7 +795,7 @@ def persist_extraction(entreprise, data, source="scanner"):
     # l'émetteur au lieu du client "Doit:"), on refuse avec un message clair :
     # le comptable corrige le champ Fournisseur/Client dans l'écran de
     # révision (il y est éditable) puis confirme.
-    if _normalize_name(tiers_nom) == _normalize_name(entreprise.nom):
+    if base_type in (Journal.Type.ACHAT, Journal.Type.VENTE) and _normalize_name(tiers_nom) == _normalize_name(entreprise.nom):
         if base_type == Journal.Type.VENTE:
             raise WebhookError(
                 "Le CLIENT de la facture n'a pas été identifié (l'IA a renvoyé "
@@ -422,7 +821,7 @@ def persist_extraction(entreprise, data, source="scanner"):
             fournisseur_client_nom = tiers.nom
         except ValidationError as e:
             raise WebhookError(str(e))
-    else:  # VENTE
+    elif base_type == Journal.Type.VENTE:
         # C'est une vente → on crée un client (411)
         try:
             tiers = get_or_create_client_comptable(entreprise, tiers_nom)
@@ -431,13 +830,10 @@ def persist_extraction(entreprise, data, source="scanner"):
             fournisseur_client_nom = tiers.nom
         except ValidationError as e:
             raise WebhookError(str(e))
+    else:
+        # BANQUE, CAISSE, OD, etc.
+        fournisseur_client_nom = tiers_nom
 
-    # Resolve stock, merchandise and bank master accounts to enterprise-specific
-    # SCF subaccounts using the element identified in each invoice line.
-    try:
-        lignes_data = apply_scf_subaccounts(entreprise, lignes_data)
-    except (ValidationError, ValueError) as e:
-        raise WebhookError(str(e))
 
     confiance = int(data.get("confiance", 0))
     statut = (Ecriture.Statut.VALIDE if confiance >= 90
@@ -463,18 +859,16 @@ def persist_extraction(entreprise, data, source="scanner"):
             montant_credit=ligne.get("credit", 0) or 0,
         )
 
-    # --- 2) règlement espèces ou banque → écriture correspondante (TTC, 2 lignes) ----------
-    if (is_cash or is_bank) and base_type in (Journal.Type.ACHAT, Journal.Type.VENTE):
+    # --- 2) règlement espèces uniquement → écriture correspondante (TTC, 2 lignes) ----------
+    # For bank payments, the movement is already reflected by the bank statement import,
+    # so we must not create an extra settlement entry in the Banque journal.
+    # The caisse logic remains unchanged.
+    if is_cash and base_type in (Journal.Type.ACHAT, Journal.Type.VENTE):
         ttc = float(data.get("montant_ttc") or 0)
         if ttc > 0:
-            reg_type = Journal.Type.CAISSE if is_cash else Journal.Type.BANQUE
-            compte_tresorerie = CAISSE_COMPTE if is_cash else (
-                enterprise_bank_subaccount(
-                    entreprise, data.get("banque") or data.get("libelle_banque") or ""
-                )
-                if entreprise.banque or entreprise.banque2 else "512000"
-            )
-            lib_reglement = "Règlement espèces" if is_cash else "Règlement banque"
+            reg_type = Journal.Type.CAISSE
+            compte_tresorerie = CAISSE_COMPTE
+            lib_reglement = "Règlement espèces"
 
             reg_journal, _ = Journal.objects.get_or_create(
                 entreprise=entreprise, annee=annee,

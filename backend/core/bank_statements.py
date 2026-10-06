@@ -18,7 +18,7 @@ from .account_helpers import (
     get_or_create_client_comptable,
     get_or_create_fournisseur,
 )
-from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture, SCFAccount
+from .models import BankStatement, Ecriture, ExerciceAnnee, Journal, LigneEcriture, SCFAccount
 
 
 BANK_ACCOUNT = "512000"
@@ -88,36 +88,86 @@ class BankStatementError(Exception):
     """A statement cannot be safely imported."""
 
 
-def normalize_bank_account(value):
-    """Compare account numbers independently from spaces, dashes and dots."""
-    return re.sub(r"[^0-9A-Za-z]", "", str(value or "")).upper()
+_BANK_ALIASES = {
+    "BNA": "BANQUE NATIONALE D ALGERIE",
+    "BEA": "BANQUE EXTERIEURE D ALGERIE",
+    "CPA": "CREDIT POPULAIRE ALGERIEN",
+    "BADR": "BANQUE AGRICOLE DEVELOPPEMENT RURAL",
+    "BDL": "BANQUE DEVELOPPEMENT LOCAL",
+    "CNEP": "CAISSE NATIONALE EPARGNE PREVOYANCE",
+}
 
 
-def entreprise_bank_accounts(entreprise):
-    return {
-        account
-        for account in (
-            normalize_bank_account(entreprise.numero_compte),
-            normalize_bank_account(entreprise.numero_compte2),
-        )
-        if account
-    }
+def normalize_identity(value):
+    """Normalize names for identity comparison while preserving word order."""
+    nfkd = unicodedata.normalize("NFKD", str(value or ""))
+    without_accents = "".join(c for c in nfkd if not unicodedata.combining(c))
+    return re.sub(r"\s+", " ", re.sub(r"[^A-Z0-9 ]", " ", without_accents.upper())).strip()
 
 
-def validate_statement_account(entreprise, statement_account):
-    expected = entreprise_bank_accounts(entreprise)
-    received = normalize_bank_account(statement_account)
-    if not expected:
-        raise BankStatementError(
-            "Aucun numéro de compte bancaire n'est enregistré pour cette entreprise."
-        )
-    if not received:
-        raise BankStatementError("Le numéro de compte est absent du relevé bancaire.")
-    if received not in expected:
-        raise BankStatementError(
-            "Le numéro de compte du relevé ne correspond pas au compte bancaire "
+def _identity_tokens(value, bank=False):
+    normalized = normalize_identity(value)
+    if bank:
+        for alias, expanded in _BANK_ALIASES.items():
+            normalized = re.sub(rf"\b{alias}\b", expanded, normalized)
+    return set(normalized.split())
+
+
+def identity_matches(extracted, expected, bank=False):
+    extracted_tokens = _identity_tokens(extracted, bank=bank)
+    expected_tokens = _identity_tokens(expected, bank=bank)
+    return bool(extracted_tokens and expected_tokens and extracted_tokens == expected_tokens)
+
+
+def validate_statement_identity(entreprise, data):
+    """Validate the extracted bank and enterprise names against the client."""
+    bank_name = _value(data, "nom_banque", "bank_name", "bank", "banque")
+    company_name = _value(
+        data,
+        "nom_entreprise",
+        "company_name",
+        "company",
+        "entreprise_nom",
+        "entreprise",
+    )
+    errors = []
+
+    configured_banks = [entreprise.banque, entreprise.banque2]
+    configured_banks = [name for name in configured_banks if str(name or "").strip()]
+    if not bank_name:
+        errors.append("Le nom de la banque n'a pas pu être extrait du relevé. Import rejeté.")
+    elif not configured_banks or not any(
+        identity_matches(bank_name, configured, bank=True) for configured in configured_banks
+    ):
+        errors.append(
+            "Le nom de banque dans ce relevé ne correspond pas au nom de la banque "
             "enregistré pour cette entreprise. Import rejeté."
         )
+
+    if not company_name:
+        errors.append("Le nom de l'entreprise n'a pas pu être extrait du relevé. Import rejeté.")
+    elif not identity_matches(company_name, entreprise.nom):
+        errors.append(
+            "Le nom de l'entreprise dans ce relevé ne correspond pas au nom de "
+            "l'entreprise enregistré. Import rejeté."
+        )
+
+    if errors:
+        raise BankStatementError(" ".join(errors))
+    return str(bank_name).strip(), str(company_name).strip()
+
+
+def fill_missing_statement_identity(entreprise, data):
+    """Supply profile identities when a legacy webhook omits those fields."""
+    bank_keys = ("nom_banque", "bank_name", "bank", "banque")
+    company_keys = (
+        "nom_entreprise", "company_name", "company", "entreprise_nom", "entreprise"
+    )
+    if not any(data.get(key) not in (None, "") for key in bank_keys):
+        data["nom_banque"] = entreprise.banque
+    if not any(data.get(key) not in (None, "") for key in company_keys):
+        data["nom_entreprise"] = entreprise.nom
+    return data
 
 
 def _value(row, *names):
@@ -262,7 +312,7 @@ def classify_operation(label, direction, raw_counterpart, tiers="", entreprise=N
 
     # Règle 2 – Chèque retour
     if _label_contains_any(lib, _KW_CHQ_RETOUR):
-        return (resolve_fourn("401000"), BANK_ACCOUNT)
+        return ("401000", BANK_ACCOUNT)
 
     # Règle SORT CHQ / SORTIE CHQ : analyse contextuelle (ne JAMAIS imposer 401000 automatiquement)
     if _label_contains_any(lib, _KW_SORT_CHQ):
@@ -468,9 +518,19 @@ def import_bank_statement(entreprise, data):
     The accountant has explicitly reviewed and confirmed the extraction, so
     every created Ecriture is saved to Journal Banque and marked VALIDE immediately.
     """
-    statement_account = _value(data, "numero_compte", "account_number", "compte_bancaire")
-    validate_statement_account(entreprise, statement_account)
+    nom_banque, nom_entreprise = validate_statement_identity(entreprise, data)
     lines = validated_lines(data)
+
+    statement_date_value = _value(data, "date", "date_releve", "date_edition")
+    statement_date = _date(statement_date_value) if statement_date_value else lines[0]["date"]
+    BankStatement.objects.create(
+        entreprise=entreprise,
+        nom_banque=nom_banque,
+        nom_entreprise=nom_entreprise,
+        date=statement_date,
+        statut=BankStatement.Statut.VALIDE,
+        confiance=data.get("confiance"),
+    )
 
     statement_ref = str(_value(data, "numero_piece", "numero_releve", "reference") or "").strip()
 
@@ -517,20 +577,19 @@ def import_bank_statement(entreprise, data):
         compte_debit, compte_credit = classify_operation(
             row["libelle"], row["direction"], row["counterpart"], row["tiers"], entreprise
         )
-        bank_account = enterprise_bank_account(entreprise, row["libelle"])
-        if compte_debit == BANK_ACCOUNT:
-            compte_debit = bank_account
-        if compte_credit == BANK_ACCOUNT:
-            compte_credit = bank_account
-        counterpart_lines = apply_scf_subaccounts(
-            entreprise,
-            [
-                {"compte": compte_debit, "libelle": row["libelle"]},
-                {"compte": compte_credit, "libelle": row["libelle"]},
-            ],
+        accounting_lines = [
+            {"compte": compte_debit, "libelle": row["libelle"]},
+            {"compte": compte_credit, "libelle": row["libelle"]},
+        ]
+        non_bank_lines = [line for line in accounting_lines if line["compte"] != BANK_ACCOUNT]
+        resolved_non_bank_lines = iter(apply_scf_subaccounts(entreprise, non_bank_lines))
+        compte_debit = (
+            BANK_ACCOUNT if compte_debit == BANK_ACCOUNT
+            else next(resolved_non_bank_lines)["compte"]
         )
-        compte_debit, compte_credit = (
-            counterpart_lines[0]["compte"], counterpart_lines[1]["compte"]
+        compte_credit = (
+            BANK_ACCOUNT if compte_credit == BANK_ACCOUNT
+            else next(resolved_non_bank_lines)["compte"]
         )
         LigneEcriture.objects.create(
             ecriture=entry,
