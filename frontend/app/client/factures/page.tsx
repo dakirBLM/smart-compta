@@ -17,10 +17,27 @@ export default function ClientFactures() {
   const detailId = search.get("id");
   const [factures, setFactures] = useState<Facture[]>([]);
   const [detail, setDetail] = useState<Facture | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   useEffect(() => {
     api.get<Facture[]>("/api/factures/").then(setFactures).catch(() => {});
   }, []);
+
+  const deleteFacture = async (id: number) => {
+    setDeleteError("");
+    setDeletingId(id);
+    try {
+      await api.del(`/api/factures/${id}/`);
+      setFactures((current) => current.filter((facture) => facture.id !== id));
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : "Erreur lors de la suppression de la facture."
+      );
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   useEffect(() => {
     if (detailId) {
@@ -58,9 +75,19 @@ export default function ClientFactures() {
   return (
     <ClientShell>
       <h2 className="mb-4 text-lg font-bold text-brand">{t("mesFactures")}</h2>
+      {deleteError && (
+        <p role="alert" className="mb-3 text-sm text-red-700">
+          {deleteError}
+        </p>
+      )}
       <div className="grid gap-3 sm:grid-cols-2">
         {factures.map((f) => (
-          <InvoiceCard key={f.id} facture={f} />
+          <InvoiceCard
+            key={f.id}
+            facture={f}
+            onDelete={deleteFacture}
+            deleting={deletingId === f.id}
+          />
         ))}
         {factures.length === 0 && <p className="text-gray-400">{t("aucuneDonnee")}</p>}
       </div>

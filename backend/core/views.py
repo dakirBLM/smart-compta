@@ -1063,10 +1063,25 @@ class FactureDetailView(APIView):
     def get(self, request, pk):
         if request.user.role == "accountant":
             facture = get_object_or_404(
-                Facture, pk=pk, entreprise__accountant=request.user)
+                Facture, pk=pk, entreprise__accountant=request.user
+            )
         else:
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
         return Response(FactureSerializer(facture).data)
+
+    @transaction.atomic
+    def delete(self, request, pk):
+        if request.user.role == "accountant":
+            facture = get_object_or_404(
+                Facture, pk=pk, entreprise__accountant=request.user
+            )
+        else:
+            facture = get_object_or_404(Facture, pk=pk, client=request.user)
+
+        if facture.ecriture_id:
+            facture.ecriture.delete()
+        facture.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # --------------------------------------------------------------------------- #
@@ -1126,6 +1141,19 @@ class FactureValidateView(APIView):
                 }
             ]
         else:
+            compte_achat = None
+            if not is_vente:
+                compte_achat_scf = SCFAccount.objects.filter(
+                    entreprise__isnull=True,
+                    libelle__icontains="marchandises stock",
+                ).order_by("numero_compte").first()
+                if not compte_achat_scf:
+                    return Response(
+                        {"error": "Le compte SCF des marchandises stockées est introuvable."},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                compte_achat = compte_achat_scf.numero_compte.ljust(6, "0")
+
             lignes = [
                 {
                     "compte": "411" if is_vente else "401",
@@ -1134,7 +1162,7 @@ class FactureValidateView(APIView):
                     "credit": 0 if is_vente else float(facture.montant_ttc),
                 },
                 {
-                    "compte": "700000" if is_vente else "6011",
+                    "compte": "700000" if is_vente else compte_achat,
                     "libelle": "Vente de marchandises" if is_vente else "Achats de marchandises",
                     "debit": 0 if is_vente else float(facture.montant_ht),
                     "credit": float(facture.montant_ht) if is_vente else 0,

@@ -7,6 +7,7 @@ import {
   Eye,
   Receipt,
   ScanLine,
+  Trash2,
   X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -38,9 +39,15 @@ type Tab = "scanner" | "clients";
 function FactureDetailModal({
   facture,
   onClose,
+  onDelete,
+  deleting,
+  error,
 }: {
   facture: Facture;
   onClose: () => void;
+  onDelete: () => void;
+  deleting: boolean;
+  error: string | null;
 }) {
   const overlayRef = useRef<HTMLDivElement>(null);
   const ecriture: EcritureDetail | null | undefined = facture.ecriture_detail;
@@ -227,10 +234,25 @@ function FactureDetailModal({
         </div>
 
         {/* ── Footer ── */}
-        <div className="flex items-center justify-end border-t bg-gray-50/60 px-6 py-3">
+        <div className="flex items-center justify-between border-t bg-gray-50/60 px-6 py-3">
+          {error ? (
+            <p role="alert" className="mr-4 text-sm text-red-700">{error}</p>
+          ) : (
+            <span />
+          )}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              onClick={onDelete}
+              disabled={deleting}
+              className="border-red-200 text-sm text-red-700 hover:bg-red-50"
+            >
+              <Trash2 size={14} className="mr-1" /> {deleting ? "Suppression..." : "Supprimer"}
+            </Button>
           <Button variant="outline" onClick={onClose} className="text-sm">
             Fermer
           </Button>
+          </div>
         </div>
       </div>
 
@@ -275,6 +297,7 @@ export default function FacturesAccountantPage() {
   const [loading, setLoading] = useState(true);
 
   const [validatingId, setValidatingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   /* Modal state */
@@ -304,6 +327,24 @@ export default function FacturesAccountantPage() {
       setErrorMsg(err?.response?.data?.error || err.message || "Erreur lors de la validation");
     } finally {
       setValidatingId(null);
+    }
+  };
+
+  const handleDelete = async (factureId: number) => {
+    if (!window.confirm("Voulez-vous vraiment supprimer cette facture ?")) return;
+
+    setDeletingId(factureId);
+    setErrorMsg(null);
+    try {
+      await api.del(`/api/factures/${factureId}/`);
+      setFactures((current) => current.filter((facture) => facture.id !== factureId));
+      if (selectedFacture?.id === factureId) setSelectedFacture(null);
+    } catch (err) {
+      setErrorMsg(
+        err instanceof Error ? err.message : "Erreur lors de la suppression de la facture."
+      );
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -425,18 +466,28 @@ export default function FacturesAccountantPage() {
                           </div>
                         </div>
                         <div className="border-t p-3 bg-white">
-                          <Button
-                            className="w-full text-xs"
-                            variant="success"
-                            disabled={validatingId === f.id}
-                            onClick={() => handleValidate(f.id)}
-                          >
-                            {validatingId === f.id ? (
-                              <Spinner className="h-4 w-4 text-white" />
-                            ) : (
-                              "Valider & comptabiliser"
-                            )}
-                          </Button>
+                          <div className="flex gap-2">
+                            <Button
+                              className="flex-1 text-xs"
+                              variant="success"
+                              disabled={validatingId === f.id}
+                              onClick={() => handleValidate(f.id)}
+                            >
+                              {validatingId === f.id ? (
+                                <Spinner className="h-4 w-4 text-white" />
+                              ) : (
+                                "Valider & comptabiliser"
+                              )}
+                            </Button>
+                            <button
+                              type="button"
+                              disabled={deletingId === f.id}
+                              onClick={() => handleDelete(f.id)}
+                              className="flex items-center gap-1 rounded-lg border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                            >
+                              <Trash2 size={14} /> {t("supprimer")}
+                            </button>
+                          </div>
                         </div>
                       </Card>
                     ))}
@@ -526,6 +577,14 @@ export default function FacturesAccountantPage() {
                           >
                             <Eye size={13} /> Afficher
                           </button>
+                          <button
+                            type="button"
+                            disabled={deletingId === f.id}
+                            onClick={() => handleDelete(f.id)}
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-red-200 py-1.5 text-xs font-semibold text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                          >
+                            <Trash2 size={13} /> {t("supprimer")}
+                          </button>
                         </div>
                       </Card>
                             ))}
@@ -546,6 +605,9 @@ export default function FacturesAccountantPage() {
         <FactureDetailModal
           facture={selectedFacture}
           onClose={() => setSelectedFacture(null)}
+          onDelete={() => handleDelete(selectedFacture.id)}
+          deleting={deletingId === selectedFacture.id}
+          error={errorMsg}
         />
       )}
     </AppShell>
