@@ -8,7 +8,15 @@ import { useI18n } from "@/lib/i18n-context";
 import { Facture } from "@/lib/types";
 import { formatDate, formatDZD } from "@/lib/utils";
 
-export function InvoiceCard({ facture }: { facture: Facture }) {
+export function InvoiceCard({
+  facture,
+  onDelete,
+  deleting = false,
+}: {
+  facture: Facture;
+  onDelete?: (id: number) => void;
+  deleting?: boolean;
+}) {
   const { t } = useI18n();
   return (
     <Card className="flex items-center justify-between p-4 hover:border-lime hover:shadow-card-hover transition-all">
@@ -43,8 +51,17 @@ export function InvoiceCard({ facture }: { facture: Facture }) {
         >
           {t("voirDetail")} →
         </Link>
+        {onDelete && (
+          <button
+            type="button"
+            onClick={() => onDelete(facture.id)}
+            disabled={deleting}
+            className="text-xs font-semibold text-red-700 underline disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t("supprimer")}
+          </button>
+        )}
       </div>
     </Card>
   );
 }
-

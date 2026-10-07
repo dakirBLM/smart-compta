@@ -330,6 +330,138 @@ class SCFReferenceDataTests(APITestCase):
         self.assertFalse(any("me-s" in label.lower() or "me-es" in label.lower() for label in class_5_labels))
 
 
+class PurchaseInvoiceAccountingTests(APITestCase):
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="purchase-accountant", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="Purchase Invoice Test", nif="purchase-1", nis="purchase-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=2026, is_active=True
+        )
+        SCFAccount.objects.create(
+            numero_compte="380", libelle="Marchandises stockees", classe=3
+        )
+        self.client.force_authenticate(self.accountant)
+
+    def _create_invoice(self, type_facture):
+        return Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.accountant,
+            numero_facture=f"FAC-{type_facture.upper()}-1",
+            date_facture=date(2026, 1, 15),
+            montant_ht=100,
+            montant_tva=19,
+            montant_ttc=119,
+            statut=Facture.Statut.EN_COURS,
+            fournisseur_client="Tiers Test",
+            type_facture=type_facture,
+        )
+
+    def test_purchase_invoice_validation_uses_scf_stock_account_without_duplicate_entries(self):
+        facture = self._create_invoice("achat")
+
+        response = self.client.post(f"/api/factures/{facture.id}/validate/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        ecriture = Ecriture.objects.get()
+        comptes = list(ecriture.lignes.values_list("numero_compte", flat=True))
+        self.assertIn("380000", comptes)
+        self.assertNotIn("6011", comptes)
+        self.assertEqual(Ecriture.objects.count(), 1)
+        self.assertEqual(
+            SCFAccount.objects.filter(
+                entreprise__isnull=True, libelle__icontains="marchandises stock"
+            ).count(),
+            1,
+        )
+
+    def test_sales_invoice_accounting_is_unchanged(self):
+        facture = self._create_invoice("vente")
+
+        response = self.client.post(f"/api/factures/{facture.id}/validate/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        comptes = set(Ecriture.objects.get().lignes.values_list("numero_compte", flat=True))
+        self.assertIn("700000", comptes)
+        self.assertNotIn("380000", comptes)
+
+
+class FactureDeletionTests(APITestCase):
+    def setUp(self):
+        user_model = get_user_model()
+        self.accountant = user_model.objects.create_user(
+            username="delete-invoice-accountant", password="pass", role="accountant"
+        )
+        self.client_user = user_model.objects.create_user(
+            username="delete-invoice-client", password="pass", role="client"
+        )
+        self.other_client = user_model.objects.create_user(
+            username="other-delete-invoice-client", password="pass", role="client"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="Delete Invoice Test", nif="delete-1", nis="delete-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        year = ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=2026, is_active=True
+        )
+        self.journal = Journal.objects.create(
+            entreprise=self.entreprise, annee=year, type_journal=Journal.Type.ACHAT
+        )
+        self.facture = Facture.objects.create(
+            entreprise=self.entreprise,
+            client=self.client_user,
+            numero_facture="FAC-DELETE-1",
+            statut=Facture.Statut.VALIDE,
+        )
+        self.ecriture = Ecriture.objects.create(
+            journal=self.journal,
+            date_ecriture=date(2026, 1, 15),
+            numero_piece="FAC-DELETE-1",
+        )
+        self.facture.ecriture = self.ecriture
+        self.facture.save(update_fields=["ecriture"])
+        LigneEcriture.objects.create(
+            ecriture=self.ecriture, numero_compte="601000", montant_debit=100
+        )
+        LigneEcriture.objects.create(
+            ecriture=self.ecriture, numero_compte="401000", montant_credit=100
+        )
+        self.unrelated_entry = Ecriture.objects.create(
+            journal=self.journal,
+            date_ecriture=date(2026, 1, 16),
+            numero_piece="OTHER-ENTRY",
+        )
+        self.url = f"/api/factures/{self.facture.id}/"
+
+    def test_deleting_invoice_removes_its_entry_and_lines_but_not_other_entries(self):
+        self.client.force_authenticate(self.client_user)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Facture.objects.filter(pk=self.facture.pk).exists())
+        self.assertFalse(Ecriture.objects.filter(pk=self.ecriture.pk).exists())
+        self.assertFalse(LigneEcriture.objects.filter(ecriture_id=self.ecriture.pk).exists())
+        self.assertTrue(Ecriture.objects.filter(pk=self.unrelated_entry.pk).exists())
+        self.assertEqual(Ecriture.objects.filter(journal=self.journal).count(), 1)
+
+    def test_client_cannot_delete_another_clients_invoice(self):
+        self.client.force_authenticate(self.other_client)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(Facture.objects.filter(pk=self.facture.pk).exists())
+        self.assertTrue(Ecriture.objects.filter(pk=self.ecriture.pk).exists())
+
+
 class InvoiceReuseAfterEntryDeletionTests(APITestCase):
     def setUp(self):
         user_model = get_user_model()
@@ -734,4 +866,3 @@ class InvoiceReuseAfterEntryDeletionTests(APITestCase):
                 entreprise=self.entreprise, numero_facture="FAC-FOREIGN"
             ).exists()
         )
-
