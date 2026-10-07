@@ -397,6 +397,13 @@ export function Sidebar({
                 onNavigate={nav}
               />
               <Item
+                href={`${base}/bilan`}
+                icon={<Table2 size={19} />}
+                label="Bilan"
+                active={is(`${base}/bilan`)}
+                onNavigate={nav}
+              />
+              <Item
                 href={`${base}/grand-livre`}
                 icon={<BarChart3 size={19} />}
                 label={t("grandLivre")}
