@@ -452,6 +452,62 @@ class FactureDeletionTests(APITestCase):
         self.assertTrue(Ecriture.objects.filter(pk=self.unrelated_entry.pk).exists())
         self.assertEqual(Ecriture.objects.filter(journal=self.journal).count(), 1)
 
+    def test_deleting_invoice_removes_matching_caisse_entry_only(self):
+        caisse_journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=self.journal.annee,
+            type_journal=Journal.Type.CAISSE,
+        )
+        self.facture.date_facture = date(2026, 1, 15)
+        self.facture.montant_ttc = 119
+        self.facture.fournisseur_client = "Fournisseur Test"
+        self.facture.mode_paiement = "espèces"
+        self.facture.save(
+            update_fields=[
+                "date_facture",
+                "montant_ttc",
+                "fournisseur_client",
+                "mode_paiement",
+            ]
+        )
+        payment_entry = Ecriture.objects.create(
+            journal=caisse_journal,
+            date_ecriture=self.facture.date_facture,
+            numero_piece=self.facture.numero_facture,
+            fournisseur_client=self.facture.fournisseur_client,
+            source=Ecriture.Source.IMPORT,
+            mode_paiement=self.facture.mode_paiement,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="411000",
+            montant_debit=119,
+        )
+        LigneEcriture.objects.create(
+            ecriture=payment_entry,
+            numero_compte="530000",
+            montant_credit=119,
+        )
+        unrelated_caisse_entry = Ecriture.objects.create(
+            journal=caisse_journal,
+            date_ecriture=date(2026, 1, 16),
+            numero_piece="OTHER-CASH-ENTRY",
+        )
+        self.client.force_authenticate(self.client_user)
+
+        response = self.client.delete(self.url)
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(Facture.objects.filter(pk=self.facture.pk).exists())
+        self.assertFalse(Ecriture.objects.filter(pk=self.ecriture.pk).exists())
+        self.assertFalse(Ecriture.objects.filter(pk=payment_entry.pk).exists())
+        self.assertFalse(
+            LigneEcriture.objects.filter(ecriture_id=payment_entry.pk).exists()
+        )
+        self.assertTrue(
+            Ecriture.objects.filter(pk=unrelated_caisse_entry.pk).exists()
+        )
+
     def test_client_cannot_delete_another_clients_invoice(self):
         self.client.force_authenticate(self.other_client)
 

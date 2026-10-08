@@ -1078,6 +1078,13 @@ class FactureDetailView(APIView):
         else:
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
 
+        payment_entry = _matching_invoice_payment(facture.entreprise, facture)
+        if (
+            payment_entry
+            and payment_entry.journal.type_journal == Journal.Type.CAISSE
+        ):
+            payment_entry.delete()
+
         if facture.ecriture_id:
             facture.ecriture.delete()
         facture.delete()
