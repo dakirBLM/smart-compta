@@ -1,13 +1,12 @@
 "use client";
 
-import { Download } from "lucide-react";
 import { Fragment, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { Button, Card, Spinner } from "@/components/ui";
+import { Card, Spinner } from "@/components/ui";
+import { ReportActions } from "@/components/ReportActions";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { useEntreprise } from "@/lib/useEntreprise";
-import { exportTablePDF } from "@/lib/pdf";
 import { formatDZD } from "@/lib/utils";
 
 interface BalanceCompte {
@@ -47,29 +46,6 @@ export default function BalancePage() {
       .finally(() => setLoading(false));
   }, [id, annee]);
 
-  function exportPDF() {
-    if (!data) return;
-    const rows: (string | number)[][] = [];
-    data.classes.forEach((c) => {
-      c.comptes.forEach((cp) =>
-        rows.push([
-          cp.compte,
-          cp.libelle,
-          formatDZD(cp.debit),
-          formatDZD(cp.credit),
-          formatDZD(cp.solde_debiteur),
-          formatDZD(cp.solde_crediteur),
-        ])
-      );
-    });
-    exportTablePDF(
-      "Balance",
-      [t("compte"), t("libelle"), t("montantDebit"), t("montantCredit"), t("soldeDebiteur"), t("soldeCrediteur")],
-      rows,
-      `${entreprise?.nom ?? ""} · Exercice ${annee ?? ""}`
-    );
-  }
-
   return (
     <AppShell
       title={t("balance")}
@@ -77,19 +53,20 @@ export default function BalancePage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      <div className="mb-4 flex items-center justify-between">
-        <p className="text-sm text-gray-500">Exercice {annee}</p>
-        <Button variant="outline" onClick={exportPDF}>
-          <Download size={16} /> {t("exportPDF")}
-        </Button>
-      </div>
-
       {loading ? (
         <div className="flex justify-center py-12">
           <Spinner className="h-8 w-8 text-brand" />
         </div>
       ) : (
-        <Card className="overflow-x-auto p-0">
+        <div className="print-report">
+          <h1 className="print-only hidden mb-2 text-xl font-bold">
+            {entreprise?.nom} — {t("balance")}
+          </h1>
+          <div className="mb-4 flex items-center justify-between">
+            <p className="text-sm text-gray-500">Exercice {annee}</p>
+            <ReportActions title={`Balance ${annee ?? ""}`} disabled={!data} />
+          </div>
+          <Card className="overflow-x-auto p-0">
           <table className="w-full text-sm">
             <thead className="bg-brand text-left text-white">
               <tr>
@@ -134,7 +111,8 @@ export default function BalancePage() {
               </tr>
             </tfoot>
           </table>
-        </Card>
+          </Card>
+        </div>
       )}
     </AppShell>
   );

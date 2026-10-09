@@ -1,13 +1,13 @@
 "use client";
 
-import { Download, Search } from "lucide-react";
+import { Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ReportActions } from "@/components/ReportActions";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { useEntreprise } from "@/lib/useEntreprise";
-import { exportTablePDF } from "@/lib/pdf";
 import { cn, formatDate, formatDZD } from "@/lib/utils";
 
 interface Mouvement {
@@ -68,23 +68,6 @@ export default function GrandLivrePage() {
 
   const current = comptes.find((c) => c.compte === selected) ?? null;
 
-  function exportPDF() {
-    if (!current) return;
-    exportTablePDF(
-      `Grand Livre - ${current.compte}`,
-      [t("date"), t("numeroPiece"), t("libelle"), t("montantDebit"), t("montantCredit"), t("solde")],
-      current.mouvements.map((m) => [
-        formatDate(m.date),
-        m.numero_piece,
-        m.libelle,
-        formatDZD(m.debit),
-        formatDZD(m.credit),
-        formatDZD(m.solde),
-      ]),
-      `${entreprise?.nom ?? ""} · ${current.compte} ${current.libelle} · Exercice ${annee ?? ""}`
-    );
-  }
-
   return (
     <AppShell
       title={t("grandLivre")}
@@ -92,7 +75,7 @@ export default function GrandLivrePage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      <div className="mb-4 flex flex-wrap items-end gap-3">
+      <div className="mb-4 flex flex-wrap items-end gap-3 print:hidden">
         <div>
           <label className="mb-1 block text-sm">{t("de")}</label>
           <Input type="date" value={start} onChange={(e) => setStart(e.target.value)} />
@@ -103,9 +86,10 @@ export default function GrandLivrePage() {
         </div>
         <Button onClick={load}>{t("rechercher")}</Button>
         <div className="flex-1" />
-        <Button variant="outline" onClick={exportPDF} disabled={!current}>
-          <Download size={16} /> {t("exportPDF")}
-        </Button>
+        <ReportActions
+          title={`Grand Livre ${current?.compte ?? ""} ${annee ?? ""}`}
+          disabled={!current}
+        />
       </div>
 
       {loading ? (
@@ -117,7 +101,7 @@ export default function GrandLivrePage() {
       ) : (
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[280px_1fr]">
           {/* Account list (master) */}
-          <Card className="p-0">
+          <Card className="print:hidden p-0">
             <div className="flex items-center gap-2 border-b px-3 py-2">
               <Search size={16} className="text-gray-400" />
               <input
@@ -153,9 +137,12 @@ export default function GrandLivrePage() {
           </Card>
 
           {/* Selected account movements (detail) */}
-          <Card className="p-0">
+          <Card className="print-report p-0">
             {current ? (
               <>
+                <div className="print-only hidden border-b px-4 py-2 text-sm font-semibold text-black">
+                  {entreprise?.nom} · Exercice {annee}
+                </div>
                 <div className="flex items-center justify-between bg-brand px-4 py-2 text-white">
                   <span className="font-semibold">
                     <span className="font-mono">{current.compte}</span> · {current.libelle}
