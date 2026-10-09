@@ -84,3 +84,68 @@ table th {
   animation: meshGradient 8s ease infinite;
 }
 
+@media print {
+  @page report {
+    size: landscape;
+    margin: 12mm;
+  }
+
+  body.report-print-mode {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  body.report-print-mode * {
+    visibility: hidden !important;
+  }
+
+  body.report-print-mode main {
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
+  body.report-print-mode .print-report {
+    page: report;
+  }
+
+  body.report-print-mode .print-report,
+  body.report-print-mode .print-report * {
+    visibility: visible !important;
+  }
+
+  body.report-print-mode .print-only {
+    display: block !important;
+  }
+
+  body.report-print-mode .print-report {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    overflow: visible !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body.report-print-mode .print-report [class*="overflow-x-auto"],
+  body.report-print-mode .print-report [class*="overflow-hidden"],
+  body.report-print-mode .print-report [class*="overflow-y-auto"] {
+    overflow: visible !important;
+  }
+
+  body.report-print-mode .print-report table {
+    width: 100% !important;
+    min-width: 0 !important;
+    font-size: 9pt !important;
+  }
+
+  body.report-print-mode .print-report thead {
+    display: table-header-group;
+  }
+
+  body.report-print-mode .print-report tr {
+    break-inside: avoid;
+  }
+}

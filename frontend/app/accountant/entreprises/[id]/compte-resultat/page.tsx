@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { ReportActions } from "@/components/ReportActions";
 import { Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
@@ -219,23 +220,29 @@ export default function CompteResultatPage() {
       entrepriseName={entreprise?.nom}
       annee={annee}
     >
-      <div className="mb-4 flex flex-wrap gap-2" role="tablist" aria-label="Présentation du compte de résultat">
-        {(["fonction", "nature"] as const).map((mode) => (
-          <button
-            key={mode}
-            type="button"
-            role="tab"
-            aria-selected={presentation === mode}
-            onClick={() => setPresentation(mode)}
-            className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
-              presentation === mode
-                ? "border-brand bg-brand text-white"
-                : "border-gray-300 bg-white text-brand hover:bg-brand/5"
-            }`}
-          >
-            Par {mode}
-          </button>
-        ))}
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2 print:hidden">
+        <div className="flex flex-wrap gap-2" role="tablist" aria-label="Présentation du compte de résultat">
+          {(["fonction", "nature"] as const).map((mode) => (
+            <button
+              key={mode}
+              type="button"
+              role="tab"
+              aria-selected={presentation === mode}
+              onClick={() => setPresentation(mode)}
+              className={`rounded-lg border px-4 py-2 text-sm font-semibold transition ${
+                presentation === mode
+                  ? "border-brand bg-brand text-white"
+                  : "border-gray-300 bg-white text-brand hover:bg-brand/5"
+              }`}
+            >
+              Par {mode}
+            </button>
+          ))}
+        </div>
+        <ReportActions
+          title={`Compte de résultat ${currentYear} - ${presentation}`}
+          disabled={!data}
+        />
       </div>
 
       {loading || !data ? (
@@ -243,7 +250,7 @@ export default function CompteResultatPage() {
           <Spinner className="h-8 w-8 text-brand" />
         </div>
       ) : (
-        <div className="mx-auto max-w-6xl border border-black bg-[#efefef] text-[13px] text-black shadow-sm">
+        <div className="print-report mx-auto max-w-6xl border border-black bg-[#efefef] text-[13px] text-black shadow-sm">
           <header className="grid gap-4 border-b-2 border-black p-3 md:grid-cols-[1fr_auto] md:items-start">
             <div className="max-w-2xl border-2 border-black bg-white">
               <div className="grid grid-cols-[145px_1fr] border-b border-dotted border-black px-2 py-2">
