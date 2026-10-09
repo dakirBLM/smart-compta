@@ -278,7 +278,7 @@ export function Sidebar({
         )}
 
         {/* Navigation Items */}
-        <nav className="flex-1 space-y-1.5 overflow-y-auto pr-1">
+        <nav className="sidebar-nav-scroll min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
           {!entrepriseId ? (
             <>
               <Item
