@@ -34,6 +34,29 @@ export default function LandingPage() {
   const { t } = useI18n();
   const router = useRouter();
   const [loggingIn, setLoggingIn] = useState<string | null>(null);
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(true);
+  const [scrolled, setScrolled] = useState(false);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+
+    updatePreference();
+    mediaQuery.addEventListener("change", updatePreference);
+    return () => mediaQuery.removeEventListener("change", updatePreference);
+  }, []);
+
+  useEffect(() => {
+    const sentinel = document.getElementById("top-sentinel");
+    if (!sentinel) return;
+
+    const observer = new IntersectionObserver(
+      ([entry]) => setScrolled(!entry.isIntersecting),
+      { rootMargin: "-1px 0px 0px 0px", threshold: 0 },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, []);
 
   const quickLogin = async (role: "accountant" | "client") => {
     setLoggingIn(role);
@@ -55,7 +78,15 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-[#F7FAF7] text-brand selection:bg-lime selection:text-brand font-sans">
       {/* Top sticky navbar */}
-      <header className="sticky top-0 z-50 border-b border-white/10 bg-brand/95 px-4 py-3.5 backdrop-blur-md sm:px-8">
+      <header
+        className={`sticky top-0 z-50 px-4 py-3.5 sm:px-8 ${
+          prefersReducedMotion ? "" : "transition-all duration-300"
+        } ${
+          scrolled
+            ? "border-b border-white/10 shadow-sm bg-brand/95 backdrop-blur-md"
+            : "bg-transparent"
+        }`}
+      >
         <div className="mx-auto flex max-w-7xl items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
             <div className="flex items-baseline gap-1.5">
@@ -70,40 +101,37 @@ export default function LandingPage() {
 
           <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-white/80">
             <a href="#features" className="hover:text-lime transition-colors">
-              Fonctionnalités
+              {t("navFeatures")}
             </a>
             <a href="#maiase" className="hover:text-lime transition-colors flex items-center gap-1.5">
               <Sparkles size={15} className="text-lime" />
-              IA Maiase
+              {t("navMaiase")}
             </a>
             <a href="#demo" className="hover:text-lime transition-colors">
-              Accès Démo
-            </a>
-            <a href="#tarifs" className="hover:text-lime transition-colors">
-              Tarifs
+              {t("navDemo")}
             </a>
           </nav>
 
           <div className="flex items-center gap-3">
-            <LanguageToggle className="text-white hidden sm:flex" />
+            <LanguageToggle className="text-white" />
             {user ? (
               <Link
                 href={user.role === "accountant" ? "/accountant/dashboard" : "/client/dashboard"}
               >
                 <Button size="sm" variant="primary">
-                  Mon Espace →
+                  {t("navSpace")} →
                 </Button>
               </Link>
             ) : (
               <>
                 <Link href="/login">
                   <Button size="sm" variant="ghost" className="text-white hover:bg-white/10">
-                    Connexion
+                    {t("login")}
                   </Button>
                 </Link>
                 <Link href="/register">
                   <Button size="sm" variant="primary" className="hidden sm:inline-flex">
-                    Essayer gratuitement
+                    {t("navSignup")}
                   </Button>
                 </Link>
               </>
@@ -113,67 +141,56 @@ export default function LandingPage() {
       </header>
 
       {/* HERO SECTION */}
-      <section className="relative overflow-hidden bg-brand pt-12 pb-24 text-white lg:pt-20 lg:pb-32">
+      {/* Keep -mt-16 and pt-16 paired with the header height; update both if header sizing changes. */}
+      <section className="relative -mt-16 overflow-hidden bg-brand pt-16 pb-16 text-white">
+        <div
+          id="top-sentinel"
+          className="absolute top-0 h-px w-full pointer-events-none"
+          aria-hidden="true"
+        />
         {/* Glowing background circles */}
         <div className="pointer-events-none absolute -top-40 -right-40 h-96 w-96 rounded-full bg-lime/10 blur-3xl" />
         <div className="pointer-events-none absolute top-1/2 -left-40 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
 
-        <div className="mx-auto max-w-7xl px-4 sm:px-8">
-          <div className="mx-auto max-w-3xl text-center">
-            <div className="inline-flex items-center gap-2 rounded-full border border-lime/30 bg-lime/10 px-4 py-1.5 text-xs font-semibold text-lime mb-6 backdrop-blur-sm animate-pulse-slow">
-              <Sparkles size={14} />
-              <span>Votre comptabilité devient intelligente</span>
-            </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2">
+          <div className="flex items-center px-4 py-12 sm:px-8 lg:py-0 lg:pl-16 lg:pr-12">
+            <div className="mx-auto w-full max-w-xl text-center lg:text-left">
+              <h1 className="text-center text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl lg:text-left lg:text-6xl">
+                {t("heroTitle")}
+              </h1>
 
-            <h1 className="text-4xl font-extrabold tracking-tight sm:text-5xl lg:text-6xl text-white leading-tight">
-              La comptabilité <br />
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-lime via-[#E8FFC5] to-lime">
-                réinventée par l&apos;IA
-              </span>
-            </h1>
+              <p className="mt-6 text-base leading-relaxed text-white/80 sm:text-lg">
+                {t("heroSubtitle")}
+              </p>
 
-            <p className="mt-6 text-base sm:text-lg text-white/80 leading-relaxed max-w-2xl mx-auto">
-              Automatisez, analysez et pilotez votre entreprise avec une plateforme
-              intelligente et sécurisée. Scannez vos factures, générez vos écritures SCF et
-              prenez les meilleures décisions grâce à notre IA <strong>Maiase</strong>.
-            </p>
-
-            <div className="mt-8 flex flex-wrap items-center justify-center gap-4">
-              <Link href="/login">
-                <Button size="lg" variant="primary" className="gap-2 text-brand font-bold text-base px-8 py-6 rounded-2xl shadow-glow">
-                  Découvrir la plateforme <ArrowRight size={18} />
-                </Button>
-              </Link>
-              <a href="#demo">
-                <Button size="lg" variant="outline" className="text-white border-white/20 bg-white/5 hover:bg-white/10 text-base px-6 py-6 rounded-2xl">
-                  Tester la démo instantanée
-                </Button>
-              </a>
-            </div>
-
-            {/* Quick stats pills */}
-            <div className="mt-12 grid grid-cols-2 gap-4 sm:grid-cols-4 border-t border-white/10 pt-8 text-left">
-              <div>
-                <div className="text-2xl font-black text-lime">98.5%</div>
-                <div className="text-xs text-white/70">Précision d&apos;extraction OCR</div>
-              </div>
-              <div>
-                <div className="text-2xl font-black text-lime">80%</div>
-                <div className="text-xs text-white/70">Temps de saisie économisé</div>
-              </div>
-              <div>
-                <div className="text-2xl font-black text-lime">100%</div>
-                <div className="text-xs text-white/70">Conforme SCF Algérie</div>
-              </div>
-              <div>
-                <div className="text-2xl font-black text-lime">FR / AR</div>
-                <div className="text-xs text-white/70">Bilingue avec support RTL</div>
+              <div className="mt-8 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
+                <Link href="/login">
+                  <Button size="lg" variant="primary" className="gap-2 text-brand font-bold text-base px-8 py-6 rounded-2xl shadow-glow">
+                    {t("heroCta")} <ArrowRight size={18} />
+                  </Button>
+                </Link>
               </div>
             </div>
+
           </div>
 
+          <div className="h-[320px] lg:h-[640px]">
+            {prefersReducedMotion ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src="/maiase.png" alt="" className="h-full w-full object-cover" />
+            ) : (
+              <video autoPlay loop muted playsInline poster="/maiase.png" className="h-full w-full object-cover">
+                <source src="/maiase-loop.mp4" type="video/mp4" />
+              </video>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-brand pt-6 pb-24 text-white">
+        <div className="mx-auto max-w-7xl px-4 sm:px-8">
           {/* Interactive Laptop & UI Preview Mockup */}
-          <div className="mt-16 mx-auto max-w-5xl">
+          <div className="mx-auto max-w-5xl">
             <div className="relative rounded-3xl border border-white/15 bg-gradient-to-b from-white/15 to-white/5 p-3 shadow-2xl backdrop-blur-xl">
               {/* Screen Frame */}
               <div className="overflow-hidden rounded-2xl bg-[#F7FAF7] shadow-inner text-brand">
@@ -189,7 +206,7 @@ export default function LandingPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <span className="rounded-full bg-lime-light px-2 py-0.5 text-[10px] font-bold text-brand">
-                      🟢 Système opérationnel
+                      🟢 {t("landingMockStatus")}
                     </span>
                   </div>
                 </div>
@@ -203,17 +220,17 @@ export default function LandingPage() {
                       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                         <div>
                           <div className="inline-flex items-center gap-1.5 rounded-full bg-white/10 px-3 py-1 text-xs font-semibold text-lime mb-2">
-                            <Sparkles size={13} /> Aperçu intelligent
+                            <Sparkles size={13} /> {t("landingMockOverview")}
                           </div>
-                          <h3 className="text-xl font-extrabold">Votre entreprise en bonne santé</h3>
-                          <p className="text-xs text-white/70 mt-1">Mis à jour aujourd&apos;hui avec l&apos;IA Maiase</p>
+                          <h3 className="text-xl font-extrabold">{t("landingMockHealth")}</h3>
+                          <p className="text-xs text-white/70 mt-1">{t("landingMockUpdated")}</p>
                         </div>
                         <div className="flex items-center gap-3">
                           <div className="relative flex h-14 w-14 items-center justify-center rounded-full bg-brand-dark ring-2 ring-lime animate-pulse-slow">
                             <Bot size={26} className="text-lime" />
                           </div>
                           <button className="rounded-xl bg-lime px-3.5 py-2 text-xs font-bold text-brand hover:bg-lime-hover transition-colors">
-                            Voir les insights IA →
+                            {t("landingMockInsights")}
                           </button>
                         </div>
                       </div>
@@ -222,17 +239,17 @@ export default function LandingPage() {
                     {/* KPI mini row */}
                     <div className="grid grid-cols-2 gap-3">
                       <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-                        <div className="text-xs font-medium text-gray-500">Chiffre d&apos;affaires</div>
+                        <div className="text-xs font-medium text-gray-500">{t("landingMockRevenue")}</div>
                         <div className="text-xl font-extrabold text-brand mt-1">125 500 €</div>
                         <div className="mt-1 flex items-center gap-1 text-xs font-bold text-emerald-600">
-                          <TrendingUp size={14} /> +12.5% vs mois dernier
+                          <TrendingUp size={14} /> +12.5% {t("landingMockVsLastMonth")}
                         </div>
                       </div>
                       <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
-                        <div className="text-xs font-medium text-gray-500">Résultat net</div>
+                        <div className="text-xs font-medium text-gray-500">{t("landingMockNetIncome")}</div>
                         <div className="text-xl font-extrabold text-brand mt-1">28 420 €</div>
                         <div className="mt-1 flex items-center gap-1 text-xs font-bold text-emerald-600">
-                          <TrendingUp size={14} /> +8.3% vs mois dernier
+                          <TrendingUp size={14} /> +8.3% {t("landingMockVsLastMonth")}
                         </div>
                       </div>
                     </div>
@@ -245,33 +262,33 @@ export default function LandingPage() {
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img src="/maiase.png" alt="Maiase" className="h-12 w-12 rounded-full object-contain animate-float" />
                         <div>
-                          <div className="text-xs font-bold text-brand uppercase tracking-wider">Insight IA · Maiase</div>
+                          <div className="text-xs font-bold text-brand uppercase tracking-wider">{t("landingMockInsightTitle")}</div>
                           <p className="text-xs text-brand/80 mt-1 leading-snug">
-                            « Vos charges ont augmenté de 15% ce mois-ci, principalement en Achats & Services. »
+                            {t("landingMockInsightQuote")}
                           </p>
                         </div>
                       </div>
                       <button className="mt-3 w-full rounded-xl bg-brand py-2 text-center text-xs font-semibold text-white hover:bg-brand-dark">
-                        Voir l&apos;analyse complète →
+                        {t("landingMockFullAnalysis")}
                       </button>
                     </div>
 
                     <div className="rounded-2xl border border-gray-100 bg-white p-4 shadow-sm">
                       <div className="flex items-center justify-between text-xs font-bold text-gray-500 mb-2">
-                        <span>À FAIRE</span>
-                        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-700">4 urgences</span>
+                        <span>{t("landingMockTodo")}</span>
+                        <span className="rounded-full bg-rose-100 px-2 py-0.5 text-rose-700">{t("landingMockUrgencies")}</span>
                       </div>
                       <div className="space-y-1.5 text-xs">
                         <div className="flex justify-between py-1 border-b">
-                          <span>Factures à valider</span>
+                          <span>{t("landingMockInvoices")}</span>
                           <span className="font-bold text-brand">12</span>
                         </div>
                         <div className="flex justify-between py-1 border-b">
-                          <span>Paiements en retard</span>
+                          <span>{t("landingMockLatePayments")}</span>
                           <span className="font-bold text-rose-600">5</span>
                         </div>
                         <div className="flex justify-between py-1">
-                          <span>Rapprochement bancaire</span>
+                          <span>{t("landingMockBankReconciliation")}</span>
                           <span className="font-bold text-amber-600">18</span>
                         </div>
                       </div>
@@ -289,10 +306,10 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-8">
           <div className="text-center mb-8">
             <h2 className="text-2xl font-black text-brand tracking-tight">
-              L&apos;intelligence au service de votre comptabilité
+              {t("landingPillarsTitle")}
             </h2>
             <p className="text-sm text-gray-500 mt-1">
-              Une technologie conçue pour les cabinets comptables et les entreprises modernes
+              {t("landingPillarsSubtitle")}
             </p>
           </div>
 
@@ -302,9 +319,9 @@ export default function LandingPage() {
                 <Zap size={22} />
               </div>
               <div>
-                <h3 className="font-bold text-brand">Automatisation</h3>
+                <h3 className="font-bold text-brand">{t("landingPillarAutomation")}</h3>
                 <p className="text-xs text-gray-600 mt-1">
-                  L&apos;IA automatise la saisie, l&apos;OCR et la catégorisation des pièces.
+                  {t("landingPillarAutomationDesc")}
                 </p>
               </div>
             </div>
@@ -314,9 +331,9 @@ export default function LandingPage() {
                 <ShieldCheck size={22} />
               </div>
               <div>
-                <h3 className="font-bold text-brand">Précision</h3>
+                <h3 className="font-bold text-brand">{t("landingPillarPrecision")}</h3>
                 <p className="text-xs text-gray-600 mt-1">
-                  Moins d&apos;erreurs humaines, équilibre strict débit/crédit et conformité SCF.
+                  {t("landingPillarPrecisionDesc")}
                 </p>
               </div>
             </div>
@@ -326,9 +343,9 @@ export default function LandingPage() {
                 <TrendingUp size={22} />
               </div>
               <div>
-                <h3 className="font-bold text-brand">Prédictions</h3>
+                <h3 className="font-bold text-brand">{t("landingPillarPredictions")}</h3>
                 <p className="text-xs text-gray-600 mt-1">
-                  Anticipez votre trésorerie, vos marges et votre compte de résultat.
+                  {t("landingPillarPredictionsDesc")}
                 </p>
               </div>
             </div>
@@ -338,9 +355,9 @@ export default function LandingPage() {
                 <Sparkles size={22} />
               </div>
               <div>
-                <h3 className="font-bold text-brand">Gain de temps</h3>
+                <h3 className="font-bold text-brand">{t("landingPillarTime")}</h3>
                 <p className="text-xs text-gray-600 mt-1">
-                  Gagnez jusqu&apos;à 15 heures par semaine et concentrez-vous sur la croissance.
+                  {t("landingPillarTimeDesc")}
                 </p>
               </div>
             </div>
@@ -354,38 +371,35 @@ export default function LandingPage() {
           <div className="grid grid-cols-1 items-center gap-12 lg:grid-cols-2">
             <div>
               <div className="inline-flex items-center gap-2 rounded-full bg-lime-light px-3.5 py-1 text-xs font-bold text-brand mb-4">
-                <Bot size={16} /> Rencontrez Maiase
+                <Bot size={16} /> {t("landingMaiaseEyebrow")}
               </div>
               <h2 className="text-3xl sm:text-4xl font-black text-brand tracking-tight">
-                Votre assistant comptable IA qui ne dort jamais
+                {t("landingMaiaseTitle")}
               </h2>
               <p className="mt-4 text-base text-gray-600 leading-relaxed">
-                <strong>Maiase</strong> est l&apos;intelligence artificielle au cœur de Comptia DZ.
-                Elle comprend les spécificités fiscales et comptables locales, analyse
-                les documents scannés par vos clients et pré-remplit les écritures comptables
-                avec un taux de confiance instantané.
+                {t("landingMaiaseDescription")}
               </p>
 
               <div className="mt-8 space-y-4">
                 <div className="flex items-start gap-3">
                   <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-sm font-bold text-brand">Lecture OCR intelligente en Français et Arabe</strong>
-                    <p className="text-xs text-gray-500">Extraction automatique des NIF, NIS, dates, montants HT, TVA et TTC.</p>
+                    <strong className="text-sm font-bold text-brand">{t("landingMaiaseOcrTitle")}</strong>
+                    <p className="text-xs text-gray-500">{t("landingMaiaseOcrDesc")}</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-sm font-bold text-brand">Classification automatique par Journal</strong>
-                    <p className="text-xs text-gray-500">Affectation intelligente des comptes (6011, 44566, 4011...) sans saisie manuelle.</p>
+                    <strong className="text-sm font-bold text-brand">{t("landingMaiaseClassificationTitle")}</strong>
+                    <p className="text-xs text-gray-500">{t("landingMaiaseClassificationDesc")}</p>
                   </div>
                 </div>
                 <div className="flex items-start gap-3">
                   <CheckCircle2 size={20} className="text-emerald-600 shrink-0 mt-0.5" />
                   <div>
-                    <strong className="text-sm font-bold text-brand">Détection proactive des anomalies</strong>
-                    <p className="text-xs text-gray-500">Alerte immédiate en cas de déséquilibre ou d&apos;émetteur non reconnu.</p>
+                    <strong className="text-sm font-bold text-brand">{t("landingMaiaseAnomalyTitle")}</strong>
+                    <p className="text-xs text-gray-500">{t("landingMaiaseAnomalyDesc")}</p>
                   </div>
                 </div>
               </div>
@@ -398,24 +412,24 @@ export default function LandingPage() {
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/maiase.png" alt="Maiase AI" className="h-20 w-20 rounded-2xl object-contain bg-brand/5 p-1 ring-2 ring-lime" />
                   <div>
-                    <h3 className="text-xl font-extrabold text-brand">Maiase IA</h3>
+                    <h3 className="text-xl font-extrabold text-brand">{t("landingMaiaseName")}</h3>
                     <p className="text-xs text-emerald-600 font-semibold flex items-center gap-1 mt-0.5">
                       <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
-                      En ligne · Prête à analyser vos pièces
+                      {t("landingMaiaseOnline")}
                     </p>
                   </div>
                 </div>
 
                 <div className="mt-6 space-y-3">
                   <div className="rounded-xl bg-lime-light/60 p-3.5 text-xs text-brand">
-                    <span className="font-bold">Message de Maiase :</span> « J&apos;ai scanné 28 nouvelles factures aujourd&apos;hui. 26 ont un score de confiance de 95%+ et sont prêtes à être validées en 1 clic ! »
+                    <span className="font-bold">{t("landingMaiaseChatLabel")}</span> {t("landingMaiaseChatSample")}
                   </div>
                   <div className="rounded-xl bg-gray-50 p-3.5 text-xs text-gray-600 flex items-center justify-between">
-                    <span>Temps moyen d&apos;analyse par document</span>
-                    <strong className="text-brand font-bold">1.4 seconde</strong>
+                    <span>{t("landingMaiaseAvgAnalysis")}</span>
+                    <strong className="text-brand font-bold">{t("landingMaiaseAvgAnalysisValue")}</strong>
                   </div>
                   <div className="rounded-xl bg-gray-50 p-3.5 text-xs text-gray-600 flex items-center justify-between">
-                    <span>Reconnaissance multi-devises</span>
+                    <span>{t("landingMaiaseCurrencies")}</span>
                     <strong className="text-brand font-bold">DZD, EUR, USD</strong>
                   </div>
                 </div>
@@ -430,13 +444,13 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-8">
           <div className="text-center max-w-2xl mx-auto mb-12">
             <span className="rounded-full bg-lime/20 border border-lime/30 px-3.5 py-1 text-xs font-bold text-lime uppercase tracking-wider">
-              Accès Instantané
+              {t("landingDemoEyebrow")}
             </span>
             <h2 className="text-3xl sm:text-4xl font-extrabold mt-3">
-              Testez la plateforme en 1 Clic
+              {t("landingDemoTitle")}
             </h2>
             <p className="text-sm text-white/70 mt-2">
-              Choisissez un profil de démonstration pour explorer immédiatement toutes les fonctionnalités sans inscription.
+              {t("landingDemoDescription")}
             </p>
           </div>
 
@@ -448,13 +462,12 @@ export default function LandingPage() {
                   <UserCheck size={24} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Espace Expert-Comptable</h3>
-                  <p className="text-xs text-lime">Accès complet cabinet</p>
+                  <h3 className="text-lg font-bold text-white">{t("landingDemoAccountantTitle")}</h3>
+                  <p className="text-xs text-lime">{t("landingDemoAccountantTagline")}</p>
                 </div>
               </div>
               <p className="text-xs text-white/70 mb-6">
-                Accédez à la gestion multi-entreprises, journaux (Achats, Ventes, Banque, Caisse, OD),
-                balance, compte de résultat, grand livre et validation de factures.
+                {t("landingDemoAccountantDesc")}
               </p>
               <Button
                 variant="primary"
@@ -462,7 +475,7 @@ export default function LandingPage() {
                 disabled={loggingIn !== null}
                 onClick={() => quickLogin("accountant")}
               >
-                {loggingIn === "accountant" ? "Connexion..." : "Accéder comme Comptable →"}
+                {loggingIn === "accountant" ? `${t("login")}...` : t("landingDemoAccountantCta")}
               </Button>
             </div>
 
@@ -473,13 +486,12 @@ export default function LandingPage() {
                   <ScanLine size={24} />
                 </div>
                 <div>
-                  <h3 className="text-lg font-bold text-white">Espace Client Entreprise</h3>
-                  <p className="text-xs text-lime">Interface mobile-first</p>
+                  <h3 className="text-lg font-bold text-white">{t("landingDemoClientTitle")}</h3>
+                  <p className="text-xs text-lime">{t("landingDemoClientTagline")}</p>
                 </div>
               </div>
               <p className="text-xs text-white/70 mb-6">
-                Prenez des photos de factures avec l&apos;appareil guidé, consultez le statut
-                d&apos;avancement et échangez par messagerie directe avec votre comptable.
+                {t("landingDemoClientDesc")}
               </p>
               <Button
                 variant="outline"
@@ -487,7 +499,7 @@ export default function LandingPage() {
                 disabled={loggingIn !== null}
                 onClick={() => quickLogin("client")}
               >
-                {loggingIn === "client" ? "Connexion..." : "Accéder comme Client →"}
+                {loggingIn === "client" ? `${t("login")}...` : t("landingDemoClientCta")}
               </Button>
             </div>
           </div>
@@ -499,10 +511,10 @@ export default function LandingPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-8">
           <div className="text-center max-w-2xl mx-auto mb-16">
             <h2 className="text-3xl font-black text-brand tracking-tight">
-              Tout ce dont vous avez besoin pour gérer votre comptabilité
+              {t("landingFeaturesTitle")}
             </h2>
             <p className="text-sm text-gray-500 mt-2">
-              Des outils robustes pensés pour le plan comptable algérien
+              {t("landingFeaturesSubtitle")}
             </p>
           </div>
 
@@ -511,10 +523,9 @@ export default function LandingPage() {
               <div className="h-12 w-12 rounded-xl bg-lime p-3 text-brand shadow-glow-sm mb-4">
                 <ScanLine size={24} />
               </div>
-              <h3 className="text-lg font-bold text-brand">Scanner & OCR Intelligent</h3>
+              <h3 className="text-lg font-bold text-brand">{t("landingFeatureScannerTitle")}</h3>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                Glissez-déposez des PDF ou prenez des photos depuis votre téléphone. L&apos;IA extrait automatiquement
-                les lignes de factures avec calcul de TVA.
+                {t("landingFeatureScannerDesc")}
               </p>
             </div>
 
@@ -522,10 +533,9 @@ export default function LandingPage() {
               <div className="h-12 w-12 rounded-xl bg-lime p-3 text-brand shadow-glow-sm mb-4">
                 <FileSpreadsheet size={24} />
               </div>
-              <h3 className="text-lg font-bold text-brand">Journaux & Grand Livre</h3>
+              <h3 className="text-lg font-bold text-brand">{t("landingFeatureJournalsTitle")}</h3>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                Gestion des journaux d&apos;Achats, Ventes, Caisse, Banque et OD. Création de journaux
-                personnalisés et export instantané en PDF.
+                {t("landingFeatureJournalsDesc")}
               </p>
             </div>
 
@@ -533,10 +543,9 @@ export default function LandingPage() {
               <div className="h-12 w-12 rounded-xl bg-lime p-3 text-brand shadow-glow-sm mb-4">
                 <TrendingUp size={24} />
               </div>
-              <h3 className="text-lg font-bold text-brand">Balance & Compte de Résultat</h3>
+              <h3 className="text-lg font-bold text-brand">{t("landingFeatureReportsTitle")}</h3>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                Calcul automatique des soldes débiteurs/créditeurs, répartition des charges
-                et détermination instantanée du bénéfice ou de la perte.
+                {t("landingFeatureReportsDesc")}
               </p>
             </div>
 
@@ -544,10 +553,9 @@ export default function LandingPage() {
               <div className="h-12 w-12 rounded-xl bg-lime p-3 text-brand shadow-glow-sm mb-4">
                 <Globe size={24} />
               </div>
-              <h3 className="text-lg font-bold text-brand">100% Bilingue FR / AR</h3>
+              <h3 className="text-lg font-bold text-brand">{t("landingFeatureBilingualTitle")}</h3>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                Bascule instantanée entre le Français et l&apos;Arabe avec inversion automatique
-                de la mise en page (RTL) pour une ergonomie parfaite.
+                {t("landingFeatureBilingualDesc")}
               </p>
             </div>
 
@@ -555,10 +563,9 @@ export default function LandingPage() {
               <div className="h-12 w-12 rounded-xl bg-lime p-3 text-brand shadow-glow-sm mb-4">
                 <MessageSquare size={24} />
               </div>
-              <h3 className="text-lg font-bold text-brand">Messagerie Client-Comptable</h3>
+              <h3 className="text-lg font-bold text-brand">{t("landingFeatureMessagesTitle")}</h3>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                Canal de discussion direct entre l&apos;entreprise et son expert-comptable pour clarifier
-                les pièces justificatives en quelques secondes.
+                {t("landingFeatureMessagesDesc")}
               </p>
             </div>
 
@@ -566,10 +573,9 @@ export default function LandingPage() {
               <div className="h-12 w-12 rounded-xl bg-lime p-3 text-brand shadow-glow-sm mb-4">
                 <Lock size={24} />
               </div>
-              <h3 className="text-lg font-bold text-brand">Sécurité & Verrouillage NIF</h3>
+              <h3 className="text-lg font-bold text-brand">{t("landingFeatureSecurityTitle")}</h3>
               <p className="text-xs text-gray-600 mt-2 leading-relaxed">
-                Verrouillage strict des données sensibles (NIF, NIS, exercices clôturés)
-                et contrôle d&apos;accès basé sur les rôles JWT.
+                {t("landingFeatureSecurityDesc")}
               </p>
             </div>
           </div>
@@ -587,13 +593,13 @@ export default function LandingPage() {
             </div>
 
             <div className="flex items-center gap-6 text-xs text-white/70">
-              <Link href="/login" className="hover:text-lime">Connexion</Link>
-              <Link href="/register" className="hover:text-lime">Créer un compte</Link>
-              <a href="#features" className="hover:text-lime">Fonctionnalités</a>
+              <Link href="/login" className="hover:text-lime">{t("login")}</Link>
+              <Link href="/register" className="hover:text-lime">{t("footerSignup")}</Link>
+              <a href="#features" className="hover:text-lime">{t("navFeatures")}</a>
             </div>
 
             <div className="text-xs text-white/50">
-              © {new Date().getFullYear()} Comptia DZ. Tous droits réservés.
+              © {new Date().getFullYear()} Comptia DZ. {t("footerRights")}
             </div>
           </div>
         </div>
