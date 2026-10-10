@@ -119,22 +119,5 @@ export async function exportReportElementPDF(element: HTMLElement, title: string
     pageIndex += 1;
   }
 
-  if (mobile && navigator.share && navigator.canShare) {
-    const file = new File([doc.output("blob")], filename, { type: "application/pdf" });
-    if (navigator.canShare({ files: [file] })) {
-      try {
-        await navigator.share({ files: [file], title });
-      } catch (cause) {
-        if (cause instanceof DOMException && cause.name === "AbortError") return;
-        if (cause instanceof DOMException && cause.name === "NotAllowedError") {
-          doc.save(filename);
-          return;
-        }
-        throw cause;
-      }
-      return;
-    }
-  }
-
   doc.save(filename);
 }
