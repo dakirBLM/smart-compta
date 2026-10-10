@@ -12,6 +12,7 @@
     "@hookform/resolvers": "^3.9.0",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
+    "html2canvas": "^1.4.1",
     "jscanify": "^1.4.2",
     "jspdf": "^2.5.2",
     "jspdf-autotable": "^3.8.4",
