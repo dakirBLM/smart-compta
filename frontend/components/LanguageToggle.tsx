@@ -35,13 +35,13 @@ export function LanguageToggle({
   const current = LANGS.find((l) => l.code === lang)!;
 
   return (
-    <div ref={ref} className={cn("relative", className)}>
+    <div ref={ref} className={cn("relative text-current", className)}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
         aria-label="Langue"
         className={cn(
-          "flex items-center gap-2 rounded-lg border border-current/30 text-sm",
+          "flex items-center gap-2 rounded-lg border border-current/40 text-sm",
           compact ? "justify-center p-3" : "w-full justify-between px-3 py-2"
         )}
       >
@@ -63,7 +63,7 @@ export function LanguageToggle({
       {open && (
         <div
           className={cn(
-            "absolute bottom-full z-50 mb-1 min-w-[150px] overflow-hidden rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg",
+            "absolute top-full z-50 mt-1 min-w-[150px] overflow-hidden rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg",
             compact ? "left-0" : "left-0 w-full"
           )}
         >

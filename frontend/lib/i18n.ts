@@ -3,7 +3,103 @@ export type Lang = "fr" | "ar";
 export const translations = {
   fr: {
     appName: "Comptia DZ",
-    slogan: "Votre comptabilité devient intelligente",
+    navFeatures: "Fonctionnalités",
+    navMaiase: "IA Maiase",
+    navDemo: "Accès Démo",
+    navSpace: "Mon Espace",
+    navSignup: "Essayer gratuitement",
+    heroTitle: "La comptabilité réinventée par l'IA",
+    heroSubtitle:
+      "Votre comptabilité automatisée : de la facture au bilan, en quelques clics.",
+    heroCta: "Découvrir la plateforme",
+    footerSignup: "Créer un compte",
+    footerRights: "Tous droits réservés.",
+    landingMockStatus: "Système opérationnel",
+    landingMockOverview: "Aperçu intelligent",
+    landingMockHealth: "Votre entreprise en bonne santé",
+    landingMockUpdated: "Mis à jour aujourd'hui avec l'IA Maiase",
+    landingMockInsights: "Voir les insights IA →",
+    landingMockRevenue: "Chiffre d'affaires",
+    landingMockNetIncome: "Résultat net",
+    landingMockVsLastMonth: "vs mois dernier",
+    landingMockInsightTitle: "Insight IA · Maiase",
+    landingMockInsightQuote:
+      "« Vos charges ont augmenté de 15% ce mois-ci, principalement en Achats & Services. »",
+    landingMockFullAnalysis: "Voir l'analyse complète →",
+    landingMockTodo: "À FAIRE",
+    landingMockUrgencies: "4 urgences",
+    landingMockInvoices: "Factures à valider",
+    landingMockLatePayments: "Paiements en retard",
+    landingMockBankReconciliation: "Rapprochement bancaire",
+    landingPillarsTitle: "L'intelligence au service de votre comptabilité",
+    landingPillarsSubtitle:
+      "Une technologie conçue pour les cabinets comptables et les entreprises modernes",
+    landingPillarAutomation: "Automatisation",
+    landingPillarAutomationDesc: "L'IA automatise la saisie, l'OCR et la catégorisation des pièces.",
+    landingPillarPrecision: "Précision",
+    landingPillarPrecisionDesc:
+      "Moins d'erreurs humaines, équilibre strict débit/crédit et conformité SCF.",
+    landingPillarPredictions: "Prédictions",
+    landingPillarPredictionsDesc:
+      "Anticipez votre trésorerie, vos marges et votre compte de résultat.",
+    landingPillarTime: "Gain de temps",
+    landingPillarTimeDesc:
+      "Gagnez jusqu'à 15 heures par semaine et concentrez-vous sur la croissance.",
+    landingMaiaseEyebrow: "Rencontrez Maiase",
+    landingMaiaseName: "Maiase IA",
+    landingMaiaseTitle: "Votre assistant comptable IA qui ne dort jamais",
+    landingMaiaseDescription:
+      "Maiase est l'intelligence artificielle au cœur de Comptia DZ. Elle comprend les spécificités fiscales et comptables locales, analyse les documents scannés par vos clients et pré-remplit les écritures comptables avec un taux de confiance instantané.",
+    landingMaiaseOcrTitle: "Lecture OCR intelligente en Français et Arabe",
+    landingMaiaseOcrDesc:
+      "Extraction automatique des NIF, NIS, dates, montants HT, TVA et TTC.",
+    landingMaiaseClassificationTitle: "Classification automatique par Journal",
+    landingMaiaseClassificationDesc:
+      "Affectation intelligente des comptes (6011, 44566, 4011...) sans saisie manuelle.",
+    landingMaiaseAnomalyTitle: "Détection proactive des anomalies",
+    landingMaiaseAnomalyDesc:
+      "Alerte immédiate en cas de déséquilibre ou d'émetteur non reconnu.",
+    landingMaiaseOnline: "En ligne · Prête à analyser vos pièces",
+    landingMaiaseChatLabel: "Message de Maiase :",
+    landingMaiaseChatSample:
+      "« J'ai scanné 28 nouvelles factures aujourd'hui. 26 ont un score de confiance de 95%+ et sont prêtes à être validées en 1 clic ! »",
+    landingMaiaseAvgAnalysis: "Temps moyen d'analyse par document",
+    landingMaiaseAvgAnalysisValue: "1.4 seconde",
+    landingMaiaseCurrencies: "Reconnaissance multi-devises",
+    landingDemoEyebrow: "Accès Instantané",
+    landingDemoTitle: "Testez la plateforme en 1 Clic",
+    landingDemoDescription:
+      "Choisissez un profil de démonstration pour explorer immédiatement toutes les fonctionnalités sans inscription.",
+    landingDemoAccountantTitle: "Espace Expert-Comptable",
+    landingDemoAccountantTagline: "Accès complet cabinet",
+    landingDemoAccountantDesc:
+      "Accédez à la gestion multi-entreprises, journaux (Achats, Ventes, Banque, Caisse, OD), balance, compte de résultat, grand livre et validation de factures.",
+    landingDemoAccountantCta: "Accéder comme Comptable →",
+    landingDemoClientTitle: "Espace Client Entreprise",
+    landingDemoClientTagline: "Interface mobile-first",
+    landingDemoClientDesc:
+      "Prenez des photos de factures avec l'appareil guidé, consultez le statut d'avancement et échangez par messagerie directe avec votre comptable.",
+    landingDemoClientCta: "Accéder comme Client →",
+    landingFeaturesTitle: "Tout ce dont vous avez besoin pour gérer votre comptabilité",
+    landingFeaturesSubtitle: "Des outils robustes pensés pour le plan comptable algérien",
+    landingFeatureScannerTitle: "Scanner & OCR Intelligent",
+    landingFeatureScannerDesc:
+      "Glissez-déposez des PDF ou prenez des photos depuis votre téléphone. L'IA extrait automatiquement les lignes de factures avec calcul de TVA.",
+    landingFeatureJournalsTitle: "Journaux & Grand Livre",
+    landingFeatureJournalsDesc:
+      "Gestion des journaux d'Achats, Ventes, Caisse, Banque et OD. Création de journaux personnalisés et export instantané en PDF.",
+    landingFeatureReportsTitle: "Balance & Compte de Résultat",
+    landingFeatureReportsDesc:
+      "Calcul automatique des soldes débiteurs/créditeurs, répartition des charges et détermination instantanée du bénéfice ou de la perte.",
+    landingFeatureBilingualTitle: "100% Bilingue FR / AR",
+    landingFeatureBilingualDesc:
+      "Bascule instantanée entre le Français et l'Arabe avec inversion automatique de la mise en page (RTL) pour une ergonomie parfaite.",
+    landingFeatureMessagesTitle: "Messagerie Client-Comptable",
+    landingFeatureMessagesDesc:
+      "Canal de discussion direct entre l'entreprise et son expert-comptable pour clarifier les pièces justificatives en quelques secondes.",
+    landingFeatureSecurityTitle: "Sécurité & Verrouillage NIF",
+    landingFeatureSecurityDesc:
+      "Verrouillage strict des données sensibles (NIF, NIS, exercices clôturés) et contrôle d'accès basé sur les rôles JWT.",
     login: "Connexion",
     nom: "Nom",
     password: "Mot de passe",
@@ -166,7 +262,104 @@ export const translations = {
   },
   ar: {
     appName: "كومبتيا ديزاد",
-    slogan: "محاسبتك تصبح ذكية",
+    navFeatures: "المميزات",
+    navMaiase: "الذكاء الاصطناعي ماياس",
+    navDemo: "الدخول التجريبي",
+    navSpace: "مساحتي",
+    navSignup: "جرّب مجاناً",
+    heroTitle: "المحاسبة المُعاد ابتكارها بالذكاء الاصطناعي",
+    heroSubtitle:
+      "محاسبتك الآلية: من الفاتورة إلى الميزانية في بضع نقرات.",
+    heroCta: "اكتشف المنصة",
+    footerSignup: "إنشاء حساب",
+    footerRights: "جميع الحقوق محفوظة.",
+    landingMockStatus: "النظام يعمل بشكل طبيعي",
+    landingMockOverview: "نظرة ذكية",
+    landingMockHealth: "شركتك في وضع مالي جيد",
+    landingMockUpdated: "تم التحديث اليوم بمساعدة الذكاء الاصطناعي ماياس",
+    landingMockInsights: "عرض تحليلات الذكاء الاصطناعي ←",
+    landingMockRevenue: "رقم الأعمال",
+    landingMockNetIncome: "صافي النتيجة",
+    landingMockVsLastMonth: "مقارنة بالشهر الماضي",
+    landingMockInsightTitle: "تحليل بالذكاء الاصطناعي · ماياس",
+    landingMockInsightQuote:
+      "« ارتفعت أعباؤك بنسبة 15٪ هذا الشهر، خاصةً في المشتريات والخدمات. »",
+    landingMockFullAnalysis: "عرض التحليل الكامل ←",
+    landingMockTodo: "المهام المطلوبة",
+    landingMockUrgencies: "4 مهام عاجلة",
+    landingMockInvoices: "فواتير بانتظار المصادقة",
+    landingMockLatePayments: "مدفوعات متأخرة",
+    landingMockBankReconciliation: "التسوية البنكية",
+    landingPillarsTitle: "الذكاء في خدمة محاسبتك",
+    landingPillarsSubtitle:
+      "تقنية مصممة لمكاتب المحاسبة والشركات العصرية",
+    landingPillarAutomation: "الأتمتة",
+    landingPillarAutomationDesc:
+      "يقوم الذكاء الاصطناعي بأتمتة إدخال المستندات وقراءتها ضوئياً وتصنيفها.",
+    landingPillarPrecision: "الدقة",
+    landingPillarPrecisionDesc:
+      "أخطاء بشرية أقل، وتوازن دقيق بين المدين والدائن، والتوافق مع النظام المحاسبي المالي.",
+    landingPillarPredictions: "التوقعات",
+    landingPillarPredictionsDesc:
+      "توقّع سيولة شركتك وهوامشها ونتائجها المالية.",
+    landingPillarTime: "توفير الوقت",
+    landingPillarTimeDesc:
+      "وفّر حتى 15 ساعة أسبوعياً وركّز على تنمية أعمالك.",
+    landingMaiaseEyebrow: "تعرّف على ماياس",
+    landingMaiaseName: "ماياس للذكاء الاصطناعي",
+    landingMaiaseTitle: "مساعدك المحاسبي بالذكاء الاصطناعي، متاح دائماً",
+    landingMaiaseDescription:
+      "ماياس هو الذكاء الاصطناعي في صميم كومبتيا ديزاد. يفهم الخصائص الجبائية والمحاسبية المحلية، ويحلل المستندات التي يمسحها عملاؤك ضوئياً، ويملأ القيود المحاسبية مسبقاً مع إظهار درجة الثقة فوراً.",
+    landingMaiaseOcrTitle: "قراءة ضوئية ذكية بالفرنسية والعربية",
+    landingMaiaseOcrDesc:
+      "استخراج تلقائي لأرقام التعريف الجبائي والإحصائي، والتواريخ، والمبالغ دون الضريبة، والضريبة على القيمة المضافة، والمبالغ شاملـة الضريبة.",
+    landingMaiaseClassificationTitle: "تصنيف تلقائي حسب دفتر اليومية",
+    landingMaiaseClassificationDesc:
+      "إسناد ذكي للحسابات (6011، 44566، 4011...) دون إدخال يدوي.",
+    landingMaiaseAnomalyTitle: "اكتشاف استباقي للحالات غير المعتادة",
+    landingMaiaseAnomalyDesc:
+      "تنبيه فوري عند عدم توازن القيد أو عدم التعرّف على الجهة المُصدرة.",
+    landingMaiaseOnline: "متصل · جاهز لتحليل مستنداتك",
+    landingMaiaseChatLabel: "رسالة من ماياس:",
+    landingMaiaseChatSample:
+      "« مسحتُ اليوم 28 فاتورة جديدة. حصلت 26 منها على درجة ثقة تتجاوز 95٪، وهي جاهزة للمصادقة بنقرة واحدة! »",
+    landingMaiaseAvgAnalysis: "متوسط زمن تحليل المستند",
+    landingMaiaseAvgAnalysisValue: "1.4 ثانية",
+    landingMaiaseCurrencies: "التعرّف على عملات متعددة",
+    landingDemoEyebrow: "دخول فوري",
+    landingDemoTitle: "جرّب المنصة بنقرة واحدة",
+    landingDemoDescription:
+      "اختر حساباً تجريبياً لاستكشاف جميع الوظائف فوراً دون إنشاء حساب.",
+    landingDemoAccountantTitle: "مساحة الخبير المحاسبي",
+    landingDemoAccountantTagline: "وصول كامل إلى مكتب المحاسبة",
+    landingDemoAccountantDesc:
+      "أدر عدة شركات ودفاتر يومية للمشتريات والمبيعات والبنك والصندوق والعمليات المتنوعة، واطّلع على الميزان وحساب النتائج ودفتر الأستاذ وصادق على الفواتير.",
+    landingDemoAccountantCta: "الدخول بصفة محاسب ←",
+    landingDemoClientTitle: "مساحة الشركة العميلة",
+    landingDemoClientTagline: "واجهة ملائمة للهواتف",
+    landingDemoClientDesc:
+      "التقط صور الفواتير باستخدام الكاميرا الموجّهة، وتابع حالة معالجتها، وتواصل مباشرةً مع محاسبك عبر الرسائل.",
+    landingDemoClientCta: "الدخول بصفة عميل ←",
+    landingFeaturesTitle: "كل ما تحتاج إليه لإدارة محاسبتك",
+    landingFeaturesSubtitle: "أدوات فعّالة مصممة وفق المخطط المحاسبي الجزائري",
+    landingFeatureScannerTitle: "المسح الضوئي والتعرّف الذكي على النصوص",
+    landingFeatureScannerDesc:
+      "حمّل ملفات PDF أو التقط صوراً بهاتفك. يستخرج الذكاء الاصطناعي بنود الفواتير تلقائياً ويحسب الضريبة على القيمة المضافة.",
+    landingFeatureJournalsTitle: "دفاتر اليومية ودفتر الأستاذ",
+    landingFeatureJournalsDesc:
+      "إدارة دفاتر يومية المشتريات والمبيعات والصندوق والبنك والعمليات المتنوعة، وإنشاء دفاتر مخصصة وتصديرها فوراً إلى PDF.",
+    landingFeatureReportsTitle: "الميزان وحساب النتائج",
+    landingFeatureReportsDesc:
+      "احتساب الأرصدة المدينة والدائنة تلقائياً، وتوزيع الأعباء، وتحديد الربح أو الخسارة فوراً.",
+    landingFeatureBilingualTitle: "ثنائي اللغة: الفرنسية والعربية",
+    landingFeatureBilingualDesc:
+      "التبديل الفوري بين الفرنسية والعربية مع عكس اتجاه التخطيط تلقائياً ليتوافق مع الكتابة من اليمين إلى اليسار.",
+    landingFeatureMessagesTitle: "مراسلة بين العميل والمحاسب",
+    landingFeatureMessagesDesc:
+      "قناة تواصل مباشرة بين الشركة وخبيرها المحاسبي لتوضيح المستندات الثبوتية خلال ثوانٍ.",
+    landingFeatureSecurityTitle: "الأمان وحماية رقم التعريف الجبائي",
+    landingFeatureSecurityDesc:
+      "حماية صارمة للبيانات الحساسة (أرقام التعريف الجبائي والإحصائي والسنوات المالية المقفلة) وضبط الوصول حسب أدوار JWT.",
     login: "تسجيل الدخول",
     nom: "الاسم",
     password: "كلمة المرور",
