@@ -16,9 +16,12 @@ const LANGS: { code: Lang; label: string }[] = [
 export function LanguageToggle({
   className,
   compact = false,
+  plain = false,
 }: {
   className?: string;
   compact?: boolean;
+  /** Text only, without the bordered box. Used by the landing header. */
+  plain?: boolean;
 }) {
   const { lang, setLang } = useI18n();
   const [open, setOpen] = useState(false);
@@ -41,8 +44,15 @@ export function LanguageToggle({
         onClick={() => setOpen((o) => !o)}
         aria-label="Langue"
         className={cn(
-          "flex items-center gap-2 rounded-lg border border-current/40 text-sm",
-          compact ? "justify-center p-3" : "w-full justify-between px-3 py-2"
+          "flex items-center gap-2 text-sm",
+          plain
+            ? "bg-transparent px-1 py-1"
+            : "rounded-lg border border-current/40",
+          compact
+            ? "justify-center p-3"
+            : plain
+              ? ""
+              : "w-full justify-between px-3 py-2"
         )}
       >
         {compact ? (

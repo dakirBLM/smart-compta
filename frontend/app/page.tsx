@@ -3,17 +3,11 @@
 import {
   ArrowRight,
   Bot,
-  BrainCircuit,
-  Building2,
   CheckCircle2,
-  ChevronRight,
-  FileCheck,
   FileSpreadsheet,
   Globe,
-  Layers,
   Lock,
   MessageSquare,
-  Receipt,
   ScanLine,
   ShieldCheck,
   Sparkles,
@@ -47,15 +41,10 @@ export default function LandingPage() {
   }, []);
 
   useEffect(() => {
-    const sentinel = document.getElementById("top-sentinel");
-    if (!sentinel) return;
-
-    const observer = new IntersectionObserver(
-      ([entry]) => setScrolled(!entry.isIntersecting),
-      { rootMargin: "-1px 0px 0px 0px", threshold: 0 },
-    );
-    observer.observe(sentinel);
-    return () => observer.disconnect();
+    const onScroll = () => setScrolled(window.scrollY > 16);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
   }, []);
 
   const quickLogin = async (role: "accountant" | "client") => {
@@ -77,104 +66,89 @@ export default function LandingPage() {
 
   return (
     <div className="min-h-screen bg-[#F7FAF7] text-brand selection:bg-lime selection:text-brand font-sans">
-      {/* Top sticky navbar */}
       <header
-        className={`sticky top-0 z-50 px-4 py-3.5 sm:px-8 ${
-          prefersReducedMotion ? "" : "transition-all duration-300"
+        className={`fixed inset-x-0 top-0 z-50 ${
+          prefersReducedMotion ? "" : "transition-colors duration-300"
         } ${
           scrolled
-            ? "border-b border-white/10 shadow-sm bg-brand/95 backdrop-blur-md"
-            : "bg-transparent"
+            ? "border-b border-brand/10 bg-white text-brand shadow-md"
+            : "border-b border-transparent bg-transparent text-white shadow-none"
         }`}
       >
-        <div className="mx-auto flex max-w-7xl items-center justify-between">
-          <Link href="/" className="flex items-center gap-2">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-2xl font-black tracking-tight text-white">
-                Comptia
-              </span>
-              <span className="rounded-md bg-lime px-1.5 py-0.5 text-xs font-black text-brand">
-                DZ
-              </span>
-            </div>
+        <div className="flex items-center justify-between gap-4 px-4 py-4 sm:px-8 lg:grid lg:grid-cols-[2fr_3fr] lg:px-0">
+          <Link href="/" className={`flex shrink-0 items-baseline gap-1.5 lg:pl-16 ${scrolled ? "text-brand" : "text-white"}`}>
+            <span className="text-2xl font-black tracking-tight text-current">
+              Comptia
+            </span>
+            <span className="rounded-md bg-lime px-1.5 py-0.5 text-xs font-black text-brand">
+              DZ
+            </span>
           </Link>
 
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-white/80">
-            <a href="#features" className="hover:text-lime transition-colors">
-              {t("navFeatures")}
-            </a>
-            <a href="#maiase" className="hover:text-lime transition-colors flex items-center gap-1.5">
-              <Sparkles size={15} className="text-lime" />
-              {t("navMaiase")}
-            </a>
-            <a href="#demo" className="hover:text-lime transition-colors">
-              {t("navDemo")}
-            </a>
-          </nav>
+          <div className={`flex items-center justify-end gap-5 text-sm font-medium lg:justify-between lg:px-10 ${
+            scrolled ? "text-brand" : "text-white lg:text-brand"
+          }`}>
+            <nav className="hidden items-center gap-8 md:flex">
+              <a href="#features" className="transition-opacity hover:opacity-70">
+                {t("navFeatures")}
+              </a>
+              <a href="#maiase" className="flex items-center gap-1.5 transition-opacity hover:opacity-70">
+                <Sparkles size={15} />
+                {t("navMaiase")}
+              </a>
+              <a href="#demo" className="transition-opacity hover:opacity-70">
+                {t("navDemo")}
+              </a>
+            </nav>
 
-          <div className="flex items-center gap-3">
-            <LanguageToggle className="text-white" />
-            {user ? (
-              <Link
-                href={user.role === "accountant" ? "/accountant/dashboard" : "/client/dashboard"}
-              >
-                <Button size="sm" variant="primary">
-                  {t("navSpace")} →
-                </Button>
-              </Link>
-            ) : (
-              <>
-                <Link href="/login">
-                  <Button size="sm" variant="ghost" className="text-white hover:bg-white/10">
+            <div className="flex shrink-0 items-center gap-5">
+              <LanguageToggle plain className="text-current" />
+              {user ? (
+                <Link
+                  href={user.role === "accountant" ? "/accountant/dashboard" : "/client/dashboard"}
+                  className="transition-opacity hover:opacity-70"
+                >
+                  {t("navSpace")}
+                </Link>
+              ) : (
+                <>
+                  <Link href="/login" className="transition-opacity hover:opacity-70">
                     {t("login")}
-                  </Button>
-                </Link>
-                <Link href="/register">
-                  <Button size="sm" variant="primary" className="hidden sm:inline-flex">
+                  </Link>
+                  <Link href="/register" className="hidden transition-opacity hover:opacity-70 sm:inline">
                     {t("navSignup")}
-                  </Button>
-                </Link>
-              </>
-            )}
+                  </Link>
+                </>
+              )}
+            </div>
           </div>
         </div>
       </header>
 
-      {/* HERO SECTION */}
-      {/* Keep -mt-16 and pt-16 paired with the header height; update both if header sizing changes. */}
-      <section className="relative -mt-16 overflow-hidden bg-brand pt-16 pb-16 text-white">
-        <div
-          id="top-sentinel"
-          className="absolute top-0 h-px w-full pointer-events-none"
-          aria-hidden="true"
-        />
-        {/* Glowing background circles */}
+      <section className="relative h-screen overflow-hidden bg-brand text-white">
         <div className="pointer-events-none absolute -top-40 -right-40 h-96 w-96 rounded-full bg-lime/10 blur-3xl" />
-        <div className="pointer-events-none absolute top-1/2 -left-40 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
+        <div className="pointer-events-none absolute top-1/2 -left-40 h-72 w-72 rounded-full bg-emerald-500/10 blur-3xl" />
 
-        <div className="grid grid-cols-1 lg:grid-cols-2">
-          <div className="flex items-center px-4 py-12 sm:px-8 lg:py-0 lg:pl-16 lg:pr-12">
-            <div className="mx-auto w-full max-w-xl text-center lg:text-left">
-              <h1 className="text-center text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl lg:text-left lg:text-6xl">
+        <div className="relative grid h-full grid-cols-1 grid-rows-[auto_1fr] lg:grid-cols-[2fr_3fr] lg:grid-rows-1">
+          <div className="flex items-center px-4 pb-6 pt-24 sm:px-8 lg:py-0 lg:pl-16 lg:pr-12 lg:pt-20">
+            <div className="mx-auto w-full max-w-xl text-center lg:mx-0 lg:text-left">
+              <h1 className="text-4xl font-extrabold leading-tight tracking-tight text-white sm:text-5xl lg:text-6xl">
                 {t("heroTitle")}
               </h1>
-
-              <p className="mt-6 text-base leading-relaxed text-white/80 sm:text-lg">
+              <p className="mt-5 text-base leading-relaxed text-white/80 sm:text-lg">
                 {t("heroSubtitle")}
               </p>
-
-              <div className="mt-8 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
+              <div className="mt-7 flex flex-wrap items-center justify-center gap-4 lg:justify-start">
                 <Link href="/login">
-                  <Button size="lg" variant="primary" className="gap-2 text-brand font-bold text-base px-8 py-6 rounded-2xl shadow-glow">
+                  <Button size="lg" variant="primary" className="gap-2 rounded-2xl px-8 py-6 text-base font-bold text-brand shadow-glow">
                     {t("heroCta")} <ArrowRight size={18} />
                   </Button>
                 </Link>
               </div>
             </div>
-
           </div>
 
-          <div className="h-[320px] lg:h-[640px]">
+          <div className="relative min-h-0 h-full">
             {prefersReducedMotion ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img src="/maiase.png" alt="" className="h-full w-full object-cover" />
@@ -187,11 +161,11 @@ export default function LandingPage() {
         </div>
       </section>
 
-      <section className="bg-brand pt-6 pb-24 text-white">
+      <section className="bg-[#F7FAF7] py-16 text-brand">
         <div className="mx-auto max-w-7xl px-4 sm:px-8">
           {/* Interactive Laptop & UI Preview Mockup */}
           <div className="mx-auto max-w-5xl">
-            <div className="relative rounded-3xl border border-white/15 bg-gradient-to-b from-white/15 to-white/5 p-3 shadow-2xl backdrop-blur-xl">
+            <div className="relative rounded-3xl border border-brand/10 bg-white p-3 shadow-card">
               {/* Screen Frame */}
               <div className="overflow-hidden rounded-2xl bg-[#F7FAF7] shadow-inner text-brand">
                 {/* Mockup Top Header */}
