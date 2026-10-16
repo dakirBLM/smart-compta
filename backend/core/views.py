@@ -842,6 +842,24 @@ class ClientBankStatementSubmissionListCreateView(APIView):
         ).select_related("entreprise", "client")
         return Response(BankStatementSubmissionSerializer(submissions, many=True).data)
 
+    def _create_submission(self, entreprise, client, filename, uploaded):
+        submission = BankStatementSubmission(
+            entreprise=entreprise,
+            client=client,
+            original_filename=filename,
+        )
+        try:
+            submission.file.save(filename, uploaded, save=False)
+            submission.save()
+        except Exception:
+            if submission.file.name:
+                try:
+                    submission.file.delete(save=False)
+                except Exception:
+                    logger.exception("Failed to clean up an orphaned bank statement file.")
+            raise
+        return submission
+
     @transaction.atomic
     def post(self, request, pk):
         entreprise = _client_entreprise(request, pk)
@@ -862,20 +880,11 @@ class ClientBankStatementSubmissionListCreateView(APIView):
             )
             return Response({"error": str(exc)}, status=response_status)
 
-        submission = BankStatementSubmission(
-            entreprise=entreprise,
-            client=request.user,
-            original_filename=filename,
-        )
         try:
-            submission.file.save(filename, uploaded, save=False)
-            submission.save()
+            submission = self._create_submission(
+                entreprise, request.user, filename, uploaded
+            )
         except Exception:
-            if submission.file.name:
-                try:
-                    submission.file.delete(save=False)
-                except Exception:
-                    logger.exception("Failed to clean up an orphaned bank statement file.")
             transaction.set_rollback(True)
             logger.exception("Failed to save a bank statement submission.")
             return Response(
