@@ -7,7 +7,6 @@ account number determines the class (1..7).
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
-from django.db.models import Q
 
 from .models import Ecriture, LigneEcriture, SCFAccount
 
@@ -42,9 +41,22 @@ def _d(value):
     return Decimal(value or 0)
 
 
+def _scf_labels(entreprise):
+    labels = {
+        account.numero_compte: account.libelle
+        for account in SCFAccount.objects.filter(entreprise=entreprise)
+    }
+    labels.update({
+        account.numero_compte: account.libelle
+        for account in SCFAccount.objects.filter(entreprise__isnull=True)
+    })
+    return labels
+
+
 def build_balance(entreprise, annee=None):
     """Returns rows grouped by account, with class grouping and totals."""
     qs = _lignes_qs(entreprise, annee)
+    scf_map = _scf_labels(entreprise)
     accounts = {}
     for ligne in qs:
         acc = accounts.setdefault(
@@ -59,6 +71,8 @@ def build_balance(entreprise, annee=None):
 
     rows = []
     for acc in accounts.values():
+        if acc["compte"] in scf_map:
+            acc["libelle"] = scf_map[acc["compte"]]
         solde = acc["debit"] - acc["credit"]
         acc["solde_debiteur"] = solde if solde > 0 else Decimal(0)
         acc["solde_crediteur"] = -solde if solde < 0 else Decimal(0)
@@ -175,15 +189,7 @@ def build_grand_livre(entreprise, annee=None, start=None, end=None):
         "numero_compte", "ecriture__date_ecriture", "ecriture__id"
     )
     
-    # Pre-fetch SCF accounts for this entreprise to get correct titles
-    scf_qs = SCFAccount.objects.filter(Q(entreprise=entreprise) | Q(entreprise__isnull=True))
-    scf_map = {}
-    # Load global accounts first
-    for scf in scf_qs.filter(entreprise__isnull=True):
-        scf_map[scf.numero_compte] = scf.libelle
-    # Overwrite with entreprise-specific accounts
-    for scf in scf_qs.filter(entreprise=entreprise):
-        scf_map[scf.numero_compte] = scf.libelle
+    scf_map = _scf_labels(entreprise)
 
     comptes = defaultdict(lambda: {"libelle": "", "lignes": []})
     for ligne in qs:

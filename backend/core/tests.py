@@ -9,7 +9,79 @@ from rest_framework.test import APITestCase
 
 from .models import BankStatement, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
 from .account_helpers import apply_scf_subaccounts
+from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction
+
+
+class ReportAccountLabelTests(APITestCase):
+    def setUp(self):
+        user = get_user_model().objects.create_user(
+            username="reports-comptable", password="test-password", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SCF REPORTS",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=user,
+        )
+        year = ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=2026, is_active=True
+        )
+        journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=year,
+            type_journal=Journal.Type.OD,
+        )
+        entry = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date(2026, 1, 1),
+        )
+
+        SCFAccount.objects.create(
+            numero_compte="401", libelle="Official SCF label", classe=4
+        )
+        SCFAccount.objects.create(
+            entreprise=self.entreprise,
+            numero_compte="401",
+            libelle="Company override",
+            classe=4,
+        )
+        SCFAccount.objects.create(
+            entreprise=self.entreprise,
+            numero_compte="4019",
+            libelle="Company-only SCF label",
+            classe=4,
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte="401",
+            libelle="Journal line label",
+            montant_debit=100,
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte="4019",
+            libelle="Other journal line label",
+            montant_credit=100,
+        )
+
+    def test_balance_and_grand_livre_use_global_scf_names(self):
+        balance = build_balance(self.entreprise)
+        balance_labels = {
+            account["compte"]: account["libelle"]
+            for group in balance["classes"]
+            for account in group["comptes"]
+        }
+        ledger = build_grand_livre(self.entreprise)
+        ledger_labels = {
+            account["compte"]: account["libelle"]
+            for account in ledger["comptes"]
+        }
+
+        self.assertEqual(balance_labels["401"], "Official SCF label")
+        self.assertEqual(ledger_labels["401"], "Official SCF label")
+        self.assertEqual(balance_labels["4019"], "Company-only SCF label")
+        self.assertEqual(ledger_labels["4019"], "Company-only SCF label")
 
 
 class BankStatementImportTests(APITestCase):
