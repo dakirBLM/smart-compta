@@ -53,10 +53,7 @@ def _scf_labels(entreprise):
     return labels
 
 
-def build_balance(entreprise, annee=None):
-    """Returns rows grouped by account, with class grouping and totals."""
-    qs = _lignes_qs(entreprise, annee)
-    scf_map = _scf_labels(entreprise)
+def _aggregate_balance_accounts(qs):
     accounts = {}
     for ligne in qs:
         acc = accounts.setdefault(
@@ -68,7 +65,10 @@ def build_balance(entreprise, annee=None):
         acc["credit"] += _d(ligne.montant_credit)
         if ligne.libelle and not acc["libelle"]:
             acc["libelle"] = ligne.libelle
+    return accounts
 
+
+def _build_balance_rows(accounts, scf_map):
     rows = []
     for acc in accounts.values():
         if acc["compte"] in scf_map:
@@ -79,7 +79,10 @@ def build_balance(entreprise, annee=None):
         acc["classe"] = acc["compte"][:1] if acc["compte"] else "?"
         rows.append(acc)
     rows.sort(key=lambda r: r["compte"])
+    return rows
 
+
+def _group_balance_rows(rows):
     classes = defaultdict(lambda: {"debit": Decimal(0), "credit": Decimal(0),
                                    "solde_debiteur": Decimal(0),
                                    "solde_crediteur": Decimal(0), "comptes": []})
@@ -91,26 +94,39 @@ def build_balance(entreprise, annee=None):
         c["solde_crediteur"] += r["solde_crediteur"]
         c["comptes"].append(r)
 
-    grouped = []
-    for classe in sorted(classes.keys()):
-        data = classes[classe]
-        grouped.append({
+    return [
+        {
             "classe": classe,
-            "label": CLASSE_LABELS.get(classe, "Autre"),
+            "label": f"Classe {classe}",
             "comptes": _to_float_rows(data["comptes"]),
             "total_debit": float(data["debit"]),
             "total_credit": float(data["credit"]),
             "total_solde_debiteur": float(data["solde_debiteur"]),
             "total_solde_crediteur": float(data["solde_crediteur"]),
-        })
+        }
+        for classe, data in sorted(classes.items())
+    ]
 
-    totals = {
+
+def _build_balance_totals(rows):
+    return {
         "debit": float(sum(r["debit"] for r in rows)),
         "credit": float(sum(r["credit"] for r in rows)),
         "solde_debiteur": float(sum(r["solde_debiteur"] for r in rows)),
         "solde_crediteur": float(sum(r["solde_crediteur"] for r in rows)),
     }
-    return {"classes": grouped, "totals": totals}
+
+
+def build_balance(entreprise, annee=None):
+    """Returns rows grouped by account, with class grouping and totals."""
+    qs = _lignes_qs(entreprise, annee)
+    scf_map = _scf_labels(entreprise)
+    accounts = _aggregate_balance_accounts(qs)
+    rows = _build_balance_rows(accounts, scf_map)
+    return {
+        "classes": _group_balance_rows(rows),
+        "totals": _build_balance_totals(rows),
+    }
 
 
 def _to_float_rows(rows):
