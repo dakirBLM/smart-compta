@@ -832,7 +832,7 @@ class ClientEntrepriseListView(APIView):
         return Response(ClientEntrepriseSerializer(entreprises, many=True).data)
 
 
-class ClientBankStatementSubmissionListCreateView(APIView):
+class ClientBankStatementView(APIView):
     permission_classes = [IsClient]
 
     def get(self, request, pk):
@@ -842,7 +842,7 @@ class ClientBankStatementSubmissionListCreateView(APIView):
         ).select_related("entreprise", "client")
         return Response(BankStatementSubmissionSerializer(submissions, many=True).data)
 
-    def _create_submission(self, entreprise, client, filename, uploaded):
+    def _save_submission(self, entreprise, client, filename, uploaded):
         submission = BankStatementSubmission(
             entreprise=entreprise,
             client=client,
@@ -881,7 +881,7 @@ class ClientBankStatementSubmissionListCreateView(APIView):
             return Response({"error": str(exc)}, status=response_status)
 
         try:
-            submission = self._create_submission(
+            submission = self._save_submission(
                 entreprise, request.user, filename, uploaded
             )
         except Exception:
@@ -898,7 +898,7 @@ class ClientBankStatementSubmissionListCreateView(APIView):
         )
 
 
-class AccountantBankStatementSubmissionListView(APIView):
+class AccountantBankStatementListView(APIView):
     permission_classes = [IsAccountant]
 
     def get(self, request, pk):
@@ -909,7 +909,7 @@ class AccountantBankStatementSubmissionListView(APIView):
         return Response(BankStatementSubmissionSerializer(submissions, many=True).data)
 
 
-class BankStatementSubmissionDownloadView(APIView):
+class BankStatementDownloadView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, submission_id):
