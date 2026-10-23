@@ -1,18 +1,22 @@
 "use client";
 
-import { CheckCircle, Landmark, ScanLine } from "lucide-react";
+import { CheckCircle, Download, Landmark, ScanLine } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { BankStatementFlow } from "@/components/BankStatementFlow";
 import { Card, Spinner } from "@/components/ui";
-import { api } from "@/lib/api";
+import {
+  api,
+  downloadBankStatementSubmission,
+  receivedBankStatementSubmissions,
+} from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { Ecriture, Journal } from "@/lib/types";
+import { BankStatementSubmission, Ecriture, Journal } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
 import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
 
-type Tab = "import" | "historique";
+type Tab = "import" | "received" | "historique";
 
 /** A bank écriture, tagged with the fiscal year its own journal belongs to
  * (which may differ from the year currently selected in the sidebar). */
@@ -24,6 +28,14 @@ export default function RelevesBancairesPage() {
   const [tab, setTab] = useState<Tab>("import");
   const [ecritures, setEcritures] = useState<HistoriqueEcriture[]>([]);
   const [loading, setLoading] = useState(true);
+  const [received, setReceived] = useState<BankStatementSubmission[]>([]);
+  const [receivedLoading, setReceivedLoading] = useState(false);
+  const [receivedError, setReceivedError] = useState("");
+  const [openingId, setOpeningId] = useState<number | null>(null);
+  const [activeSubmission, setActiveSubmission] = useState<{
+    submission: BankStatementSubmission;
+    file: File;
+  } | null>(null);
 
   // Bank statements are dated by the document, not by whichever fiscal year
   // happens to be selected in the UI — a statement can land in a year that
@@ -58,9 +70,65 @@ export default function RelevesBancairesPage() {
       .finally(() => setLoading(false));
   }, [id, entreprise]);
 
+  const loadReceived = useCallback(() => {
+    if (!id) return;
+    setReceivedLoading(true);
+    setReceivedError("");
+    receivedBankStatementSubmissions(id)
+      .then(setReceived)
+      .catch((error) => setReceivedError(error instanceof Error ? error.message : "Erreur"))
+      .finally(() => setReceivedLoading(false));
+  }, [id]);
+
   useEffect(() => {
     if (tab === "historique") loadHistorique();
   }, [tab, loadHistorique]);
+
+  useEffect(() => {
+    if (tab === "received") loadReceived();
+  }, [tab, loadReceived]);
+
+  async function downloadSubmission(submission: BankStatementSubmission) {
+    setOpeningId(submission.id);
+    setReceivedError("");
+    try {
+      const blob = await downloadBankStatementSubmission(submission.id);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = submission.original_filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      setReceivedError(error instanceof Error ? error.message : "Erreur de téléchargement");
+    } finally {
+      setOpeningId(null);
+    }
+  }
+
+  async function processSubmission(submission: BankStatementSubmission) {
+    setOpeningId(submission.id);
+    setReceivedError("");
+    try {
+      const blob = await downloadBankStatementSubmission(submission.id);
+      const filename = submission.original_filename;
+      const contentType = filename.toLowerCase().endsWith(".pdf")
+        ? "application/pdf"
+        : filename.toLowerCase().endsWith(".png")
+          ? "image/png"
+          : "image/jpeg";
+      setActiveSubmission({
+        submission,
+        file: new File([blob], filename, { type: contentType }),
+      });
+    } catch (error) {
+      setReceivedError(error instanceof Error ? error.message : "Erreur de téléchargement");
+    } finally {
+      setOpeningId(null);
+    }
+  }
 
   return (
     <AppShell
@@ -83,6 +151,19 @@ export default function RelevesBancairesPage() {
           {t("scannerImport")}
         </button>
         <button
+          onClick={() => setTab("received")}
+          className={cn(
+            "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all",
+            tab === "received"
+              ? "bg-brand text-white shadow-sm"
+              : "bg-white text-brand border hover:bg-brand/5"
+          )}
+        >
+          <Download size={16} />
+          {t("relevesRecus")} {received.filter((item) => item.status === "en_attente").length > 0 &&
+            `(${received.filter((item) => item.status === "en_attente").length})`}
+        </button>
+        <button
           onClick={() => setTab("historique")}
           className={cn(
             "flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition-all",
@@ -101,6 +182,84 @@ export default function RelevesBancairesPage() {
           <p className="text-sm text-gray-500">{t("importerReleve")}</p>
           <p className="text-xs text-gray-400">{t("formatsAcceptes")}</p>
           <BankStatementFlow entrepriseId={id} onImported={loadHistorique} />
+        </div>
+      )}
+
+      {tab === "received" && (
+        <div className="space-y-4">
+          {receivedError && (
+            <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {receivedError}
+            </p>
+          )}
+          {receivedLoading ? (
+            <div className="flex justify-center py-12"><Spinner className="h-8 w-8 text-brand" /></div>
+          ) : received.length === 0 ? (
+            <Card><p className="py-5 text-center text-sm text-gray-500">{t("aucunReleveRecu")}</p></Card>
+          ) : (
+            <div className="space-y-3">
+              {received.map((submission) => (
+                <Card key={submission.id} className="flex flex-wrap items-center justify-between gap-4">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-brand">{submission.original_filename}</p>
+                    <p className="text-xs text-gray-500">
+                      {submission.client_username} · {formatDateTime(submission.submitted_at)}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={submission.status === "traite"
+                      ? "rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800"
+                      : "rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800"}
+                    >
+                      {submission.status === "traite" ? t("releveTraite") : t("releveEnAttente")}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => downloadSubmission(submission)}
+                      disabled={openingId !== null}
+                      className="rounded-md border px-3 py-2 text-sm font-medium text-brand disabled:opacity-50"
+                    >
+                      {t("ouvrirReleve")}
+                    </button>
+                    {submission.status === "en_attente" && (
+                      <button
+                        type="button"
+                        onClick={() => processSubmission(submission)}
+                        disabled={openingId !== null}
+                        className="rounded-md bg-brand px-3 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                      >
+                        {openingId === submission.id ? <Spinner className="h-4 w-4" /> : t("traiterReleve")}
+                      </button>
+                    )}
+                  </div>
+                </Card>
+              ))}
+            </div>
+          )}
+          {activeSubmission && id && (
+            <section className="space-y-3 border-t pt-5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="font-semibold text-brand">{activeSubmission.submission.original_filename}</h2>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubmission(null)}
+                  className="text-sm text-gray-600 underline"
+                >
+                  {t("annuler")}
+                </button>
+              </div>
+              <BankStatementFlow
+                key={activeSubmission.submission.id}
+                entrepriseId={id}
+                initialFile={activeSubmission.file}
+                submissionId={activeSubmission.submission.id}
+                onImported={() => {
+                  loadReceived();
+                  loadHistorique();
+                }}
+              />
+            </section>
+          )}
         </div>
       )}
 

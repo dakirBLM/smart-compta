@@ -4,13 +4,225 @@ from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
+from django.core.files.storage import Storage
 from rest_framework import status
+from django.core.files.uploadedfile import SimpleUploadedFile
+from django.test import override_settings
 from rest_framework.test import APITestCase
 
-from .models import BankStatement, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
+from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
 from .account_helpers import apply_scf_subaccounts
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction
+from .bank_statements import BankStatementError
+from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES
+
+
+class PrivateDurableTestStorage(Storage):
+    files = {}
+
+    def _open(self, name, mode="rb"):
+        return ContentFile(self.files[name], name=name)
+
+    def _save(self, name, content):
+        self.files[name] = content.read()
+        return name
+
+    def delete(self, name):
+        self.files.pop(name, None)
+
+    def exists(self, name):
+        return name in self.files
+
+    def size(self, name):
+        return len(self.files[name])
+
+    def url(self, name):
+        raise NotImplementedError
+
+
+TEST_STORAGES = {
+    "default": {"BACKEND": "core.tests.PrivateDurableTestStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
+
+@override_settings(STORAGES=TEST_STORAGES)
+class BankStatementSubmissionAPITests(APITestCase):
+    def setUp(self):
+        PrivateDurableTestStorage.files.clear()
+        super().setUp()
+        User = get_user_model()
+        self.accountant = User.objects.create_user(
+            username="submission-accountant", password="secret", role="accountant"
+        )
+        self.other_accountant = User.objects.create_user(
+            username="other-submission-accountant", password="secret", role="accountant"
+        )
+        self.client_user = User.objects.create_user(
+            username="submission-client", password="secret", role="client"
+        )
+        self.other_client = User.objects.create_user(
+            username="other-submission-client", password="secret", role="client"
+        )
+        self.unlinked_client = User.objects.create_user(
+            username="unlinked-submission-client", password="secret", role="client"
+        )
+        self.enterprise = Entreprise.objects.create(
+            nom="ACME Submission", date_creation=date(2026, 1, 1),
+            exercice_comptable="2026", accountant=self.accountant,
+        )
+        self.other_enterprise = Entreprise.objects.create(
+            nom="Other Submission", date_creation=date(2026, 1, 1),
+            exercice_comptable="2026", accountant=self.other_accountant,
+        )
+        ClientAccess.objects.create(
+            client=self.client_user, entreprise=self.enterprise, nom_client="ACME"
+        )
+        ClientAccess.objects.create(
+            client=self.other_client, entreprise=self.enterprise, nom_client="Other client"
+        )
+        ClientAccess.objects.create(
+            client=self.client_user, entreprise=self.other_enterprise, nom_client="Other company"
+        )
+        self.client_url = f"/api/client/entreprises/{self.enterprise.id}/releves-bancaires/"
+        self.accountant_url = f"/api/entreprises/{self.enterprise.id}/releves-bancaires/received/"
+
+    @staticmethod
+    def pdf_upload(name="statement.pdf", content=b"%PDF-1.7 original statement"):
+        return SimpleUploadedFile(name, content, content_type="application/pdf")
+
+    def test_client_upload_is_pending_archived_and_does_not_post_entries(self):
+        self.client.force_authenticate(self.client_user)
+        response = self.client.post(
+            self.client_url, {"file": self.pdf_upload()}, format="multipart"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        submission = BankStatementSubmission.objects.get()
+        self.assertEqual(submission.entreprise, self.enterprise)
+        self.assertEqual(submission.client, self.client_user)
+        self.assertEqual(submission.original_filename, "statement.pdf")
+        self.assertEqual(submission.status, BankStatementSubmission.Status.PENDING)
+        self.assertEqual(BankStatement.objects.count(), 0)
+        self.assertEqual(Ecriture.objects.count(), 0)
+        with submission.file.open("rb") as document:
+            self.assertEqual(document.read(), b"%PDF-1.7 original statement")
+        with self.assertRaises(NotImplementedError):
+            submission.file.url
+
+    @override_settings(DEBUG=False)
+    def test_upload_removes_new_file_when_database_save_fails(self):
+        self.client.force_authenticate(self.client_user)
+        storage = BankStatementSubmission._meta.get_field("file").storage.backend
+
+        with patch.object(BankStatementSubmission, "save", side_effect=RuntimeError("db failure")):
+            with patch("django.core.handlers.base.log_response"):
+                response = self.client.post(
+                    self.client_url, {"file": self.pdf_upload()}, format="multipart"
+                )
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertEqual(BankStatementSubmission.objects.count(), 0)
+        self.assertEqual(storage.files, {})
+
+    def test_upload_rejects_bad_signature_and_oversized_file(self):
+        self.client.force_authenticate(self.client_user)
+        invalid = self.client.post(
+            self.client_url,
+            {"file": SimpleUploadedFile("statement.pdf", b"not a PDF")},
+            format="multipart",
+        )
+        oversized = self.client.post(
+            self.client_url,
+            {"file": self.pdf_upload(content=b"%PDF-" + b"x" * MAX_BANK_STATEMENT_UPLOAD_BYTES)},
+            format="multipart",
+        )
+
+        self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(oversized.status_code, status.HTTP_413_REQUEST_ENTITY_TOO_LARGE)
+        self.assertEqual(BankStatementSubmission.objects.count(), 0)
+
+    def test_client_company_list_and_history_are_access_scoped(self):
+        self.client.force_authenticate(self.client_user)
+        companies = self.client.get("/api/client/entreprises/")
+        self.assertEqual(companies.status_code, status.HTTP_200_OK)
+        self.assertEqual({item["id"] for item in companies.data}, {
+            self.enterprise.id, self.other_enterprise.id
+        })
+
+        self.client.force_authenticate(self.unlinked_client)
+        forbidden_history = self.client.get(self.client_url)
+        forbidden_upload = self.client.post(
+            self.client_url, {"file": self.pdf_upload()}, format="multipart"
+        )
+        self.assertEqual(forbidden_history.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(forbidden_upload.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_accountant_received_list_is_limited_to_owned_company(self):
+        self.client.force_authenticate(self.client_user)
+        created = self.client.post(
+            self.client_url, {"file": self.pdf_upload()}, format="multipart"
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+
+        self.client.force_authenticate(self.accountant)
+        received = self.client.get(self.accountant_url)
+        self.assertEqual(received.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(received.data), 1)
+        self.assertEqual(received.data[0]["client"], self.client_user.id)
+
+        self.client.force_authenticate(self.other_accountant)
+        wrong_company = self.client.get(self.accountant_url)
+        self.assertEqual(wrong_company.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_download_allowed_only_to_submitter_or_owning_accountant(self):
+        self.client.force_authenticate(self.client_user)
+        created = self.client.post(
+            self.client_url, {"file": self.pdf_upload()}, format="multipart"
+        )
+        submission_id = created.data["id"]
+        download_url = f"/api/releves-bancaires/submissions/{submission_id}/download/"
+
+        client_download = self.client.get(download_url)
+        self.assertEqual(client_download.status_code, status.HTTP_200_OK)
+        self.assertIn("attachment", client_download["Content-Disposition"])
+        self.assertEqual(b"".join(client_download.streaming_content), b"%PDF-1.7 original statement")
+
+        self.client.force_authenticate(self.accountant)
+        accountant_download = self.client.get(download_url)
+        self.assertEqual(accountant_download.status_code, status.HTTP_200_OK)
+
+        for user in (self.other_client, self.unlinked_client, self.other_accountant):
+            self.client.force_authenticate(user)
+            response = self.client.get(download_url)
+            self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_submission_status_changes_only_after_owned_import_succeeds(self):
+        self.client.force_authenticate(self.client_user)
+        uploaded = self.client.post(
+            self.client_url, {"file": self.pdf_upload()}, format="multipart"
+        )
+        submission = BankStatementSubmission.objects.get(pk=uploaded.data["id"])
+        self.client.force_authenticate(self.accountant)
+        import_url = f"/api/entreprises/{self.enterprise.id}/releves-bancaires/import/"
+        body = {"submission_id": submission.id, "data": {"lignes": []}}
+
+        with patch("core.views.import_bank_statement", side_effect=BankStatementError("invalid")):
+            failed = self.client.post(import_url, body, format="json")
+        self.assertEqual(failed.status_code, status.HTTP_400_BAD_REQUEST)
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, BankStatementSubmission.Status.PENDING)
+
+        with patch("core.views.import_bank_statement", return_value=[]) as importer:
+            imported = self.client.post(import_url, body, format="json")
+            repeated = self.client.post(import_url, body, format="json")
+        self.assertEqual(imported.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(repeated.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(importer.call_count, 1)
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, BankStatementSubmission.Status.PROCESSED)
 
 
 class ReportAccountLabelTests(APITestCase):
