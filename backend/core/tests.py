@@ -1,13 +1,15 @@
 import csv
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from rest_framework import status
 from rest_framework.test import APITestCase
+from openpyxl import load_workbook
 
-from .models import BankStatement, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
+from .models import BankStatement, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, ReportExportConfig, SCFAccount
 from .account_helpers import apply_scf_subaccounts
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction
@@ -82,6 +84,195 @@ class ReportAccountLabelTests(APITestCase):
         self.assertEqual(ledger_labels["401"], "Official SCF label")
         self.assertEqual(balance_labels["4019"], "Company-only SCF label")
         self.assertEqual(ledger_labels["4019"], "Company-only SCF label")
+
+
+class ExcelReportExportTests(APITestCase):
+    def setUp(self):
+        user = get_user_model().objects.create_user(
+            username="excel-reports", password="export-test-password", role="accountant"
+        )
+        self.client.force_authenticate(user)
+        self.entreprise = Entreprise.objects.create(
+            nom="Excel Reports",
+            date_creation=date(2025, 1, 1),
+            exercice_comptable="2025",
+            accountant=user,
+        )
+        self._create_year(2025, date(2025, 1, 10), 80, 20)
+        self._create_year(2026, date(2026, 1, 10), 100, 40)
+
+    def _create_year(self, year, entry_date, revenue, expense):
+        exercice = ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=year, is_active=year == 2026
+        )
+        journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=exercice,
+            type_journal=Journal.Type.OD,
+        )
+        revenue_entry = Ecriture.objects.create(
+            journal=journal, date_ecriture=entry_date, numero_piece=f"V-{year}"
+        )
+        LigneEcriture.objects.create(
+            ecriture=revenue_entry,
+            numero_compte="512",
+            libelle="Bank",
+            montant_debit=revenue,
+        )
+        LigneEcriture.objects.create(
+            ecriture=revenue_entry,
+            numero_compte="707",
+            libelle="Sales",
+            montant_credit=revenue,
+        )
+        expense_entry = Ecriture.objects.create(
+            journal=journal, date_ecriture=entry_date, numero_piece=f"A-{year}"
+        )
+        LigneEcriture.objects.create(
+            ecriture=expense_entry,
+            numero_compte="607",
+            libelle="Purchases",
+            montant_debit=expense,
+        )
+        LigneEcriture.objects.create(
+            ecriture=expense_entry,
+            numero_compte="401",
+            libelle="Supplier",
+            montant_credit=expense,
+        )
+        if year == 2026:
+            transfer_entry = Ecriture.objects.create(
+                journal=journal,
+                date_ecriture=date(2026, 2, 10),
+                numero_piece="V-TRANSFER",
+            )
+            LigneEcriture.objects.create(
+                ecriture=transfer_entry,
+                numero_compte="512",
+                libelle="Bank transfer",
+                montant_debit=5,
+            )
+            LigneEcriture.objects.create(
+                ecriture=transfer_entry,
+                numero_compte="530",
+                libelle="Cash",
+                montant_credit=5,
+            )
+
+    def _workbook(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn(".xlsx", response["Content-Disposition"])
+        return load_workbook(BytesIO(response.content), data_only=True)
+
+    def test_balance_export_has_numeric_account_rows_and_balanced_totals(self):
+        sheet = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/balance/export/?annee=2026"
+        )["Balance"]
+        account_rows = {sheet.cell(row, 2).value: row for row in range(5, sheet.max_row + 1)}
+        self.assertEqual(sheet.cell(account_rows["607"], 4).value, 40)
+        self.assertEqual(sheet.cell(account_rows["401"], 5).value, 40)
+        self.assertEqual(sheet.cell(sheet.max_row, 4).value, 145)
+        self.assertEqual(sheet.cell(sheet.max_row, 5).value, 145)
+        self.assertEqual(sheet.freeze_panes, "A5")
+
+    def test_income_statement_export_matches_current_and_prior_year_calculations(self):
+        workbook = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=nature"
+        )
+        sheet = workbook["Compte de résultat"]
+        rows = {
+            sheet.cell(row, 1).value: row
+            for row in range(5, sheet.max_row + 1)
+        }
+        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 2).value, 100)
+        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 3).value, 80)
+        self.assertEqual(sheet.cell(rows["X - RÉSULTAT NET DE L'EXERCICE"], 2).value, 60)
+
+        function_sheet = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=fonction"
+        )["Compte de résultat"]
+        function_rows = {
+            function_sheet.cell(row, 1).value: row
+            for row in range(5, function_sheet.max_row + 1)
+        }
+        self.assertEqual(
+            function_sheet.cell(function_rows["MARGE BRUTE"], 2).value, 60
+        )
+
+    def test_grand_livre_export_respects_account_and_date_filters(self):
+        workbook = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/grand-livre/export/"
+            "?annee=2026&compte=512&start=2026-01-01&end=2026-01-31"
+        )
+        sheet = workbook["Grand livre"]
+        self.assertEqual(sheet.max_row, 5)
+        self.assertEqual(sheet.cell(5, 1).value.date(), date(2026, 1, 10))
+        self.assertEqual(sheet.cell(5, 1).number_format, "dd/mm/yyyy")
+        self.assertEqual(sheet.cell(5, 2).value, "V-2026")
+        self.assertEqual(sheet.cell(5, 4).value, 100)
+        self.assertEqual(sheet.cell(5, 6).value, 100)
+
+    def test_bilan_export_matches_current_and_prior_year_account_balances(self):
+        workbook = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/bilan/export/?annee=2026"
+        )
+        asset_sheet = workbook["Actif"]
+        asset_rows = {
+            asset_sheet.cell(row, 1).value.strip(): row
+            for row in range(5, asset_sheet.max_row + 1)
+        }
+        self.assertEqual(asset_sheet.cell(asset_rows["Trésorerie"], 5).value, 100)
+        self.assertEqual(asset_sheet.cell(asset_rows["Trésorerie"], 6).value, 80)
+        liability_sheet = workbook["Passif"]
+        liability_rows = {
+            liability_sheet.cell(row, 1).value.strip(): row
+            for row in range(5, liability_sheet.max_row + 1)
+        }
+        self.assertEqual(
+            liability_sheet.cell(liability_rows["Fournisseurs et comptes rattachés"], 3).value,
+            40,
+        )
+        self.assertEqual(
+            liability_sheet.cell(liability_rows["Fournisseurs et comptes rattachés"], 4).value,
+            20,
+        )
+
+    def test_admin_report_configuration_changes_export_labels_and_account_mappings(self):
+        settings = ReportExportConfig.objects.get(key="default")
+        settings.config["income_labels"] = {"Chiffre d'affaires": "Ventes personnalisées"}
+        settings.config["income_prefixes"]["70"] = ["72"]
+        settings.config["income_order"]["nature"] = [
+            "X - RÉSULTAT NET DE L'EXERCICE",
+            "Chiffre d'affaires",
+        ]
+        settings.config["bilan"]["current_assets"][2]["label"] = "Clients personnalisés"
+        settings.config["bilan"]["current_assets"][2]["prefixes"] = ["512"]
+        settings.save(update_fields=["config"])
+
+        income = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=nature"
+        )["Compte de résultat"]
+        income_labels = [income.cell(row, 1).value for row in range(5, income.max_row + 1)]
+        self.assertIn("Ventes personnalisées", income_labels)
+        income_row = income_labels.index("Ventes personnalisées") + 5
+        self.assertEqual(income.cell(income_row, 2).value, 0)
+        self.assertEqual(income.cell(5, 1).value, "X - RÉSULTAT NET DE L'EXERCICE")
+
+        assets = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/bilan/export/?annee=2026"
+        )["Actif"]
+        asset_labels = [assets.cell(row, 1).value.strip() for row in range(5, assets.max_row + 1)]
+        self.assertIn("Clients personnalisés", asset_labels)
+        client_row = asset_labels.index("Clients personnalisés") + 5
+        self.assertEqual(assets.cell(client_row, 5).value, 105)
 
 
 class BankStatementImportTests(APITestCase):

@@ -64,7 +64,11 @@ export default function BalancePage() {
           </h1>
           <div className="mb-4 flex items-center justify-between">
             <p className="text-sm text-gray-500">Exercice {annee}</p>
-            <ReportActions title={`Balance ${annee ?? ""}`} disabled={!data} />
+            <ReportActions
+              title={`Balance ${annee ?? ""}`}
+              excelUrl={`/api/entreprises/${id}/balance/export/${annee ? `?annee=${annee}` : ""}`}
+              disabled={!data}
+            />
           </div>
           <Card className="overflow-x-auto p-0">
           <table className="w-full text-sm">

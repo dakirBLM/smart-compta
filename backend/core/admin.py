@@ -8,6 +8,7 @@ from .models import (
     Facture,
     Journal,
     LigneEcriture,
+    ReportExportConfig,
 )
 
 
@@ -29,3 +30,9 @@ admin.site.register(ExerciceAnnee)
 admin.site.register(ClientAccess)
 admin.site.register(Journal)
 admin.site.register(Facture)
+
+
+@admin.register(ReportExportConfig)
+class ReportExportConfigAdmin(admin.ModelAdmin):
+    list_display = ("key",)
+    fields = ("key", "config")

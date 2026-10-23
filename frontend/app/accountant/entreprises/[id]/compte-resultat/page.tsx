@@ -241,6 +241,7 @@ export default function CompteResultatPage() {
         </div>
         <ReportActions
           title={`Compte de résultat ${currentYear} - ${presentation}`}
+          excelUrl={`/api/entreprises/${id}/compte-resultat/export/?annee=${currentYear}&presentation=${presentation}`}
           disabled={!data}
         />
       </div>

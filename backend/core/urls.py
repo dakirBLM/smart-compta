@@ -52,7 +52,13 @@ urlpatterns = [
     path("factures/<int:pk>/validate/", views.FactureValidateView.as_view()),
     # Reports
     path("entreprises/<int:pk>/balance/", views.BalanceView.as_view()),
+    path("entreprises/<int:pk>/balance/export/", views.BalanceExportView.as_view()),
     path("entreprises/<int:pk>/compte-resultat/", views.CompteResultatView.as_view()),
+    path("entreprises/<int:pk>/compte-resultat/export/",
+         views.CompteResultatExportView.as_view()),
     path("entreprises/<int:pk>/grand-livre/", views.GrandLivreView.as_view()),
+    path("entreprises/<int:pk>/grand-livre/export/",
+         views.GrandLivreExportView.as_view()),
+    path("entreprises/<int:pk>/bilan/export/", views.BilanExportView.as_view()),
     path("entreprises/<int:pk>/dashboard/", views.DashboardView.as_view()),
 ]

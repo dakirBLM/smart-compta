@@ -67,6 +67,11 @@ export default function GrandLivrePage() {
   );
 
   const current = comptes.find((c) => c.compte === selected) ?? null;
+  const exportParams = new URLSearchParams();
+  if (annee) exportParams.set("annee", String(annee));
+  if (start) exportParams.set("start", start);
+  if (end) exportParams.set("end", end);
+  if (current) exportParams.set("compte", current.compte);
 
   return (
     <AppShell
@@ -88,6 +93,7 @@ export default function GrandLivrePage() {
         <div className="flex-1" />
         <ReportActions
           title={`Grand Livre ${current?.compte ?? ""} ${annee ?? ""}`}
+          excelUrl={`/api/entreprises/${id}/grand-livre/export/?${exportParams.toString()}`}
           disabled={!current}
         />
       </div>
