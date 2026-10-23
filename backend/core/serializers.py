@@ -5,6 +5,7 @@ from rest_framework import serializers
 from .models import (
     ClientAccess,
     ClientComptable,
+    BankStatementSubmission,
     SCFAccount,
     Ecriture,
     Entreprise,
@@ -146,6 +147,25 @@ class ClientAccessSerializer(serializers.ModelSerializer):
         fields = ["id", "client", "entreprise", "nom_client", "username",
                   "email", "created_at"]
         read_only_fields = ["client", "entreprise", "created_at"]
+
+
+class ClientEntrepriseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Entreprise
+        fields = ["id", "nom"]
+
+
+class BankStatementSubmissionSerializer(serializers.ModelSerializer):
+    entreprise_nom = serializers.CharField(source="entreprise.nom", read_only=True)
+    client_username = serializers.CharField(source="client.username", read_only=True)
+
+    class Meta:
+        model = BankStatementSubmission
+        fields = [
+            "id", "entreprise", "entreprise_nom", "client", "client_username",
+            "original_filename", "submitted_at", "status",
+        ]
+        read_only_fields = fields
 
 
 class CreateClientSerializer(serializers.Serializer):

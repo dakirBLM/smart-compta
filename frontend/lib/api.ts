@@ -1,6 +1,6 @@
 "use client";
 
-import { AIExtraction, BankStatementExtraction, BankStatementImportResult, EcrituresPreviewRow } from "./types";
+import { AIExtraction, BankStatementExtraction, BankStatementImportResult, BankStatementSubmission, ClientEntreprise, EcrituresPreviewRow } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const TOKEN_KEY = "sc_token";
@@ -237,10 +237,65 @@ export async function bankStatementUpload(
  * double entries (one Banque écriture per transaction line). */
 export async function bankStatementImport(
   entrepriseId: number,
-  data: BankStatementExtraction
+  data: BankStatementExtraction,
+  submissionId?: number
 ): Promise<BankStatementImportResult> {
+  const payload: { data: BankStatementExtraction; submission_id?: number } = { data };
+  if (submissionId !== undefined) payload.submission_id = submissionId;
   return api.post(
     `/api/entreprises/${entrepriseId}/releves-bancaires/import/`,
-    { data }
+    payload
   );
+}
+
+export function clientEntreprises() {
+  return api.get<ClientEntreprise[]>("/api/client/entreprises/");
+}
+
+export function clientBankStatementSubmissions(entrepriseId: number) {
+  return api.get<BankStatementSubmission[]>(
+    `/api/client/entreprises/${entrepriseId}/releves-bancaires/`
+  );
+}
+
+export async function submitClientBankStatement(entrepriseId: number, file: File) {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    throw new ApiError(413, "Fichier trop volumineux. La taille maximale est de 5 Mo.");
+  }
+  const form = new FormData();
+  form.append("file", file);
+  return api.post<BankStatementSubmission>(
+    `/api/client/entreprises/${entrepriseId}/releves-bancaires/`,
+    form
+  );
+}
+
+export function receivedBankStatementSubmissions(entrepriseId: number) {
+  return api.get<BankStatementSubmission[]>(
+    `/api/entreprises/${entrepriseId}/releves-bancaires/received/`
+  );
+}
+
+export async function downloadBankStatementSubmission(submissionId: number): Promise<Blob> {
+  const token = getToken();
+  let response: Response;
+  try {
+    response = await fetch(
+      `${API_URL}/api/releves-bancaires/submissions/${submissionId}/download/`,
+      { headers: token ? { Authorization: `Bearer ${token}` } : {} }
+    );
+  } catch {
+    throw new ApiError(0, "Connexion au serveur impossible. Vérifiez votre réseau.");
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    let data: unknown = text;
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // Preserve the response text for the shared error formatter.
+    }
+    throw new ApiError(response.status, extractErrorMessage(data, response.status), data);
+  }
+  return response.blob();
 }

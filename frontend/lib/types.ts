@@ -232,6 +232,22 @@ export interface BankStatementImportResult {
   ecritures: Ecriture[];
 }
 
+export interface ClientEntreprise {
+  id: number;
+  nom: string;
+}
+
+export interface BankStatementSubmission {
+  id: number;
+  entreprise: number;
+  entreprise_nom: string;
+  client: number;
+  client_username: string;
+  original_filename: string;
+  submitted_at: string;
+  status: "en_attente" | "traite";
+}
+
 /** One row from the backend preview (ecritures_preview). */
 export interface EcrituresPreviewRow {
   date: string;

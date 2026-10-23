@@ -1,5 +1,9 @@
 from django.conf import settings
 from django.db import models
+from django.utils.text import get_valid_filename
+from uuid import uuid4
+
+from .bank_statement_storage import BankStatementStorage
 
 
 class Entreprise(models.Model):
@@ -77,6 +81,43 @@ class BankStatement(models.Model):
 
     def __str__(self) -> str:
         return f"{self.nom_banque} - {self.nom_entreprise} ({self.date})"
+
+
+def bank_statement_submission_path(instance, filename):
+    safe_name = get_valid_filename(filename.replace("\\", "/").rsplit("/", 1)[-1])
+    extension = safe_name.rsplit(".", 1)[-1].lower() if "." in safe_name else ""
+    suffix = f".{extension}" if extension else ""
+    return f"bank_statement_submissions/{uuid4().hex}{suffix}"
+
+
+class BankStatementSubmission(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "en_attente", "En attente"
+        PROCESSED = "traite", "Traité"
+
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="statement_submissions"
+    )
+    client = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="bank_statement_submissions",
+    )
+    file = models.FileField(
+        upload_to=bank_statement_submission_path,
+        storage=BankStatementStorage(),
+    )
+    original_filename = models.CharField(max_length=255)
+    submitted_at = models.DateTimeField(auto_now_add=True)
+    status = models.CharField(
+        max_length=20, choices=Status.choices, default=Status.PENDING
+    )
+
+    class Meta:
+        ordering = ["-submitted_at", "-id"]
+
+    def __str__(self) -> str:
+        return f"Relevé reçu de {self.entreprise.nom} ({self.submitted_at:%Y-%m-%d})"
 
 
 class ExerciceAnnee(models.Model):

@@ -66,10 +66,14 @@ function lowestConfidence(lignes: BankStatementLigne[]): number {
 export function BankStatementFlow({
   entrepriseId,
   onImported,
+  initialFile,
+  submissionId,
 }: {
   entrepriseId: number;
   /** Called after a successful import so the parent can refresh its list. */
   onImported?: () => void;
+  initialFile?: File;
+  submissionId?: number;
 }) {
   const { t } = useI18n();
   const router = useRouter();
@@ -86,6 +90,17 @@ export function BankStatementFlow({
   const [result, setResult] = useState<BankStatementImportResult | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const importRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!initialFile) return;
+    setFile(initialFile);
+    setPreview(
+      initialFile.type === "application/pdf" || initialFile.name.toLowerCase().endsWith(".pdf")
+        ? null
+        : URL.createObjectURL(initialFile)
+    );
+    setPhase("capture");
+  }, [initialFile]);
 
   const isPdf =
     !!file &&
@@ -132,7 +147,7 @@ export function BankStatementFlow({
     setSubmitting(true);
     setError("");
     try {
-      const res = await bankStatementImport(entrepriseId, extraction);
+      const res = await bankStatementImport(entrepriseId, extraction, submissionId);
       setResult(res);
       setPhase("success");
       onImported?.();

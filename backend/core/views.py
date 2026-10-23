@@ -1,5 +1,8 @@
+import logging
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.http import FileResponse
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
@@ -14,6 +17,7 @@ from .account_helpers import get_or_create_client_comptable
 from .models import (
     ClientAccess,
     ClientComptable,
+    BankStatementSubmission,
     Ecriture,
     Entreprise,
     ExerciceAnnee,
@@ -57,7 +61,9 @@ from .scanner import (
 )
 from .serializers import (
     ClientAccessSerializer,
+    ClientEntrepriseSerializer,
     ClientComptableSerializer,
+    BankStatementSubmissionSerializer,
     CreateClientSerializer,
     EcritureSerializer,
     EntrepriseSerializer,
@@ -70,11 +76,44 @@ from .serializers import (
 )
 
 User = get_user_model()
+logger = logging.getLogger(__name__)
 
 
 def _accountant_entreprise(request, pk):
     """Fetch an entreprise the requesting accountant owns (404 otherwise)."""
     return get_object_or_404(Entreprise, pk=pk, accountant=request.user)
+
+
+MAX_BANK_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024
+
+
+def _client_entreprise(request, pk):
+    access = get_object_or_404(
+        ClientAccess.objects.select_related("entreprise"),
+        client=request.user,
+        entreprise_id=pk,
+    )
+    return access.entreprise
+
+
+def _validate_bank_statement_upload(uploaded):
+    if uploaded.size > MAX_BANK_STATEMENT_UPLOAD_BYTES:
+        raise ValueError("Le fichier dépasse la taille maximale de 5 Mo.")
+
+    filename = (uploaded.name or "releve-bancaire").replace("\\", "/").rsplit("/", 1)[-1]
+    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    signature = uploaded.read(8)
+    uploaded.seek(0)
+
+    valid_file = (
+        (extension == "pdf" and signature.startswith(b"%PDF-"))
+        or (extension in ("jpg", "jpeg") and signature.startswith(b"\xff\xd8\xff"))
+        or (extension == "png" and signature.startswith(b"\x89PNG\r\n\x1a\n"))
+    )
+    if not valid_file:
+        raise ValueError("Format ou contenu invalide. Utilisez un PDF, JPG ou PNG valide.")
+
+    return filename[:255]
 
 
 def _assert_unique_piece(entreprise, numero, exclude_id=None, allow_ids=()):
@@ -792,6 +831,124 @@ class ScannerConfirmView(APIView):
                         status=status.HTTP_201_CREATED)
 
 
+class ClientEntrepriseListView(APIView):
+    permission_classes = [IsClient]
+
+    def get(self, request):
+        entreprises = Entreprise.objects.filter(
+            client_accesses__client=request.user
+        ).distinct().order_by("nom")
+        return Response(ClientEntrepriseSerializer(entreprises, many=True).data)
+
+
+class ClientBankStatementView(APIView):
+    permission_classes = [IsClient]
+
+    def get(self, request, pk):
+        entreprise = _client_entreprise(request, pk)
+        submissions = BankStatementSubmission.objects.filter(
+            entreprise=entreprise, client=request.user
+        ).select_related("entreprise", "client")
+        return Response(BankStatementSubmissionSerializer(submissions, many=True).data)
+
+    def _save_submission(self, entreprise, client, filename, uploaded):
+        submission = BankStatementSubmission(
+            entreprise=entreprise,
+            client=client,
+            original_filename=filename,
+        )
+        try:
+            submission.file.save(filename, uploaded, save=False)
+            submission.save()
+        except Exception:
+            if submission.file.name:
+                try:
+                    submission.file.delete(save=False)
+                except Exception:
+                    logger.exception("Failed to clean up an orphaned bank statement file.")
+            raise
+        return submission
+
+    @transaction.atomic
+    def post(self, request, pk):
+        entreprise = _client_entreprise(request, pk)
+        uploaded = request.FILES.get("file")
+        if uploaded is None:
+            return Response(
+                {"error": "Aucun relevé bancaire fourni."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            filename = _validate_bank_statement_upload(uploaded)
+        except ValueError as exc:
+            response_status = (
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
+                if uploaded.size > MAX_BANK_STATEMENT_UPLOAD_BYTES
+                else status.HTTP_400_BAD_REQUEST
+            )
+            return Response({"error": str(exc)}, status=response_status)
+
+        try:
+            submission = self._save_submission(
+                entreprise, request.user, filename, uploaded
+            )
+        except Exception:
+            transaction.set_rollback(True)
+            logger.exception("Failed to save a bank statement submission.")
+            return Response(
+                {"error": "Le relevé bancaire n'a pas pu être enregistré."},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        return Response(
+            BankStatementSubmissionSerializer(submission).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class AccountantBankStatementListView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        submissions = BankStatementSubmission.objects.filter(
+            entreprise=entreprise
+        ).select_related("entreprise", "client")
+        return Response(BankStatementSubmissionSerializer(submissions, many=True).data)
+
+
+class BankStatementDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, submission_id):
+        submissions = BankStatementSubmission.objects.select_related(
+            "entreprise", "client"
+        )
+        if request.user.role == "client":
+            submissions = submissions.filter(
+                client=request.user,
+                entreprise__client_accesses__client=request.user,
+            )
+        elif request.user.role == "accountant":
+            submissions = submissions.filter(entreprise__accountant=request.user)
+        else:
+            return Response(status=status.HTTP_403_FORBIDDEN)
+
+        submission = get_object_or_404(submissions, pk=submission_id)
+        document = submission.file.open("rb")
+
+        response = FileResponse(
+            document,
+            as_attachment=True,
+            filename=submission.original_filename,
+            content_type="application/octet-stream",
+        )
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
 class BankStatementUploadView(APIView):
     permission_classes = [IsAccountant]
 
@@ -850,8 +1007,22 @@ class BankStatementUploadView(APIView):
 class BankStatementImportView(APIView):
     permission_classes = [IsAccountant]
 
+    @transaction.atomic
     def post(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
+        submission_id = request.data.get("submission_id")
+        submission = None
+        if submission_id:
+            submission = get_object_or_404(
+                BankStatementSubmission.objects.select_for_update(),
+                pk=submission_id,
+                entreprise=entreprise,
+            )
+            if submission.status == BankStatementSubmission.Status.PROCESSED:
+                return Response(
+                    {"error": "Ce relevé bancaire a déjà été traité."},
+                    status=status.HTTP_409_CONFLICT,
+                )
         data = request.data.get("data") or request.data
         if not isinstance(data, dict):
             return Response({"error": "Données de relevé invalides."}, status=status.HTTP_400_BAD_REQUEST)
@@ -860,6 +1031,10 @@ class BankStatementImportView(APIView):
             entries = import_bank_statement(entreprise, data)
         except BankStatementError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        if submission:
+            submission.status = BankStatementSubmission.Status.PROCESSED
+            submission.save(update_fields=["status"])
 
         return Response({
             "nom_banque_valide": True,

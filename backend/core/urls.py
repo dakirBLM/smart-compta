@@ -37,6 +37,13 @@ urlpatterns = [
     path("scanner/upload/", views.ScannerUploadView.as_view()),
     path("scanner/confirm/", views.ScannerConfirmView.as_view()),
     # Bank statement: extraction through Make, then reviewed double-entry import.
+    path("client/entreprises/", views.ClientEntrepriseListView.as_view()),
+    path("client/entreprises/<int:pk>/releves-bancaires/",
+         views.ClientBankStatementView.as_view()),
+    path("entreprises/<int:pk>/releves-bancaires/received/",
+         views.AccountantBankStatementListView.as_view()),
+    path("releves-bancaires/submissions/<int:submission_id>/download/",
+         views.BankStatementDownloadView.as_view()),
     path("entreprises/<int:pk>/releves-bancaires/upload/",
          views.BankStatementUploadView.as_view()),
     path("entreprises/<int:pk>/releves-bancaires/import/",

@@ -1,6 +1,6 @@
 "use client";
 
-import { Camera, FileText, Home, LogOut, Menu, MessageSquare, Settings, User, X } from "lucide-react";
+import { Camera, FileText, Home, Landmark, LogOut, Menu, MessageSquare, Settings, User, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/client/dashboard", icon: Home, label: "Accueil" },
   { href: "/client/scanner", icon: Camera, label: "Scanner" },
+  { href: "/client/releves-bancaires", icon: Landmark, label: "Relevés" },
   { href: "/client/factures", icon: FileText, label: "Factures" },
   { href: "/client/messages", icon: MessageSquare, label: "Messages" },
   { href: "/client/settings", icon: Settings, label: "Profil" },
