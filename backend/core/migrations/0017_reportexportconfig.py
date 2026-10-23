@@ -1,11 +1,16 @@
 from django.db import migrations, models
 
+from core.models import ReportExportConfig
 from core.report_template_defaults import DEFAULT_REPORT_EXPORT_CONFIG
 
 
 def create_default_report_export_config(apps, schema_editor):
-    config_model = apps.get_model("core", "ReportExportConfig")
-    config_model.objects.get_or_create(
+    connection = schema_editor.connection
+    table_name = ReportExportConfig._meta.db_table
+    if table_name not in connection.introspection.table_names():
+        schema_editor.create_model(ReportExportConfig)
+
+    ReportExportConfig.objects.using(connection.alias).get_or_create(
         key="default",
         defaults={"config": DEFAULT_REPORT_EXPORT_CONFIG},
     )
@@ -17,37 +22,43 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.CreateModel(
-            name="ReportExportConfig",
-            fields=[
-                (
-                    "id",
-                    models.BigAutoField(
-                        auto_created=True,
-                        primary_key=True,
-                        serialize=False,
-                        verbose_name="ID",
-                    ),
-                ),
-                ("key", models.CharField(default="default", max_length=80, unique=True)),
-                (
-                    "config",
-                    models.JSONField(
-                        default=dict,
-                        help_text=(
-                            "JSON report layout and SCF account mappings. "
-                            "Calculation formulas are deliberately fixed in code."
-                        ),
-                    ),
+        migrations.SeparateDatabaseAndState(
+            database_operations=[
+                migrations.RunPython(
+                    create_default_report_export_config,
+                    migrations.RunPython.noop,
                 ),
             ],
-            options={
-                "verbose_name": "configuration d’export des rapports",
-                "verbose_name_plural": "configuration d’export des rapports",
-            },
-        ),
-        migrations.RunPython(
-            create_default_report_export_config,
-            migrations.RunPython.noop,
+            state_operations=[
+                migrations.CreateModel(
+                    name="ReportExportConfig",
+                    fields=[
+                        (
+                            "id",
+                            models.BigAutoField(
+                                auto_created=True,
+                                primary_key=True,
+                                serialize=False,
+                                verbose_name="ID",
+                            ),
+                        ),
+                        ("key", models.CharField(default="default", max_length=80, unique=True)),
+                        (
+                            "config",
+                            models.JSONField(
+                                default=dict,
+                                help_text=(
+                                    "JSON report layout and SCF account mappings. "
+                                    "Calculation formulas are deliberately fixed in code."
+                                ),
+                            ),
+                        ),
+                    ],
+                    options={
+                        "verbose_name": "configuration d’export des rapports",
+                        "verbose_name_plural": "configuration d’export des rapports",
+                    },
+                ),
+            ],
         ),
     ]
