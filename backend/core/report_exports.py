@@ -1,9 +1,11 @@
 from datetime import date
 from io import BytesIO
 
+from django.utils import timezone
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.page import PageMargins
 
 from .models import ReportExportConfig
 from .reports import build_balance, build_compte_resultat, build_grand_livre
@@ -12,9 +14,20 @@ XLSX_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 AMOUNT_FORMAT = '#,##0.00;[Red](#,##0.00);-'
-HEADER_FILL = PatternFill("solid", fgColor="1F4E78")
-TOTAL_FILL = PatternFill("solid", fgColor="D9EAF7")
-SECTION_FILL = PatternFill("solid", fgColor="E7E6E6")
+NAVY = "17365D"
+BLUE = "24476B"
+TEAL = "20A39E"
+TEXT = "243247"
+MUTED = "64748B"
+ALT_FILL = PatternFill("solid", fgColor="F5F8FC")
+TITLE_FILL = PatternFill("solid", fgColor=NAVY)
+HEADER_FILL = PatternFill("solid", fgColor=BLUE)
+SUBTITLE_FILL = PatternFill("solid", fgColor="EEF3F8")
+TOTAL_FILL = PatternFill("solid", fgColor="E5EFF8")
+SECTION_FILL = PatternFill("solid", fgColor="DCE6F1")
+GRID_BORDER = Border(bottom=Side(style="hair", color="D8E0E8"))
+HEADER_BORDER = Border(bottom=Side(style="medium", color=TEAL))
+TOTAL_BORDER = Border(top=Side(style="thin", color=BLUE))
 
 
 def _export_config():
@@ -26,47 +39,101 @@ def _write_string(cell, value):
     cell.data_type = "s"
 
 
-def _new_sheet(workbook, name, title, subtitle, headers):
+def _new_sheet(workbook, name, title, subtitle, headers, details=()):
     sheet = workbook.create_sheet(name)
+    sheet.sheet_properties.tabColor = TEAL
+    sheet.sheet_view.showGridLines = False
+    sheet.sheet_view.zoomScale = 90
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+    for column in range(1, len(headers) + 1):
+        cell = sheet.cell(1, column)
+        cell.fill = TITLE_FILL
+        cell.alignment = Alignment(vertical="center")
     _write_string(sheet.cell(1, 1), title)
-    sheet.cell(1, 1).font = Font(size=16, bold=True, color="FFFFFF")
-    sheet.cell(1, 1).fill = HEADER_FILL
+    sheet.cell(1, 1).font = Font(name="Aptos Display", size=18, bold=True, color="FFFFFF")
     sheet.cell(1, 1).alignment = Alignment(vertical="center")
-    sheet.row_dimensions[1].height = 28
     sheet.merge_cells(start_row=2, start_column=1, end_row=2, end_column=len(headers))
+    for column in range(1, len(headers) + 1):
+        cell = sheet.cell(2, column)
+        cell.fill = SUBTITLE_FILL
     _write_string(sheet.cell(2, 1), subtitle)
-    sheet.cell(2, 1).font = Font(italic=True, color="666666")
+    sheet.cell(2, 1).font = Font(name="Aptos", size=10, color=MUTED, italic=True)
+    sheet.cell(2, 1).alignment = Alignment(vertical="center")
+    sheet.row_dimensions[1].height = 34
+    sheet.row_dimensions[2].height = 22
+    for index, (label, value) in enumerate(details):
+        row_number = 4 + index
+        label_cell = sheet.cell(row_number, 1)
+        label_cell.value = label
+        label_cell.font = Font(name="Aptos", size=10, bold=True, color=NAVY)
+        label_cell.fill = SUBTITLE_FILL
+        label_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        sheet.merge_cells(
+            start_row=row_number,
+            start_column=2,
+            end_row=row_number,
+            end_column=len(headers),
+        )
+        value_cell = sheet.cell(row_number, 2)
+        if isinstance(value, (int, float)):
+            value_cell.value = value
+            if label == "Solde final":
+                value_cell.number_format = AMOUNT_FORMAT
+            value_cell.alignment = Alignment(horizontal="right", vertical="center")
+        else:
+            _write_string(value_cell, value or "—")
+        value_cell.font = Font(name="Aptos", size=10, color=TEXT)
+        value_cell.alignment = Alignment(vertical="center", wrap_text=True)
+        value_length = len(str(value or "—"))
+        sheet.row_dimensions[row_number].height = max(
+            28, 18 * ((value_length + 59) // 60)
+        )
 
-    header_row = 4
+    spacer_row = 4 + len(details)
+    sheet.row_dimensions[spacer_row].height = 8
+    header_row = spacer_row + 1
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(header_row, column)
         _write_string(cell, value)
-        cell.font = Font(bold=True, color="FFFFFF")
+        cell.font = Font(name="Aptos", size=10, bold=True, color="FFFFFF")
         cell.fill = HEADER_FILL
-        cell.alignment = Alignment(vertical="center", wrap_text=True)
-    sheet.freeze_panes = "A5"
+        cell.border = HEADER_BORDER
+        cell.alignment = Alignment(
+            vertical="center",
+            horizontal="left" if column == 1 else "center",
+            wrap_text=True,
+        )
+    sheet.row_dimensions[header_row].height = 34
+    sheet.freeze_panes = f"A{header_row + 1}"
     return sheet, header_row
 
 
 def _add_row(sheet, row_number, values, amount_columns=(), kind=None):
     for column, value in enumerate(values, start=1):
         cell = sheet.cell(row_number, column)
+        cell.font = Font(name="Aptos", size=10, color=TEXT)
+        cell.border = GRID_BORDER
+        cell.alignment = Alignment(vertical="center")
+        if row_number % 2 == 0:
+            cell.fill = ALT_FILL
         if isinstance(value, date):
             cell.value = value
             cell.number_format = "dd/mm/yyyy"
+            cell.alignment = Alignment(horizontal="center", vertical="center")
         elif column in amount_columns and value is not None:
             cell.value = value
             cell.number_format = AMOUNT_FORMAT
-            cell.alignment = Alignment(horizontal="right")
+            cell.alignment = Alignment(horizontal="right", vertical="center")
         else:
             _write_string(cell, value)
         if kind == "section":
-            cell.font = Font(bold=True)
+            cell.font = Font(name="Aptos", size=10, bold=True, color=NAVY)
             cell.fill = SECTION_FILL
         elif kind == "total":
-            cell.font = Font(bold=True)
+            cell.font = Font(name="Aptos", size=10, bold=True, color=NAVY)
             cell.fill = TOTAL_FILL
+            cell.border = TOTAL_BORDER
+    sheet.row_dimensions[row_number].height = 21
 
 
 def _finish_sheet(sheet, header_row, widths, last_row=None):
@@ -75,16 +142,33 @@ def _finish_sheet(sheet, header_row, widths, last_row=None):
     sheet.auto_filter.ref = (
         f"A{header_row}:{get_column_letter(len(widths))}{last_row or header_row}"
     )
-    sheet.sheet_view.showGridLines = False
     sheet.sheet_properties.pageSetUpPr.fitToPage = True
     sheet.page_setup.fitToWidth = 1
     sheet.page_setup.fitToHeight = 0
     sheet.page_setup.orientation = "landscape"
+    sheet.page_setup.paperSize = sheet.PAPERSIZE_A4
+    sheet.page_margins = PageMargins(
+        left=0.3, right=0.3, top=0.55, bottom=0.55, header=0.2, footer=0.25
+    )
+    sheet.print_title_rows = f"1:{header_row}"
+    sheet.print_options.horizontalCentered = True
+    sheet.oddHeader.center.text = "&BSmart Compta"
+    sheet.oddHeader.center.size = 8
+    sheet.oddHeader.center.font = "Arial,Bold"
+    sheet.oddFooter.right.text = "Page &P / &N"
+    sheet.oddFooter.right.size = 8
+    sheet.oddFooter.right.font = "Arial"
 
 
 def _workbook_bytes():
     workbook = Workbook()
     workbook.remove(workbook.active)
+    workbook.views[0].showHorizontalScroll = True
+    workbook.views[0].showVerticalScroll = True
+    workbook.properties.creator = "Smart Compta"
+    workbook.properties.lastModifiedBy = "Smart Compta"
+    workbook.properties.subject = "Rapport financier"
+    workbook.properties.keywords = "Comptabilité, DZD, Excel"
     return workbook
 
 
@@ -96,6 +180,34 @@ def _response(workbook, filename):
 
 def _subtitle(entreprise, annee):
     return f"{entreprise.nom} | Exercice {annee if annee is not None else 'Tous'} | DZD"
+
+
+def _company_details(entreprise):
+    return [
+        ("Désignation de l'entreprise", entreprise.nom),
+        ("Activité", entreprise.activite),
+        ("Adresse", entreprise.adresse),
+        ("N° Article", entreprise.nin),
+        ("N° NIF", entreprise.nif),
+        ("N° RC", entreprise.nis),
+    ]
+
+
+def _statut_details(annee):
+    return [
+        ("La période", f"Du : 01/01/{annee} au : 31/12/{annee}"),
+        ("Édition", "ÉDITION PROVISOIRE"),
+        ("Édition du", timezone.localdate().strftime("%d/%m/%Y")),
+    ]
+
+
+def _format_report_date(value):
+    if not value:
+        return "—"
+    try:
+        return date.fromisoformat(value).strftime("%d/%m/%Y")
+    except ValueError:
+        return value
 
 
 def _amount_for_prefixes(report, kind, prefixes, configured_prefixes=None):
@@ -346,28 +458,26 @@ def export_balance(entreprise, annee):
     workbook = _workbook_bytes()
     sheet, header = _new_sheet(
         workbook, "Balance", "Balance", _subtitle(entreprise, annee),
-        ["Classe", "Compte", "Libellé", "Débit (DZD)", "Crédit (DZD)", "Solde débiteur (DZD)", "Solde créditeur (DZD)"],
+        ["Compte", "Libellé", "Débit (DZD)", "Crédit (DZD)", "Solde débiteur (DZD)", "Solde créditeur (DZD)"],
+        [("Entreprise", entreprise.nom), ("Exercice", annee or "Tous")],
     )
     row = header + 1
     for group in data["classes"]:
+        sheet.merge_cells(start_row=row, start_column=1, end_row=row, end_column=6)
+        _add_row(sheet, row, [f"Classe {group['classe']} — {group['label']}"], kind="section")
+        row += 1
         for account in group["comptes"]:
             _add_row(sheet, row, [
-                group["classe"], account["compte"], account["libelle"],
-                account["debit"], account["credit"], account["solde_debiteur"], account["solde_crediteur"],
-            ], (4, 5, 6, 7))
+                account["compte"], account["libelle"], account["debit"], account["credit"],
+                account["solde_debiteur"], account["solde_crediteur"],
+            ], (3, 4, 5, 6))
             row += 1
-        _add_row(sheet, row, [
-            f"Total classe {group['classe']}", "", group["label"],
-            group["total_debit"], group["total_credit"],
-            group["total_solde_debiteur"], group["total_solde_crediteur"],
-        ], (4, 5, 6, 7), "total")
-        row += 1
     totals = data["totals"]
     _add_row(sheet, row, [
-        "", "", "TOTAL GÉNÉRAL", totals["debit"], totals["credit"],
+        "TOTAL", "", totals["debit"], totals["credit"],
         totals["solde_debiteur"], totals["solde_crediteur"],
-    ], (4, 5, 6, 7), "total")
-    _finish_sheet(sheet, header, [16, 18, 42, 20, 20, 24, 24], row)
+    ], (3, 4, 5, 6), "total")
+    _finish_sheet(sheet, header, [20, 48, 22, 22, 26, 26], row)
     return _response(workbook, f"balance-{annee or 'tous'}.xlsx")
 
 
@@ -382,11 +492,15 @@ def export_compte_resultat(entreprise, annee, presentation):
     sheet, header = _new_sheet(
         workbook, "Compte de résultat", f"Compte de résultat par {presentation}",
         _subtitle(entreprise, annee),
-        ["Rubrique", f"Exercice {annee or 'courant'} (DZD)", f"Exercice {(annee - 1) if annee else 'précédent'} (DZD)"],
+        ["Rubriques", "Note", f"Exercice {annee or 'courant'} (DZD)", f"Exercice {(annee - 1) if annee else 'précédent'} (DZD)"],
+        _company_details(entreprise) + _statut_details(annee),
     )
     for index, item in enumerate(rows, start=header + 1):
-        _add_row(sheet, index, [item["label"], item["current"], item["previous"]], (2, 3), item["kind"])
-    _finish_sheet(sheet, header, [62, 24, 24], header + len(rows))
+        _add_row(
+            sheet, index, [item["label"], "", item["current"], item["previous"]],
+            (3, 4), item["kind"],
+        )
+    _finish_sheet(sheet, header, [62, 12, 24, 24], header + len(rows))
     return _response(workbook, f"compte-de-resultat-{annee or 'tous'}-{presentation}.xlsx")
 
 
@@ -400,15 +514,31 @@ def export_grand_livre(entreprise, annee, start, end, account_number):
     workbook = _workbook_bytes()
     sheet, header = _new_sheet(
         workbook, "Grand livre", f"Grand livre — {account['compte']} {account['libelle']}",
-        f"{_subtitle(entreprise, annee)} | Du {start or 'début'} au {end or 'fin'}",
+        f"{_subtitle(entreprise, annee)} | Du {_format_report_date(start)} au {_format_report_date(end)}",
         ["Date", "N° pièce", "Libellé", "Débit (DZD)", "Crédit (DZD)", "Solde (DZD)"],
+        [
+            ("Entreprise", entreprise.nom),
+            ("Exercice", annee or "Tous"),
+            (
+                "Période",
+                f"Du {start and _format_report_date(start) or 'début'} "
+                f"au {end and _format_report_date(end) or 'fin'}",
+            ),
+            ("Compte", f"{account['compte']} — {account['libelle']}"),
+            ("Solde final", account["solde_final"]),
+        ],
     )
     for index, movement in enumerate(account["mouvements"], start=header + 1):
         _add_row(sheet, index, [
             date.fromisoformat(movement["date"]), movement["numero_piece"], movement["libelle"],
             movement["debit"], movement["credit"], movement["solde"],
         ], (4, 5, 6))
-    _finish_sheet(sheet, header, [16, 20, 48, 20, 20, 22], header + len(account["mouvements"]))
+    _add_row(
+        sheet, header + len(account["mouvements"]) + 1,
+        ["", "", "SOLDE FINAL", "", "", account["solde_final"]],
+        (6,), "total",
+    )
+    _finish_sheet(sheet, header, [16, 20, 48, 20, 20, 22], header + len(account["mouvements"]) + 1)
     return _response(workbook, f"grand-livre-{account['compte']}-{annee or 'tous'}.xlsx")
 
 
@@ -424,6 +554,7 @@ def export_bilan(entreprise, annee):
     sheet, header = _new_sheet(
         workbook, "Actif", "Bilan — Actif", subtitle,
         ["Rubrique", "Note", f"Exercice {current_year} — Brut (DZD)", f"Exercice {current_year} — Amort.-Prov. (DZD)", f"Exercice {current_year} — Net (DZD)", f"Exercice {current_year - 1} — Net (DZD)"],
+        _company_details(entreprise) + _statut_details(current_year),
     )
     for index, item in enumerate(actif_rows, start=header + 1):
         _add_row(sheet, index, [
@@ -440,6 +571,7 @@ def export_bilan(entreprise, annee):
     sheet, header = _new_sheet(
         workbook, "Passif", "Bilan — Passif", subtitle,
         ["Rubrique", "Note", f"Exercice {current_year} (DZD)", f"Exercice {current_year - 1} (DZD)"],
+        _company_details(entreprise) + _statut_details(current_year),
     )
     for index, item in enumerate(passif_rows, start=header + 1):
         _add_row(sheet, index, [

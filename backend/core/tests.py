@@ -307,6 +307,11 @@ class ExcelReportExportTests(APITestCase):
         self.client.force_authenticate(user)
         self.entreprise = Entreprise.objects.create(
             nom="Excel Reports",
+            activite="Commerce",
+            adresse="12 rue des Fleurs",
+            nin="NIN-01",
+            nif="NIF-02",
+            nis="RC-03",
             date_creation=date(2025, 1, 1),
             exercice_comptable="2025",
             accountant=user,
@@ -382,16 +387,78 @@ class ExcelReportExportTests(APITestCase):
         self.assertIn(".xlsx", response["Content-Disposition"])
         return load_workbook(BytesIO(response.content), data_only=True)
 
+    def _header_row(self, sheet, label):
+        return next(
+            row for row in range(1, sheet.max_row + 1)
+            if sheet.cell(row, 1).value == label
+        )
+
+    def _metadata(self, sheet, header_row):
+        return {
+            sheet.cell(row, 1).value: sheet.cell(row, 2).value
+            for row in range(4, header_row - 1)
+            if sheet.cell(row, 1).value
+        }
+
+    def test_long_company_details_are_wrapped_in_wide_metadata_cells(self):
+        self.entreprise.adresse = "Long address information " * 8
+        self.entreprise.save(update_fields=["adresse"])
+
+        sheet = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=nature"
+        )["Compte de résultat"]
+        address_row = next(
+            row for row in range(4, sheet.max_row + 1)
+            if sheet.cell(row, 1).value == "Adresse"
+        )
+
+        self.assertEqual(sheet.cell(address_row, 2).value, self.entreprise.adresse)
+        self.assertIn(f"B{address_row}:D{address_row}", {
+            str(merged_range) for merged_range in sheet.merged_cells.ranges
+        })
+        self.assertTrue(sheet.cell(address_row, 2).alignment.wrap_text)
+        self.assertEqual(sheet.cell(address_row, 2).font.sz, 10)
+        self.assertGreater(sheet.row_dimensions[address_row].height, 28)
+
     def test_balance_export_has_numeric_account_rows_and_balanced_totals(self):
         sheet = self._workbook(
             f"/api/entreprises/{self.entreprise.id}/balance/export/?annee=2026"
         )["Balance"]
-        account_rows = {sheet.cell(row, 2).value: row for row in range(5, sheet.max_row + 1)}
-        self.assertEqual(sheet.cell(account_rows["607"], 4).value, 40)
-        self.assertEqual(sheet.cell(account_rows["401"], 5).value, 40)
+        header = self._header_row(sheet, "Compte")
+        account_rows = {
+            sheet.cell(row, 1).value: row
+            for row in range(header + 1, sheet.max_row + 1)
+        }
+        self.assertEqual(sheet.cell(account_rows["607"], 3).value, 40)
+        self.assertEqual(sheet.cell(account_rows["401"], 4).value, 40)
+        self.assertEqual(sheet.cell(sheet.max_row, 3).value, 145)
         self.assertEqual(sheet.cell(sheet.max_row, 4).value, 145)
-        self.assertEqual(sheet.cell(sheet.max_row, 5).value, 145)
-        self.assertEqual(sheet.freeze_panes, "A5")
+        self.assertEqual(sheet.freeze_panes, f"A{header + 1}")
+        self.assertEqual(
+            [sheet.cell(header, column).value for column in range(1, 7)],
+            ["Compte", "Libellé", "Débit (DZD)", "Crédit (DZD)", "Solde débiteur (DZD)", "Solde créditeur (DZD)"],
+        )
+        metadata = self._metadata(sheet, header)
+        self.assertEqual(metadata["Entreprise"], "Excel Reports")
+        self.assertEqual(metadata["Exercice"], 2026)
+        self.assertTrue(any(
+            value and value.startswith("Classe 6 —")
+            for value in [
+                sheet.cell(row, 1).value
+                for row in range(header + 1, sheet.max_row)
+            ]
+        ))
+        self.assertFalse(sheet.sheet_view.showGridLines)
+        self.assertEqual(sheet.sheet_view.zoomScale, 90)
+        workbook_view = sheet.parent.views[0]
+        self.assertTrue(workbook_view.showHorizontalScroll)
+        self.assertTrue(workbook_view.showVerticalScroll)
+        self.assertEqual(sheet["A1"].fill.fgColor.rgb[-6:], "17365D")
+        self.assertEqual(sheet.cell(header, 1).fill.fgColor.rgb[-6:], "24476B")
+        self.assertEqual(sheet.cell(account_rows["607"], 3).number_format, "#,##0.00;[Red](#,##0.00);-")
+        self.assertEqual(sheet.print_title_rows, f"$1:${header}")
+        self.assertEqual(sheet.page_setup.orientation, "landscape")
 
     def test_income_statement_export_matches_current_and_prior_year_calculations(self):
         workbook = self._workbook(
@@ -399,24 +466,40 @@ class ExcelReportExportTests(APITestCase):
             "?annee=2026&presentation=nature"
         )
         sheet = workbook["Compte de résultat"]
+        header = self._header_row(sheet, "Rubriques")
         rows = {
             sheet.cell(row, 1).value: row
-            for row in range(5, sheet.max_row + 1)
+            for row in range(header + 1, sheet.max_row + 1)
         }
-        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 2).value, 100)
-        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 3).value, 80)
-        self.assertEqual(sheet.cell(rows["X - RÉSULTAT NET DE L'EXERCICE"], 2).value, 60)
+        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 3).value, 100)
+        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 4).value, 80)
+        self.assertEqual(sheet.cell(rows["X - RÉSULTAT NET DE L'EXERCICE"], 3).value, 60)
+        self.assertEqual(
+            [sheet.cell(header, column).value for column in range(1, 5)],
+            ["Rubriques", "Note", "Exercice 2026 (DZD)", "Exercice 2025 (DZD)"],
+        )
+        metadata = self._metadata(sheet, header)
+        self.assertEqual(metadata["Désignation de l'entreprise"], "Excel Reports")
+        self.assertEqual(metadata["Activité"], "Commerce")
+        self.assertEqual(metadata["Adresse"], "12 rue des Fleurs")
+        self.assertEqual(metadata["N° Article"], "NIN-01")
+        self.assertEqual(metadata["N° NIF"], "NIF-02")
+        self.assertEqual(metadata["N° RC"], "RC-03")
+        self.assertEqual(metadata["Édition"], "ÉDITION PROVISOIRE")
+        self.assertEqual(metadata["La période"], "Du : 01/01/2026 au : 31/12/2026")
+        self.assertIn("Édition du", metadata)
 
         function_sheet = self._workbook(
             f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
             "?annee=2026&presentation=fonction"
         )["Compte de résultat"]
+        function_header = self._header_row(function_sheet, "Rubriques")
         function_rows = {
             function_sheet.cell(row, 1).value: row
-            for row in range(5, function_sheet.max_row + 1)
+            for row in range(function_header + 1, function_sheet.max_row + 1)
         }
         self.assertEqual(
-            function_sheet.cell(function_rows["MARGE BRUTE"], 2).value, 60
+            function_sheet.cell(function_rows["MARGE BRUTE"], 3).value, 60
         )
 
     def test_grand_livre_export_respects_account_and_date_filters(self):
@@ -425,28 +508,39 @@ class ExcelReportExportTests(APITestCase):
             "?annee=2026&compte=512&start=2026-01-01&end=2026-01-31"
         )
         sheet = workbook["Grand livre"]
-        self.assertEqual(sheet.max_row, 5)
-        self.assertEqual(sheet.cell(5, 1).value.date(), date(2026, 1, 10))
-        self.assertEqual(sheet.cell(5, 1).number_format, "dd/mm/yyyy")
-        self.assertEqual(sheet.cell(5, 2).value, "V-2026")
-        self.assertEqual(sheet.cell(5, 4).value, 100)
-        self.assertEqual(sheet.cell(5, 6).value, 100)
+        header = self._header_row(sheet, "Date")
+        movement_row = header + 1
+        self.assertEqual(sheet.cell(movement_row, 1).value.date(), date(2026, 1, 10))
+        self.assertEqual(sheet.cell(movement_row, 1).number_format, "dd/mm/yyyy")
+        self.assertEqual(sheet.cell(movement_row, 2).value, "V-2026")
+        self.assertEqual(sheet.cell(movement_row, 4).value, 100)
+        self.assertEqual(sheet.cell(movement_row, 6).value, 100)
+        self.assertEqual(sheet.cell(movement_row, 4).number_format, "#,##0.00;[Red](#,##0.00);-")
+        self.assertEqual(sheet.cell(movement_row, 1).alignment.horizontal, "center")
+        metadata = self._metadata(sheet, header)
+        self.assertEqual(metadata["Entreprise"], "Excel Reports")
+        self.assertEqual(metadata["Période"], "Du 01/01/2026 au 31/01/2026")
+        self.assertEqual(metadata["Solde final"], 100)
+        self.assertEqual(sheet.cell(sheet.max_row, 3).value, "SOLDE FINAL")
+        self.assertEqual(sheet.cell(sheet.max_row, 6).value, 100)
 
     def test_bilan_export_matches_current_and_prior_year_account_balances(self):
         workbook = self._workbook(
             f"/api/entreprises/{self.entreprise.id}/bilan/export/?annee=2026"
         )
         asset_sheet = workbook["Actif"]
+        asset_header = self._header_row(asset_sheet, "Rubrique")
         asset_rows = {
             asset_sheet.cell(row, 1).value.strip(): row
-            for row in range(5, asset_sheet.max_row + 1)
+            for row in range(asset_header + 1, asset_sheet.max_row + 1)
         }
         self.assertEqual(asset_sheet.cell(asset_rows["Trésorerie"], 5).value, 100)
         self.assertEqual(asset_sheet.cell(asset_rows["Trésorerie"], 6).value, 80)
         liability_sheet = workbook["Passif"]
+        liability_header = self._header_row(liability_sheet, "Rubrique")
         liability_rows = {
             liability_sheet.cell(row, 1).value.strip(): row
-            for row in range(5, liability_sheet.max_row + 1)
+            for row in range(liability_header + 1, liability_sheet.max_row + 1)
         }
         self.assertEqual(
             liability_sheet.cell(liability_rows["Fournisseurs et comptes rattachés"], 3).value,
@@ -455,6 +549,17 @@ class ExcelReportExportTests(APITestCase):
         self.assertEqual(
             liability_sheet.cell(liability_rows["Fournisseurs et comptes rattachés"], 4).value,
             20,
+        )
+        self.assertFalse(asset_sheet.sheet_view.showGridLines)
+        self.assertEqual(asset_sheet.cell(asset_header, 1).fill.fgColor.rgb[-6:], "24476B")
+        self.assertEqual(str(asset_sheet.page_setup.paperSize), asset_sheet.PAPERSIZE_A4)
+        self.assertEqual(
+            self._metadata(asset_sheet, asset_header)["Désignation de l'entreprise"],
+            "Excel Reports",
+        )
+        self.assertEqual(
+            self._metadata(liability_sheet, liability_header)["N° RC"],
+            "RC-03",
         )
 
     def test_admin_report_configuration_changes_export_labels_and_account_mappings(self):
@@ -473,18 +578,29 @@ class ExcelReportExportTests(APITestCase):
             f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
             "?annee=2026&presentation=nature"
         )["Compte de résultat"]
-        income_labels = [income.cell(row, 1).value for row in range(5, income.max_row + 1)]
+        income_header = self._header_row(income, "Rubriques")
+        income_labels = [
+            income.cell(row, 1).value
+            for row in range(income_header + 1, income.max_row + 1)
+        ]
         self.assertIn("Ventes personnalisées", income_labels)
-        income_row = income_labels.index("Ventes personnalisées") + 5
-        self.assertEqual(income.cell(income_row, 2).value, 0)
-        self.assertEqual(income.cell(5, 1).value, "X - RÉSULTAT NET DE L'EXERCICE")
+        income_row = income_labels.index("Ventes personnalisées") + income_header + 1
+        self.assertEqual(income.cell(income_row, 3).value, 0)
+        self.assertEqual(
+            income.cell(income_header + 1, 1).value,
+            "X - RÉSULTAT NET DE L'EXERCICE",
+        )
 
         assets = self._workbook(
             f"/api/entreprises/{self.entreprise.id}/bilan/export/?annee=2026"
         )["Actif"]
-        asset_labels = [assets.cell(row, 1).value.strip() for row in range(5, assets.max_row + 1)]
+        asset_header = self._header_row(assets, "Rubrique")
+        asset_labels = [
+            assets.cell(row, 1).value.strip()
+            for row in range(asset_header + 1, assets.max_row + 1)
+        ]
         self.assertIn("Clients personnalisés", asset_labels)
-        client_row = asset_labels.index("Clients personnalisés") + 5
+        client_row = asset_labels.index("Clients personnalisés") + asset_header + 1
         self.assertEqual(assets.cell(client_row, 5).value, 105)
 
 
