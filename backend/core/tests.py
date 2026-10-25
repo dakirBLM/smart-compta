@@ -454,8 +454,9 @@ class ExcelReportExportTests(APITestCase):
         workbook_view = sheet.parent.views[0]
         self.assertTrue(workbook_view.showHorizontalScroll)
         self.assertTrue(workbook_view.showVerticalScroll)
-        self.assertEqual(sheet["A1"].fill.fgColor.rgb[-6:], "17365D")
-        self.assertEqual(sheet.cell(header, 1).fill.fgColor.rgb[-6:], "24476B")
+        self.assertEqual(sheet["A1"].fill.fgColor.rgb[-6:], "404040")
+        self.assertEqual(sheet.cell(header, 1).fill.fgColor.rgb[-6:], "E7E6E6")
+        self.assertEqual(sheet.cell(header, 1).font.color.rgb[-6:], "404040")
         self.assertEqual(sheet.cell(account_rows["607"], 3).number_format, "#,##0.00;[Red](#,##0.00);-")
         self.assertEqual(sheet.print_title_rows, f"$1:${header}")
         self.assertEqual(sheet.page_setup.orientation, "landscape")
@@ -551,7 +552,7 @@ class ExcelReportExportTests(APITestCase):
             20,
         )
         self.assertFalse(asset_sheet.sheet_view.showGridLines)
-        self.assertEqual(asset_sheet.cell(asset_header, 1).fill.fgColor.rgb[-6:], "24476B")
+        self.assertEqual(asset_sheet.cell(asset_header, 1).fill.fgColor.rgb[-6:], "E7E6E6")
         self.assertEqual(str(asset_sheet.page_setup.paperSize), asset_sheet.PAPERSIZE_A4)
         self.assertEqual(
             self._metadata(asset_sheet, asset_header)["Désignation de l'entreprise"],

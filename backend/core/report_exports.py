@@ -14,20 +14,18 @@ XLSX_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
 AMOUNT_FORMAT = '#,##0.00;[Red](#,##0.00);-'
-NAVY = "17365D"
-BLUE = "24476B"
-TEAL = "20A39E"
-TEXT = "243247"
-MUTED = "64748B"
-ALT_FILL = PatternFill("solid", fgColor="F5F8FC")
-TITLE_FILL = PatternFill("solid", fgColor=NAVY)
-HEADER_FILL = PatternFill("solid", fgColor=BLUE)
-SUBTITLE_FILL = PatternFill("solid", fgColor="EEF3F8")
-TOTAL_FILL = PatternFill("solid", fgColor="E5EFF8")
-SECTION_FILL = PatternFill("solid", fgColor="DCE6F1")
-GRID_BORDER = Border(bottom=Side(style="hair", color="D8E0E8"))
-HEADER_BORDER = Border(bottom=Side(style="medium", color=TEAL))
-TOTAL_BORDER = Border(top=Side(style="thin", color=BLUE))
+CHARCOAL = "404040"
+TEXT = "333333"
+MUTED = "666666"
+ALT_FILL = PatternFill("solid", fgColor="F7F7F7")
+TITLE_FILL = PatternFill("solid", fgColor=CHARCOAL)
+HEADER_FILL = PatternFill("solid", fgColor="E7E6E6")
+SUBTITLE_FILL = PatternFill("solid", fgColor="F2F2F2")
+TOTAL_FILL = PatternFill("solid", fgColor="F2F2F2")
+SECTION_FILL = PatternFill("solid", fgColor="E7E6E6")
+GRID_BORDER = Border(bottom=Side(style="hair", color="D9D9D9"))
+HEADER_BORDER = Border(bottom=Side(style="thin", color="A6A6A6"))
+TOTAL_BORDER = Border(top=Side(style="thin", color="808080"))
 
 
 def _export_config():
@@ -41,7 +39,7 @@ def _write_string(cell, value):
 
 def _new_sheet(workbook, name, title, subtitle, headers, details=()):
     sheet = workbook.create_sheet(name)
-    sheet.sheet_properties.tabColor = TEAL
+    sheet.sheet_properties.tabColor = "A6A6A6"
     sheet.sheet_view.showGridLines = False
     sheet.sheet_view.zoomScale = 90
     sheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
@@ -65,7 +63,7 @@ def _new_sheet(workbook, name, title, subtitle, headers, details=()):
         row_number = 4 + index
         label_cell = sheet.cell(row_number, 1)
         label_cell.value = label
-        label_cell.font = Font(name="Aptos", size=10, bold=True, color=NAVY)
+        label_cell.font = Font(name="Aptos", size=10, bold=True, color=CHARCOAL)
         label_cell.fill = SUBTITLE_FILL
         label_cell.alignment = Alignment(vertical="center", wrap_text=True)
         sheet.merge_cells(
@@ -95,7 +93,7 @@ def _new_sheet(workbook, name, title, subtitle, headers, details=()):
     for column, value in enumerate(headers, start=1):
         cell = sheet.cell(header_row, column)
         _write_string(cell, value)
-        cell.font = Font(name="Aptos", size=10, bold=True, color="FFFFFF")
+        cell.font = Font(name="Aptos", size=10, bold=True, color=CHARCOAL)
         cell.fill = HEADER_FILL
         cell.border = HEADER_BORDER
         cell.alignment = Alignment(
@@ -127,10 +125,10 @@ def _add_row(sheet, row_number, values, amount_columns=(), kind=None):
         else:
             _write_string(cell, value)
         if kind == "section":
-            cell.font = Font(name="Aptos", size=10, bold=True, color=NAVY)
+            cell.font = Font(name="Aptos", size=10, bold=True, color=CHARCOAL)
             cell.fill = SECTION_FILL
         elif kind == "total":
-            cell.font = Font(name="Aptos", size=10, bold=True, color=NAVY)
+            cell.font = Font(name="Aptos", size=10, bold=True, color=CHARCOAL)
             cell.fill = TOTAL_FILL
             cell.border = TOTAL_BORDER
     sheet.row_dimensions[row_number].height = 21
