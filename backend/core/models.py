@@ -369,21 +369,3 @@ class Facture(models.Model):
 
     def __str__(self) -> str:
         return f"Facture {self.numero_facture or self.id}"
-
-
-class ReportExportConfig(models.Model):
-    key = models.CharField(max_length=80, unique=True, default="default")
-    config = models.JSONField(
-        default=dict,
-        help_text=(
-            "JSON report layout and SCF account mappings. "
-            "Calculation formulas are deliberately fixed in code."
-        ),
-    )
-
-    class Meta:
-        verbose_name = "configuration d’export des rapports"
-        verbose_name_plural = "configuration d’export des rapports"
-
-    def __str__(self):
-        return self.key

@@ -1,19 +1,173 @@
 from django.db import migrations, models
 
-from core.models import ReportExportConfig
-from core.report_template_defaults import DEFAULT_REPORT_EXPORT_CONFIG
+DEFAULT_REPORT_EXPORT_CONFIG = {
+    "income_prefixes": {
+        "70": ["70"],
+        "60": ["60"],
+        "62": ["62"],
+        "63,64": ["63", "64"],
+        "62,63,64": ["62", "63", "64"],
+        "70,71,72,74": ["70", "71", "72", "74"],
+        "61,62": ["61", "62"],
+        "63": ["63"],
+        "64": ["64"],
+        "71": ["71"],
+        "72": ["72"],
+        "74": ["74"],
+        "75": ["75"],
+        "65": ["65"],
+        "68": ["68"],
+        "78": ["78"],
+    },
+    "income_labels": {},
+    "income_order": {
+        "fonction": [
+            "Chiffre d'affaires",
+            "Coût des ventes",
+            "MARGE BRUTE",
+            "Autres produits opérationnels",
+            "Coûts commerciaux",
+            "Charges administratives",
+            "Autres charges opérationnelles",
+            "RÉSULTAT OPÉRATIONNEL",
+            "Produits financiers",
+            "Charges financières",
+            "RÉSULTAT ORDINAIRE AVANT IMPÔT",
+            "Impôts exigibles sur les résultats ordinaires",
+            "Impôts différés sur résultats ordinaires",
+            "RÉSULTAT NET DES ACTIVITÉS ORDINAIRES",
+            "Charges extraordinaires",
+            "Produits extraordinaires",
+            "RÉSULTAT NET DE L'EXERCICE",
+            "Part dans les résultats nets des sociétés mises en équivalence",
+            "RÉSULTAT NET DE L'ENSEMBLE CONSOLIDÉ",
+            "Dont part des minoritaires",
+            "Part du groupe",
+        ],
+        "nature": [
+            "Chiffre d'affaires",
+            "Variation stocks produits finis et en cours",
+            "Production immobilisée",
+            "Subventions d'exploitation",
+            "I - PRODUCTION DE L'EXERCICE",
+            "Achats consommés",
+            "Services extérieurs et autres services",
+            "II - CONSOMMATION DE L'EXERCICE",
+            "III - VALEUR AJOUTÉE D'EXPLOITATION (I - II)",
+            "Charges de personnel",
+            "Impôts, taxes et versements assimilés",
+            "IV - EXCÉDENT BRUT D'EXPLOITATION",
+            "Autres produits opérationnels",
+            "Autres charges opérationnelles",
+            "Dotations aux amortissements et aux provisions",
+            "Reprise sur pertes de valeur et provisions",
+            "V - RÉSULTAT OPÉRATIONNEL",
+            "Produits financiers",
+            "Charges financières",
+            "VI - RÉSULTAT FINANCIER",
+            "VII - RÉSULTAT ORDINAIRE AVANT IMPÔTS (V + VI)",
+            "Impôts exigibles sur les résultats ordinaires",
+            "Impôts différés",
+            "TOTAL DES PRODUITS DES ACTIVITÉS ORDINAIRES",
+            "TOTAL DES CHARGES DES ACTIVITÉS ORDINAIRES",
+            "VIII - RÉSULTAT NET DES ACTIVITÉS ORDINAIRES",
+            "Éléments extraordinaires (produits)",
+            "Éléments extraordinaires (charges)",
+            "IX - RÉSULTAT EXTRAORDINAIRE",
+            "X - RÉSULTAT NET DE L'EXERCICE",
+            "Part dans les résultats nets des sociétés mises en équivalence",
+            "XI - RÉSULTAT NET DE L'ENSEMBLE CONSOLIDÉ",
+            "Dont part des minoritaires",
+            "Part du groupe",
+        ],
+    },
+    "bilan": {
+        "non_current_assets": [
+            {"label": "Écart d’acquisition (ou goodwill)", "prefixes": ["207"], "provisionPrefixes": ["2807", "2907"]},
+            {"label": "Immobilisations incorporelles", "prefixes": ["20"], "exclusions": ["207"], "provisionPrefixes": ["280", "290"], "provisionExclusions": ["2807", "2907"]},
+            {"label": "Immobilisations corporelles", "prefixes": []},
+            {"label": "Terrains", "prefixes": ["211", "221"], "indent": True},
+            {"label": "Bâtiments", "prefixes": ["213", "223"], "provisionPrefixes": ["2813", "2913", "2823"], "indent": True},
+            {"label": "Autres immobilisations corporelles", "prefixes": ["212", "215", "218"], "provisionPrefixes": ["2812", "2815", "2818", "2912", "2915", "2918"], "indent": True},
+            {"label": "Immobilisations en concession", "prefixes": ["22"], "exclusions": ["221", "223"], "provisionPrefixes": ["282", "292"], "provisionExclusions": ["2823"], "indent": True},
+            {"label": "Immobilisations en cours", "prefixes": ["23"], "provisionPrefixes": ["293"]},
+            {"label": "Immobilisations financières", "prefixes": []},
+            {"label": "Titres mis en équivalence", "prefixes": ["265"], "indent": True},
+            {"label": "Autres participations et créances rattachées", "prefixes": ["26"], "exclusions": ["265", "269"], "provisionPrefixes": ["269", "296"], "indent": True},
+            {"label": "Autres titres immobilisés", "prefixes": ["271", "272", "273"], "provisionPrefixes": ["297"]},
+            {"label": "Prêts et autres actifs financiers non courants", "prefixes": ["274", "275", "276"], "provisionPrefixes": ["279", "298"]},
+            {"label": "Impôts différés actif", "prefixes": ["133"]},
+        ],
+        "current_assets": [
+            {"label": "Stocks et en-cours", "prefixes": ["30", "31", "32", "33", "34", "35", "36", "37", "38"], "provisionPrefixes": ["39"]},
+            {"label": "Créances et emplois assimilés", "prefixes": []},
+            {"label": "Clients", "prefixes": ["41"], "exclusions": ["419"], "provisionPrefixes": ["491"], "indent": True},
+            {"label": "Autres débiteurs", "prefixes": ["409", "42", "43"], "indent": True},
+            {"label": "Impôts et assimilés", "prefixes": ["44"], "indent": True},
+            {"label": "Autres créances et emplois assimilés", "prefixes": ["45", "46", "47", "486"], "provisionPrefixes": ["495", "496", "498"], "indent": True},
+            {"label": "Disponibilités et assimilés", "prefixes": []},
+            {"label": "Placements et autres actifs financiers courants", "prefixes": ["50", "52"], "exclusions": ["509"], "provisionPrefixes": ["509"], "indent": True},
+            {"label": "Trésorerie", "prefixes": ["51", "53", "54", "58"], "exclusions": ["519"], "provisionPrefixes": ["591", "594"], "indent": True},
+        ],
+        "equity": [
+            {"label": "Capital émis", "prefixes": ["101"], "signed": True, "indent": True},
+            {"label": "Capital non appelé", "prefixes": ["109"], "signed": True, "indent": True},
+            {"label": "Primes et réserves /(Réserves consolidées(1))", "prefixes": ["103", "106"], "signed": True, "indent": True},
+            {"label": "Écarts de réévaluation", "prefixes": ["104", "105"], "signed": True, "indent": True},
+            {"label": "Écart d’équivalence (1)", "prefixes": ["107"], "signed": True, "indent": True},
+            {"label": "Résultat net /(Résultat net part du groupe /(1))", "prefixes": ["12"], "signed": True, "indent": True},
+            {"label": "Autres capitaux propres - Report à nouveau", "prefixes": ["11", "13", "14", "19"], "exclusions": ["133", "134"], "signed": True, "indent": True},
+            {"label": "Part de la société consolidante (1)", "prefixes": [], "signed": True, "indent": True},
+            {"label": "Part des minoritaires (1)", "prefixes": [], "signed": True, "indent": True},
+        ],
+        "non_current_liabilities": [
+            {"label": "Emprunts et dettes financières", "prefixes": ["16", "17"], "indent": True},
+            {"label": "Impôts (différés et provisionnés)", "prefixes": ["134", "155"], "indent": True},
+            {"label": "Autres dettes non courantes", "prefixes": ["18"], "indent": True},
+            {"label": "Provisions et produits constatés d’avance", "prefixes": ["15"], "exclusions": ["155"], "indent": True},
+        ],
+        "current_liabilities": [
+            {"label": "Fournisseurs et comptes rattachés", "prefixes": ["40"], "exclusions": ["409"], "indent": True},
+            {"label": "Impôts", "prefixes": ["44"], "indent": True},
+            {"label": "Autres dettes", "prefixes": ["41", "42", "43", "45", "46", "47", "48"], "indent": True},
+            {"label": "Trésorerie Passif", "prefixes": ["51"], "indent": True},
+        ],
+        "labels": {
+            "ACTIF NON COURANTS": "ACTIF NON COURANTS",
+            "TOTAL ACTIF NON COURANT": "TOTAL ACTIF NON COURANT",
+            "ACTIF COURANT": "ACTIF COURANT",
+            "TOTAL ACTIF COURANT": "TOTAL ACTIF COURANT",
+            "TOTAL GÉNÉRAL ACTIF": "TOTAL GÉNÉRAL ACTIF",
+            "CAPITAUX PROPRES": "CAPITAUX PROPRES",
+            "TOTAL I": "TOTAL I",
+            "PASSIFS NON COURANTS": "PASSIFS NON COURANTS",
+            "TOTAL PASSIFS NON COURANTS II": "TOTAL PASSIFS NON COURANTS II",
+            "PASSIFS COURANTS": "PASSIFS COURANTS",
+            "TOTAL PASSIFS COURANTS III": "TOTAL PASSIFS COURANTS III",
+            "TOTAL GÉNÉRAL PASSIF": "TOTAL GÉNÉRAL PASSIF",
+        },
+    },
+}
 
 
 def create_default_report_export_config(apps, schema_editor):
+    report_export_config = apps.get_model("core", "ReportExportConfig")
     connection = schema_editor.connection
-    table_name = ReportExportConfig._meta.db_table
+    table_name = report_export_config._meta.db_table
     if table_name not in connection.introspection.table_names():
-        schema_editor.create_model(ReportExportConfig)
+        schema_editor.create_model(report_export_config)
 
-    ReportExportConfig.objects.using(connection.alias).get_or_create(
+    report_export_config.objects.using(connection.alias).get_or_create(
         key="default",
         defaults={"config": DEFAULT_REPORT_EXPORT_CONFIG},
     )
+
+
+def remove_default_report_export_config(apps, schema_editor):
+    report_export_config = apps.get_model("core", "ReportExportConfig")
+    connection = schema_editor.connection
+    if report_export_config._meta.db_table in connection.introspection.table_names():
+        schema_editor.delete_model(report_export_config)
 
 
 class Migration(migrations.Migration):
@@ -23,12 +177,7 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.SeparateDatabaseAndState(
-            database_operations=[
-                migrations.RunPython(
-                    create_default_report_export_config,
-                    migrations.RunPython.noop,
-                ),
-            ],
+            database_operations=[],
             state_operations=[
                 migrations.CreateModel(
                     name="ReportExportConfig",
@@ -60,5 +209,9 @@ class Migration(migrations.Migration):
                     },
                 ),
             ],
+        ),
+        migrations.RunPython(
+            create_default_report_export_config,
+            remove_default_report_export_config,
         ),
     ]

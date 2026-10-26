@@ -14,7 +14,6 @@ from rest_framework.test import APITestCase
 from openpyxl import load_workbook
 
 from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
-from .models import ReportExportConfig
 from .account_helpers import apply_scf_subaccounts
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction
@@ -562,48 +561,6 @@ class ExcelReportExportTests(APITestCase):
             self._metadata(liability_sheet, liability_header)["N° RC"],
             "RC-03",
         )
-
-    def test_admin_report_configuration_changes_export_labels_and_account_mappings(self):
-        settings = ReportExportConfig.objects.get(key="default")
-        settings.config["income_labels"] = {"Chiffre d'affaires": "Ventes personnalisées"}
-        settings.config["income_prefixes"]["70"] = ["72"]
-        settings.config["income_order"]["nature"] = [
-            "X - RÉSULTAT NET DE L'EXERCICE",
-            "Chiffre d'affaires",
-        ]
-        settings.config["bilan"]["current_assets"][2]["label"] = "Clients personnalisés"
-        settings.config["bilan"]["current_assets"][2]["prefixes"] = ["512"]
-        settings.save(update_fields=["config"])
-
-        income = self._workbook(
-            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
-            "?annee=2026&presentation=nature"
-        )["Compte de résultat"]
-        income_header = self._header_row(income, "Rubriques")
-        income_labels = [
-            income.cell(row, 1).value
-            for row in range(income_header + 1, income.max_row + 1)
-        ]
-        self.assertIn("Ventes personnalisées", income_labels)
-        income_row = income_labels.index("Ventes personnalisées") + income_header + 1
-        self.assertEqual(income.cell(income_row, 3).value, 0)
-        self.assertEqual(
-            income.cell(income_header + 1, 1).value,
-            "X - RÉSULTAT NET DE L'EXERCICE",
-        )
-
-        assets = self._workbook(
-            f"/api/entreprises/{self.entreprise.id}/bilan/export/?annee=2026"
-        )["Actif"]
-        asset_header = self._header_row(assets, "Rubrique")
-        asset_labels = [
-            assets.cell(row, 1).value.strip()
-            for row in range(asset_header + 1, assets.max_row + 1)
-        ]
-        self.assertIn("Clients personnalisés", asset_labels)
-        client_row = asset_labels.index("Clients personnalisés") + asset_header + 1
-        self.assertEqual(assets.cell(client_row, 5).value, 105)
-
 
 class BankStatementImportTests(APITestCase):
     def setUp(self):

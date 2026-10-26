@@ -7,8 +7,8 @@ from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 
-from .models import ReportExportConfig
 from .reports import build_balance, build_compte_resultat, build_grand_livre
+from .report_template_defaults import DEFAULT_REPORT_EXPORT_CONFIG
 
 XLSX_CONTENT_TYPE = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -26,10 +26,6 @@ SECTION_FILL = PatternFill("solid", fgColor="E7E6E6")
 GRID_BORDER = Border(bottom=Side(style="hair", color="D9D9D9"))
 HEADER_BORDER = Border(bottom=Side(style="thin", color="A6A6A6"))
 TOTAL_BORDER = Border(top=Side(style="thin", color="808080"))
-
-
-def _export_config():
-    return ReportExportConfig.objects.get(key="default").config
 
 
 def _write_string(cell, value):
@@ -407,11 +403,10 @@ def _sum_liability_rows(rows):
     }
 
 
-def _bilan_data(entreprise, year, config):
+def _bilan_data(entreprise, year, layout):
     current_data = build_balance(entreprise, year)
     previous_data = build_balance(entreprise, year - 1)
     current, previous = _balance_accounts(current_data), _balance_accounts(previous_data)
-    layout = config["bilan"]
 
     non_current = _asset_rows(current, previous, layout["non_current_assets"])
     current_assets = _asset_rows(current, previous, layout["current_assets"])
@@ -484,7 +479,7 @@ def export_compte_resultat(entreprise, annee, presentation):
         presentation = "fonction"
     current = build_compte_resultat(entreprise, annee)
     previous = build_compte_resultat(entreprise, annee - 1) if annee is not None else current
-    config = _export_config()
+    config = DEFAULT_REPORT_EXPORT_CONFIG
     rows = _income_statement_rows(current, previous, presentation, config)
     workbook = _workbook_bytes()
     sheet, header = _new_sheet(
@@ -541,18 +536,17 @@ def export_grand_livre(entreprise, annee, start, end, account_number):
 
 
 def export_bilan(entreprise, annee):
-    current_year = annee
-    config = _export_config()["bilan"]
-    labels = config["labels"]
+    layout = DEFAULT_REPORT_EXPORT_CONFIG["bilan"]
+    labels = layout["labels"]
     actif_rows, actif_totals, passif_rows, passif_totals = _bilan_data(
-        entreprise, current_year, {"bilan": config}
+        entreprise, annee, layout
     )
     workbook = _workbook_bytes()
-    subtitle = _subtitle(entreprise, current_year)
+    subtitle = _subtitle(entreprise, annee)
     sheet, header = _new_sheet(
         workbook, "Actif", "Bilan — Actif", subtitle,
-        ["Rubrique", "Note", f"Exercice {current_year} — Brut (DZD)", f"Exercice {current_year} — Amort.-Prov. (DZD)", f"Exercice {current_year} — Net (DZD)", f"Exercice {current_year - 1} — Net (DZD)"],
-        _company_details(entreprise) + _statut_details(current_year),
+        ["Rubrique", "Note", f"Exercice {annee} — Brut (DZD)", f"Exercice {annee} — Amort.-Prov. (DZD)", f"Exercice {annee} — Net (DZD)", f"Exercice {annee - 1} — Net (DZD)"],
+        _company_details(entreprise) + _statut_details(annee),
     )
     for index, item in enumerate(actif_rows, start=header + 1):
         _add_row(sheet, index, [
@@ -568,8 +562,8 @@ def export_bilan(entreprise, annee):
 
     sheet, header = _new_sheet(
         workbook, "Passif", "Bilan — Passif", subtitle,
-        ["Rubrique", "Note", f"Exercice {current_year} (DZD)", f"Exercice {current_year - 1} (DZD)"],
-        _company_details(entreprise) + _statut_details(current_year),
+        ["Rubrique", "Note", f"Exercice {annee} (DZD)", f"Exercice {annee - 1} (DZD)"],
+        _company_details(entreprise) + _statut_details(annee),
     )
     for index, item in enumerate(passif_rows, start=header + 1):
         _add_row(sheet, index, [
@@ -581,4 +575,4 @@ def export_bilan(entreprise, annee):
         labels["TOTAL GÉNÉRAL PASSIF"], "", passif_totals["current"], passif_totals["previous"],
     ], (3, 4), "total")
     _finish_sheet(sheet, header, [58, 12, 25, 25], row)
-    return _response(workbook, f"bilan-{current_year}.xlsx")
+    return _response(workbook, f"bilan-{annee}.xlsx")
