@@ -126,9 +126,6 @@ WEBHOOK_URL=http://localhost:8000/api/scanner/mock-webhook/
 - Rapports exportables en Excel (.xlsx) : Compte de résultat, Grand livre,
   Balance et Bilan. Les fichiers peuvent être ouverts dans Excel, Google Sheets
   ou Apple Numbers. Les rapports restent également imprimables/exportables en PDF.
-- Les administrateurs peuvent modifier les libellés, l’ordre des rubriques et
-  les correspondances de comptes SCF des exports dans Django Admin
-  (`ReportExportConfig`). Les formules comptables restent fixes et testées.
 - Le client ne voit que ses propres factures ; le comptable voit tous ses clients.
 - Interface responsive (les clients utilisent un téléphone).
 ```
