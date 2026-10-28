@@ -1,8 +1,9 @@
 "use client";
 
-import { Camera } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { AppShell } from "@/components/AppShell";
+import { ArrowLeft, Camera, LogOut } from "lucide-react";
+import Link from "next/link";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useRef, useState } from "react";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -10,8 +11,26 @@ import { useI18n } from "@/lib/i18n-context";
 import { User } from "@/lib/types";
 
 export default function ProfilePage() {
+  return (
+    <Suspense fallback={<div className="studio-ui min-h-screen bg-[#f5f7f5]" />}>
+      <ProfileScreen />
+    </Suspense>
+  );
+}
+
+function ProfileScreen() {
   const { t } = useI18n();
-  const { user, refreshUser } = useAuth();
+  const params = useSearchParams();
+  const entrepriseId = Number(params.get("entreprise"));
+  const year = Number(params.get("annee"));
+  const fromCompany = Number.isInteger(entrepriseId) && entrepriseId > 0;
+  const backHref = fromCompany
+    ? `/accountant/entreprises/${entrepriseId}/dashboard${
+        Number.isInteger(year) && year > 0 ? `?annee=${year}` : ""
+      }`
+    : "/accountant/entreprises";
+  const backLabel = fromCompany ? t("dashboard") : t("entreprises");
+  const { user, refreshUser, logout } = useAuth();
   const fileRef = useRef<HTMLInputElement>(null);
 
   const [username, setUsername] = useState("");
@@ -63,9 +82,8 @@ export default function ProfilePage() {
     }
   }
 
-  return (
-    <AppShell title={t("settings")}>
-      <Card className="mx-auto max-w-lg">
+  const form = (
+      <Card className="mx-auto max-w-lg border-[#e5e9e6] shadow-[0_4px_18px_rgba(27,55,46,0.04)]">
         <h2 className="mb-4 text-lg font-bold text-brand">Mon profil</h2>
         <form onSubmit={save} className="space-y-4">
           {/* Photo */}
@@ -124,6 +142,31 @@ export default function ProfilePage() {
           </Button>
         </form>
       </Card>
-    </AppShell>
+  );
+
+  return (
+    <div className="studio-ui min-h-screen bg-[radial-gradient(circle_at_85%_12%,rgba(104,151,136,0.08),transparent_27%),#f8faf8] px-5 py-8 sm:px-[5vw]">
+      <div className="mx-auto max-w-lg">
+        <Link
+          href={backHref}
+          className="mb-6 inline-flex items-center gap-1.5 text-sm font-medium text-[#214f40]"
+        >
+          <ArrowLeft size={16} />
+          {backLabel}
+        </Link>
+        <p className="mb-4 text-xs font-bold uppercase tracking-[0.12em] text-[#285d4d]">
+          {t("settings")}
+        </p>
+        {form}
+        <button
+          type="button"
+          onClick={logout}
+          className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-xl border border-[#e5e9e6] bg-white text-sm font-semibold text-[#214f40] hover:border-[#c9d5d0]"
+        >
+          <LogOut size={16} />
+          {t("logout")}
+        </button>
+      </div>
+    </div>
   );
 }

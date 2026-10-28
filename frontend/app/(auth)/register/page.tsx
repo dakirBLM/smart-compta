@@ -1,11 +1,10 @@
 "use client";
 
-import { Camera, Lock, Mail, Phone, Sparkles, User } from "lucide-react";
+import { ArrowLeft, Camera } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageToggle";
-import { Button, Input, Label, Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
 
@@ -47,7 +46,7 @@ export default function RegisterPage() {
       form.append("phone", phone);
       if (photo) form.append("photo", photo);
       await register(form);
-      router.replace("/accountant/dashboard");
+      router.replace("/accountant/entreprises");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur lors de la création.");
     } finally {
@@ -55,133 +54,110 @@ export default function RegisterPage() {
     }
   }
 
+  const field =
+    "h-12 w-full rounded-2xl border border-[#e4dfd4] bg-white px-4 text-sm outline-none focus:border-[#1f3d35]";
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-brand p-4 relative overflow-hidden font-sans">
-      {/* Background ambient lighting */}
-      <div className="pointer-events-none absolute -top-40 -right-40 h-96 w-96 rounded-full bg-lime/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
+    <div className="min-h-screen bg-[#f4f1ea] text-[#171c1a]">
+      <header className="mx-auto flex h-[72px] max-w-[720px] items-center justify-between px-5">
+        <Link href="/" className="inline-flex items-center gap-2 text-sm font-medium text-[#214f40] hover:text-[#173c32]">
+          <ArrowLeft size={16} className="rtl:rotate-180" />
+          {t("back")}
+        </Link>
+        <LanguageToggle plain className="text-[#214f40]" />
+      </header>
 
-      <div className="w-full max-w-lg rounded-3xl bg-white p-8 sm:p-10 shadow-2xl relative z-10 border border-gray-100 my-8">
-        {/* Brand Header */}
-        <div className="text-center mb-6">
-          <Link href="/" className="inline-flex items-baseline gap-1.5 mb-2">
-            <span className="text-3xl font-black tracking-tight text-brand">
-              Comptia
-            </span>
-            <span className="rounded-md bg-lime px-2 py-0.5 text-xs font-black text-brand">
-              DZ
-            </span>
-          </Link>
-          <p className="text-xs text-gray-500 font-medium">
-            Création d&apos;espace Expert-Comptable
-          </p>
-        </div>
+      <main className="mx-auto flex w-full max-w-[420px] flex-col px-5 pb-16">
+        <Link href="/" className="mb-8 flex items-baseline gap-1.5">
+          <span className="text-[28px] font-semibold tracking-tight">Comptia</span>
+          <span className="rounded-md bg-[#d7ef6a] px-1.5 py-0.5 text-[10px] font-bold text-[#173c32]">DZ</span>
+        </Link>
+        <h1 className="text-3xl font-semibold tracking-[-0.03em]">{t("footerSignup")}</h1>
+        <p className="mt-2 text-sm leading-relaxed text-[#5e6a65]">{t("heroTitle")}</p>
 
-        <form onSubmit={onSubmit} className="space-y-4">
-          {/* Photo */}
-          <div className="flex flex-col items-center mb-2">
-            <input
-              ref={fileRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={onPhoto}
-            />
+        <form onSubmit={onSubmit} className="mt-8 space-y-4">
+          <div className="flex flex-col items-center">
+            <input ref={fileRef} type="file" accept="image/*" className="hidden" onChange={onPhoto} />
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
-              className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border-2 border-dashed border-gray-300 text-gray-400 hover:border-brand hover:bg-lime-light/30 transition-all ring-2 ring-lime/20"
+              className="flex h-20 w-20 items-center justify-center overflow-hidden rounded-full border border-dashed border-[#cfc6b6] bg-white text-[#5e6a65] hover:border-[#1f3d35]"
             >
               {preview ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={preview} alt="photo" className="h-full w-full object-cover" />
+                <img src={preview} alt="" className="h-full w-full object-cover" />
               ) : (
-                <Camera size={24} className="text-gray-400" />
+                <Camera size={22} />
               )}
             </button>
-            <span className="mt-1.5 text-xs text-gray-400">Photo de profil (optionnel)</span>
+            <span className="mt-2 text-xs text-[#5e6a65]">Photo de profil</span>
           </div>
 
-          <div>
-            <Label>{t("nom")} d&apos;utilisateur *</Label>
-            <div className="relative">
-              <User size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <Input
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                autoComplete="username"
-                placeholder="Ex: cabinet_alger"
-                className="pl-9"
-                required
-              />
-            </div>
-          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">{t("nom")}</span>
+            <input
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+              required
+              className={field}
+            />
+          </label>
 
-          <div>
-            <Label>{t("password")} *</Label>
-            <div className="relative">
-              <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <Input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                autoComplete="new-password"
-                placeholder="••••••••"
-                className="pl-9"
-                required
-              />
-            </div>
-          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">{t("password")}</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="new-password"
+              required
+              className={field}
+            />
+          </label>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <Label>Email</Label>
-              <div className="relative">
-                <Mail size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                <Input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="contact@cabinet.dz"
-                  className="pl-9"
-                />
-              </div>
-            </div>
-            <div>
-              <Label>Téléphone</Label>
-              <div className="relative">
-                <Phone size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-                <Input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="0550 00 00 00"
-                  className="pl-9"
-                />
-              </div>
-            </div>
-          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">Email</span>
+            <input
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              autoComplete="email"
+              className={field}
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">Téléphone</span>
+            <input
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              autoComplete="tel"
+              className={field}
+            />
+          </label>
 
           {error && (
-            <div className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-semibold text-rose-700">
+            <p className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert">
               {error}
-            </div>
+            </p>
           )}
 
-          <Button type="submit" variant="primary" className="w-full font-bold py-3 text-base rounded-xl mt-2" disabled={submitting}>
-            {submitting ? <Spinner className="h-5 w-5 text-brand" /> : "Créer mon compte expert-comptable"}
-          </Button>
+          <button
+            type="submit"
+            disabled={submitting}
+            className="h-12 w-full rounded-full bg-[#1f3d35] text-sm font-semibold text-white hover:bg-[#173c32] disabled:opacity-60"
+          >
+            {submitting ? "…" : t("footerSignup")}
+          </button>
         </form>
 
-        <p className="mt-6 text-center text-xs text-gray-500">
-          Déjà inscrit ?{" "}
-          <Link href="/login" className="font-bold text-brand hover:text-emerald-700 underline">
+        <p className="mt-8 text-sm text-[#5e6a65]">
+          <Link href="/login" className="font-semibold text-[#214f40] hover:text-[#173c32]">
             {t("signIn")}
           </Link>
         </p>
-      </div>
-
-      <LanguageToggle className="fixed bottom-4 right-4 bg-white/90 text-brand shadow-lg backdrop-blur-sm rounded-full px-3 py-1.5" />
+      </main>
     </div>
   );
 }
-

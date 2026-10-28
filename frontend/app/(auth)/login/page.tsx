@@ -1,150 +1,117 @@
 "use client";
 
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowRight, Bot, Lock, Sparkles, User, UserCheck } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { LanguageToggle } from "@/components/LanguageToggle";
-import { Button, Input, Label, Spinner } from "@/components/ui";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
 
-const schema = z.object({
-  username: z.string().min(1, "Veuillez saisir votre nom"),
-  password: z.string().min(1, "Veuillez saisir votre mot de passe"),
-});
-type FormValues = z.infer<typeof schema>;
+type FormValues = { username: string; password: string };
 
 export default function LoginPage() {
   const { t } = useI18n();
   const { login } = useAuth();
   const router = useRouter();
   const [error, setError] = useState("");
+
+  const schema = useMemo(
+    () =>
+      z.object({
+        username: z.string().min(1, t("loginNameRequired")),
+        password: z.string().min(1, t("loginPasswordRequired")),
+      }),
+    [t]
+  );
+
   const {
     register,
     handleSubmit,
-    setValue,
-    formState: { isSubmitting },
+    formState: { errors, isSubmitting },
   } = useForm<FormValues>({ resolver: zodResolver(schema) });
+
+  function go(role: "accountant" | "client") {
+    router.replace(role === "accountant" ? "/accountant/entreprises" : "/client/dashboard");
+  }
 
   async function onSubmit(values: FormValues) {
     setError("");
     try {
       const user = await login(values.username, values.password);
-      router.replace(
-        user.role === "accountant" ? "/accountant/dashboard" : "/client/dashboard"
-      );
+      go(user.role === "accountant" ? "accountant" : "client");
     } catch {
       setError(t("loginError"));
     }
   }
 
-  function fillDemo(user: string, pass: string) {
-    setValue("username", user);
-    setValue("password", pass);
-  }
+  const busy = isSubmitting;
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-brand p-4 relative overflow-hidden font-sans">
-      {/* Background ambient lighting */}
-      <div className="pointer-events-none absolute -top-40 -right-40 h-96 w-96 rounded-full bg-lime/10 blur-3xl" />
-      <div className="pointer-events-none absolute -bottom-40 -left-40 h-96 w-96 rounded-full bg-emerald-500/10 blur-3xl" />
+    <div className="min-h-screen bg-[#f4f1ea] text-[#171c1a]">
+      <header className="mx-auto flex h-[72px] max-w-[720px] items-center justify-between px-5">
+        <Link href="/" className="inline-flex items-center gap-2 text-sm font-medium text-[#214f40] hover:text-[#173c32]">
+          <ArrowLeft size={16} className="rtl:rotate-180" />
+          {t("back")}
+        </Link>
+        <LanguageToggle plain className="text-[#214f40]" />
+      </header>
 
-      <div className="w-full max-w-md rounded-3xl bg-white p-8 sm:p-10 shadow-2xl relative z-10 border border-gray-100">
-        {/* Brand Header */}
-        <div className="text-center mb-8">
-          <Link href="/" className="inline-flex items-baseline gap-1.5 mb-2">
-            <span className="text-3xl font-black tracking-tight text-brand">
-              Comptia
-            </span>
-            <span className="rounded-md bg-lime px-2 py-0.5 text-xs font-black text-brand">
-              DZ
-            </span>
-          </Link>
-          <p className="text-xs text-gray-500 font-medium">
-            Votre comptabilité devient intelligente
-          </p>
-        </div>
+      <main className="mx-auto flex w-full max-w-[420px] flex-col px-5 pb-16">
+        <Link href="/" className="mb-8 flex items-baseline gap-1.5">
+          <span className="text-[28px] font-semibold tracking-tight">Comptia</span>
+          <span className="rounded-md bg-[#d7ef6a] px-1.5 py-0.5 text-[10px] font-bold text-[#173c32]">DZ</span>
+        </Link>
+        <h1 className="text-3xl font-semibold tracking-[-0.03em]">{t("login")}</h1>
+        <p className="mt-2 text-sm leading-relaxed text-[#5e6a65]">{t("heroTitle")}</p>
 
-        {/* Form */}
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
-          <div>
-            <Label>{t("nom")}</Label>
-            <div className="relative">
-              <User size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <Input
-                {...register("username")}
-                autoComplete="username"
-                placeholder="Ex: comptable ou client"
-                className="pl-9"
-              />
-            </div>
-          </div>
+        <form onSubmit={handleSubmit(onSubmit)} className="mt-8 space-y-4">
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">{t("nom")}</span>
+            <input
+              {...register("username")}
+              autoComplete="username"
+              className="h-12 w-full rounded-2xl border border-[#e4dfd4] bg-white px-4 text-sm outline-none focus:border-[#1f3d35]"
+            />
+            {errors.username && <span className="mt-1 block text-xs text-rose-700">{errors.username.message}</span>}
+          </label>
 
-          <div>
-            <Label>{t("password")}</Label>
-            <div className="relative">
-              <Lock size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400" />
-              <Input
-                type="password"
-                {...register("password")}
-                autoComplete="current-password"
-                placeholder="••••••••"
-                className="pl-9"
-              />
-            </div>
-          </div>
+          <label className="block">
+            <span className="mb-1.5 block text-sm font-medium">{t("password")}</span>
+            <input
+              type="password"
+              {...register("password")}
+              autoComplete="current-password"
+              className="h-12 w-full rounded-2xl border border-[#e4dfd4] bg-white px-4 text-sm outline-none focus:border-[#1f3d35]"
+            />
+            {errors.password && <span className="mt-1 block text-xs text-rose-700">{errors.password.message}</span>}
+          </label>
 
           {error && (
-            <div className="rounded-xl bg-rose-50 border border-rose-200 p-3 text-xs font-semibold text-rose-700">
+            <p className="rounded-2xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700" role="alert">
               {error}
-            </div>
+            </p>
           )}
 
-          <Button type="submit" variant="primary" className="w-full font-bold py-3 text-base rounded-xl" disabled={isSubmitting}>
-            {isSubmitting ? <Spinner className="h-5 w-5 text-brand" /> : t("signIn")}
-          </Button>
+          <button
+            type="submit"
+            disabled={busy}
+            className="h-12 w-full rounded-full bg-[#1f3d35] text-sm font-semibold text-white hover:bg-[#173c32] disabled:opacity-60"
+          >
+            {isSubmitting ? "…" : t("signIn")}
+          </button>
         </form>
 
-        {/* Quick Demo Fillers */}
-        <div className="mt-6 border-t border-gray-100 pt-5">
-          <div className="text-center text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2.5">
-            Comptes de Démo (1-Clic)
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              onClick={() => fillDemo("comptable", "comptable")}
-              className="flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 py-2 text-xs font-semibold text-brand hover:border-lime hover:bg-lime-light/40 transition-all"
-            >
-              <UserCheck size={14} className="text-brand" />
-              Comptable
-            </button>
-            <button
-              type="button"
-              onClick={() => fillDemo("client", "client")}
-              className="flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 bg-gray-50/80 py-2 text-xs font-semibold text-brand hover:border-lime hover:bg-lime-light/40 transition-all"
-            >
-              <Bot size={14} className="text-brand" />
-              Client
-            </button>
-          </div>
-        </div>
-
-        {/* Register link */}
-        <p className="mt-6 text-center text-xs text-gray-500">
-          Nouveau cabinet comptable ?{" "}
-          <Link href="/register" className="font-bold text-brand hover:text-emerald-700 underline">
-            Créer un compte
+        <p className="mt-8 text-sm text-[#5e6a65]">
+          {t("loginNewCabinet")}{" "}
+          <Link href="/register" className="font-semibold text-[#214f40] hover:text-[#173c32]">
+            {t("footerSignup")}
           </Link>
         </p>
-      </div>
-
-      <LanguageToggle className="fixed bottom-4 right-4 bg-white/90 text-brand shadow-lg backdrop-blur-sm rounded-full px-3 py-1.5" />
+      </main>
     </div>
   );
 }
-

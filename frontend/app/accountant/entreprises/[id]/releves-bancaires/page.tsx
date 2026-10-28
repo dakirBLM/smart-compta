@@ -178,11 +178,7 @@ export default function RelevesBancairesPage() {
       </div>
 
       {tab === "import" && id && (
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">{t("importerReleve")}</p>
-          <p className="text-xs text-gray-400">{t("formatsAcceptes")}</p>
-          <BankStatementFlow entrepriseId={id} onImported={loadHistorique} />
-        </div>
+        <BankStatementFlow entrepriseId={id} onImported={loadHistorique} />
       )}
 
       {tab === "received" && (

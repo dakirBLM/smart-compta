@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Download, ExternalLink, FileText, X } from "lucide-react";
 import { ClientShell } from "@/components/ClientShell";
+import { FileDropZone } from "@/components/FileDropZone";
 import { Button, Card, Spinner } from "@/components/ui";
 import {
   clientBankStatementSubmissions,
@@ -15,18 +16,16 @@ import { useI18n } from "@/lib/i18n-context";
 import { BankStatementSubmission, ClientEntreprise } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
 
-const ACCEPTED_FILES = ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png";
-
 export default function ClientBankStatementsPage() {
   const { t } = useI18n();
   const router = useRouter();
   const search = useSearchParams();
   const detailId = search.get("id");
-  const inputRef = useRef<HTMLInputElement>(null);
   const [entreprises, setEntreprises] = useState<ClientEntreprise[]>([]);
   const [entrepriseId, setEntrepriseId] = useState("");
   const [submissions, setSubmissions] = useState<BankStatementSubmission[]>([]);
   const [file, setFile] = useState<File | null>(null);
+  const [filePreview, setFilePreview] = useState<string | null>(null);
   const [loadingEntreprises, setLoadingEntreprises] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [sending, setSending] = useState(false);
@@ -119,6 +118,15 @@ export default function ClientBankStatementsPage() {
     };
   }, [detail?.id, previewAttempt]);
 
+  function chooseFile(next: File) {
+    setFile(next);
+    const pdf = next.type === "application/pdf" || next.name.toLowerCase().endsWith(".pdf");
+    setFilePreview(pdf ? null : URL.createObjectURL(next));
+  }
+
+  const statementIsPdf =
+    !!file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf"));
+
   async function send(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!file || !entrepriseId || sending) return;
@@ -129,7 +137,7 @@ export default function ClientBankStatementsPage() {
       const submission = await submitClientBankStatement(Number(entrepriseId), file);
       setSubmissions((current) => [submission, ...current]);
       setFile(null);
-      if (inputRef.current) inputRef.current.value = "";
+      setFilePreview(null);
       setSuccess(t("releveEnvoyeSucces"));
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erreur lors de l'envoi.");
@@ -244,7 +252,7 @@ export default function ClientBankStatementsPage() {
   return (
     <ClientShell>
       <div className="mx-auto max-w-3xl space-y-6">
-        <h1 className="text-xl font-bold text-brand">{t("relevesClient")}</h1>
+        <h1 className="text-xl font-semibold tracking-tight text-[#17221f]">{t("relevesClient")}</h1>
 
         {error && (
           <p role="alert" className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -263,38 +271,34 @@ export default function ClientBankStatementsPage() {
           <Card><p className="py-5 text-center text-sm text-gray-500">{t("aucuneEntrepriseAssociee")}</p></Card>
         ) : (
           <>
-            <Card>
-              <form onSubmit={send} className="space-y-4">
-                <label className="block space-y-1.5">
-                  <span className="text-sm font-semibold text-brand">{t("choisirEntreprise")}</span>
-                  <select
-                    value={entrepriseId}
-                    onChange={(event) => setEntrepriseId(event.target.value)}
-                    className="w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-800"
-                  >
-                    {entreprises.map((entreprise) => (
-                      <option key={entreprise.id} value={entreprise.id}>{entreprise.nom}</option>
-                    ))}
-                  </select>
-                </label>
+            <form onSubmit={send} className="mx-auto max-w-xl space-y-4">
+              <label className="block space-y-1.5">
+                <span className="text-sm font-semibold text-brand">{t("choisirEntreprise")}</span>
+                <select
+                  value={entrepriseId}
+                  onChange={(event) => setEntrepriseId(event.target.value)}
+                  className="h-10 w-full rounded-xl border border-[#e5e9e6] bg-white px-3 text-sm text-gray-800"
+                >
+                  {entreprises.map((entreprise) => (
+                    <option key={entreprise.id} value={entreprise.id}>{entreprise.nom}</option>
+                  ))}
+                </select>
+              </label>
 
-                <label className="block space-y-1.5">
-                  <span className="text-sm font-semibold text-brand">{t("importerReleve")}</span>
-                  <input
-                    ref={inputRef}
-                    type="file"
-                    accept={ACCEPTED_FILES}
-                    onChange={(event) => setFile(event.target.files?.[0] ?? null)}
-                    className="block w-full text-sm text-gray-700 file:me-3 file:rounded-md file:border-0 file:bg-brand file:px-3 file:py-2 file:font-semibold file:text-white"
-                  />
-                  <span className="block text-xs text-gray-500">{t("formatsAcceptes")}</span>
-                </label>
+              <FileDropZone
+                title={t("importerReleve")}
+                file={file}
+                preview={filePreview}
+                isPdf={statementIsPdf}
+                onFile={chooseFile}
+              />
 
+              <div className="flex justify-center">
                 <Button type="submit" disabled={!file || sending}>
                   {sending ? <Spinner className="h-4 w-4" /> : t("envoyerAuComptable")}
                 </Button>
-              </form>
-            </Card>
+              </div>
+            </form>
 
             <section className="space-y-3">
               <h2 className="text-sm font-bold uppercase text-gray-500">{t("historiqueReleves")}</h2>

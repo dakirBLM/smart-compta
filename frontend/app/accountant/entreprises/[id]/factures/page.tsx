@@ -389,11 +389,7 @@ export default function FacturesAccountantPage() {
       </div>
 
       {tab === "scanner" && id && (
-        <div className="space-y-4">
-          <p className="text-sm text-gray-500">{t("importerFacture")}</p>
-          <p className="text-xs text-gray-400">{t("formatsAcceptes")}</p>
-          <ScannerFlow entrepriseId={id} annee={annee} />
-        </div>
+        <ScannerFlow entrepriseId={id} annee={annee} />
       )}
 
       {tab === "clients" && (

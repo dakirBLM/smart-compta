@@ -1,15 +1,12 @@
 "use client";
 
-import { ClientScanner } from "@/components/ClientScanner";
-import { ClientShell } from "@/components/ClientShell";
-import { useI18n } from "@/lib/i18n-context";
+import { useRouter } from "next/navigation";
+import { useEffect } from "react";
 
 export default function ClientScannerPage() {
-  const { t } = useI18n();
-  return (
-    <ClientShell>
-      <h2 className="mb-4 text-lg font-bold text-brand">{t("prendrePhoto")}</h2>
-      <ClientScanner />
-    </ClientShell>
-  );
+  const router = useRouter();
+  useEffect(() => {
+    router.replace("/client/factures");
+  }, [router]);
+  return null;
 }
