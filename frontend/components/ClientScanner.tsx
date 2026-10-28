@@ -5,14 +5,12 @@ import {
   Camera,
   CheckCircle2,
   Circle,
-  FileText,
   Plus,
   RotateCcw,
-  Sparkles,
-  Upload,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import { CameraCapture } from "@/components/CameraCapture";
+import { FileDropZone } from "@/components/FileDropZone";
 import { Button, Card, Spinner } from "@/components/ui";
 import { api, scannerUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
@@ -44,10 +42,8 @@ const STEPS: {
   { key: "4", labelKey: "generationEcritures" },
 ];
 
-export function ClientScanner() {
+export function ClientScanner({ onSent }: { onSent?: () => void }) {
   const { t } = useI18n();
-  const inputRef = useRef<HTMLInputElement>(null);
-  const importRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<Phase>("capture");
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -74,11 +70,6 @@ export function ClientScanner() {
     const img = new Image();
     img.onload = () => setQuality(checkQuality(f, img.width, img.height));
     img.src = url;
-  }
-
-  function onPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (f) acceptFile(f);
   }
 
   async function send() {
@@ -155,6 +146,7 @@ export function ClientScanner() {
       await api.post("/api/factures/", fd);
       setResult(data);
       setPhase("success");
+      onSent?.();
     } catch (e) {
       clearInterval(timer);
       setErrors([e instanceof Error ? e.message : "Erreur inconnue."]);
@@ -266,85 +258,27 @@ export function ClientScanner() {
 
   // ---- CAPTURE ----
   return (
-    <Card className="mx-auto max-w-md text-center p-6 sm:p-8">
-      {/* Maiase chip */}
-      <div className="mb-5 flex items-center gap-3 rounded-2xl bg-lime-light/60 border border-lime/30 p-3 text-left">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/maiase.png" alt="Maiase" className="h-10 w-10 rounded-xl object-contain bg-white/80 p-0.5 shrink-0 ring-2 ring-lime" />
-        <div>
-          <div className="text-xs font-bold text-brand">Scanner mobile Maiase</div>
-          <p className="text-[11px] text-brand/80 leading-snug">
-            Cadrez bien votre reçu ou bon de commande. Les 4 coins doivent être visibles.
-          </p>
-        </div>
-      </div>
-
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
-        capture="environment"
-        className="hidden"
-        onChange={onPick}
+    <div className="mx-auto max-w-xl">
+      <FileDropZone
+        title={t("importerFacture")}
+        file={file}
+        preview={preview}
+        isPdf={isPdf}
+        onFile={acceptFile}
       />
-      <input
-        ref={importRef}
-        type="file"
-        accept=".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf"
-        className="hidden"
-        onChange={onPick}
-      />
-      {preview ? (
-        <div className="relative mb-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src={preview} alt="facture" className="mx-auto max-h-80 rounded-2xl border border-gray-200 object-contain shadow-md" />
-        </div>
-      ) : file && isPdf ? (
-        <div className="mx-auto mb-4 flex h-60 flex-col items-center justify-center rounded-2xl border-2 border-dashed border-brand/30 bg-[#F7FAF7] text-brand">
-          <div className="rounded-2xl bg-brand p-3.5 text-lime mb-2 shadow-brand-glow">
-            <FileText size={36} />
-          </div>
-          <p className="max-w-xs truncate px-4 text-xs font-bold text-brand">{file.name}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">PDF prêt pour transmission</p>
-        </div>
-      ) : (
-        <div
-          onClick={() => importRef.current?.click()}
-          className="mx-auto mb-4 flex h-60 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-gray-300 bg-[#F7FAF7] hover:border-lime hover:bg-lime-light/20 transition-all text-gray-500"
-        >
-          <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-lime-light text-brand shadow-glow-sm mb-2">
-            <Camera size={28} />
-          </div>
-          <p className="font-bold text-brand text-xs">{t("prendrePhoto")}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">Appuyez pour ouvrir l&apos;appareil photo</p>
-        </div>
-      )}
 
       {quality && !quality.ok && (
-        <div className="mb-3 rounded-xl bg-rose-50 border border-rose-200 p-2.5 text-xs font-semibold text-rose-700">
+        <p className="mb-3 mt-3 text-center text-sm text-rose-700">
           {quality.reason} {t("qualiteInsuffisante")}
-        </div>
+        </p>
       )}
 
-      <div className="flex flex-col gap-2">
-        <Button variant="primary" onClick={() => setShowCamera(true)} className="font-bold shadow-glow-sm">
-          <Camera size={16} /> Scanner (Caméra guidée)
+      <div className="mt-4 flex flex-wrap justify-center gap-2">
+        <Button variant="outline" onClick={() => setShowCamera(true)}>
+          <Camera size={16} /> Scanner
         </Button>
-        <div className="grid grid-cols-2 gap-2">
-          <Button variant="outline" onClick={() => inputRef.current?.click()} className="text-xs font-semibold">
-            <Camera size={15} /> Photo
-          </Button>
-          <Button variant="outline" onClick={() => importRef.current?.click()} className="text-xs font-semibold">
-            <Upload size={15} /> Importer
-          </Button>
-        </div>
-        <Button
-          variant="primary"
-          onClick={send}
-          disabled={!file || !quality?.ok}
-          className="font-bold mt-1"
-        >
-          <Sparkles size={16} /> {t("envoyer")} à l&apos;expert-comptable
+        <Button variant="success" onClick={send} disabled={!file || !quality?.ok}>
+          {t("envoyer")}
         </Button>
       </div>
 
@@ -357,7 +291,7 @@ export function ClientScanner() {
           onClose={() => setShowCamera(false)}
         />
       )}
-    </Card>
+    </div>
   );
 }
 

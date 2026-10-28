@@ -46,7 +46,7 @@ npm run dev                   # http://localhost:3000
 ```
 
 Ouvrez http://localhost:3000 → connexion → redirection selon le rôle
-(`/accountant/dashboard` ou `/client/dashboard`).
+(`/accountant/entreprises` ou `/client/dashboard`).
 
 ## 3. Le webhook IA
 

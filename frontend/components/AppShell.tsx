@@ -1,9 +1,10 @@
 "use client";
 
-import { Bell, Menu, Search, Sparkles } from "lucide-react";
+import { Bell, Menu } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n } from "@/lib/i18n-context";
 import { BackButton } from "./BackButton";
 import { Sidebar } from "./Sidebar";
 
@@ -24,14 +25,25 @@ export function AppShell({
 }) {
   const [navOpen, setNavOpen] = useState(false);
   const { user } = useAuth();
+  const { t } = useI18n();
+  const settingsHref = entrepriseId
+    ? `/accountant/profile?entreprise=${entrepriseId}${annee ? `&annee=${annee}` : ""}`
+    : "/accountant/profile";
+  const heading =
+    title === undefined
+      ? user?.username
+        ? `Bonjour, ${user.username}`
+        : "Tableau de bord"
+      : title;
 
   return (
-    <div className="flex min-h-screen bg-[#F7FAF7] font-sans antialiased text-brand selection:bg-lime selection:text-brand">
-      {/* Mobile backdrop */}
+    <div className="studio-ui flex min-h-screen bg-[#f5f7f5] antialiased selection:bg-[#eaf2ee] selection:text-[#173c32]">
       {navOpen && (
-        <div
+        <button
+          type="button"
+          aria-label="Fermer le menu"
           onClick={() => setNavOpen(false)}
-          className="fixed inset-0 z-30 bg-brand/50 backdrop-blur-sm lg:hidden transition-opacity"
+          className="fixed inset-0 z-30 bg-[rgba(20,31,27,0.35)] backdrop-blur-[2px] lg:hidden"
         />
       )}
 
@@ -43,79 +55,58 @@ export function AppShell({
         onClose={() => setNavOpen(false)}
       />
 
-      <div className="flex flex-1 flex-col min-w-0">
-        <header className="sticky top-0 z-20 flex h-20 items-center justify-between border-b border-gray-200/70 bg-white/90 px-4 backdrop-blur-md sm:px-8">
-          <div className="flex items-center gap-3">
-            {/* Hamburger — opens the nav on mobile */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex h-[78px] items-center justify-between bg-[#f5f7f5]/90 px-5 backdrop-blur-md lg:h-[94px] lg:px-8">
+          <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={() => setNavOpen(true)}
-              className="rounded-xl p-2 text-brand hover:bg-gray-100 lg:hidden transition-colors"
+              className="grid h-10 w-10 place-items-center rounded-xl border border-[#e5e9e6] bg-white text-[#214f40] lg:hidden"
               aria-label="Ouvrir le menu"
             >
-              <Menu size={22} />
+              <Menu size={18} />
             </button>
             <BackButton />
-            <div>
-              <h1 className="text-xl font-extrabold tracking-tight text-brand sm:text-2xl flex items-center gap-2">
-                {title || (user?.username ? `Bonjour, ${user.username} ! 👋` : "Tableau de bord")}
-              </h1>
-              {subtitle ? (
-                <p className="text-xs text-gray-500 hidden sm:block">{subtitle}</p>
-              ) : (
-                <p className="text-xs text-gray-500 hidden sm:block">
-                  Voici un aperçu intelligent de votre activité.
-                </p>
-              )}
-            </div>
+            {heading ? (
+              <div className="min-w-0">
+                <h1 className="truncate text-lg font-semibold tracking-tight text-[#17221f]">
+                  {heading}
+                </h1>
+                {subtitle ? (
+                  <p className="hidden truncate text-[11px] text-[#69736f] sm:block">{subtitle}</p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
 
-          <div className="flex items-center gap-3 sm:gap-4">
-            {/* Search bar matching future_look.png */}
-            <div className="relative hidden md:block w-72 lg:w-80">
-              <Search
-                size={16}
-                className="absolute left-3.5 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <input
-                type="text"
-                placeholder="Rechercher (factures, clients...)"
-                className="h-10 w-full rounded-full border border-gray-200/90 bg-gray-50/80 pl-9 pr-4 text-xs font-medium text-brand outline-none transition-all focus:border-brand focus:bg-white focus:ring-2 focus:ring-lime/40"
-              />
-            </div>
-
-            {/* Notification Bell */}
+          <div className="flex items-center gap-2.5">
             <button
-              className="relative flex h-10 w-10 items-center justify-center rounded-full border border-gray-200/80 bg-white text-brand hover:bg-gray-50 transition-all hover:border-gray-300"
+              type="button"
+              className="relative grid h-10 w-10 place-items-center rounded-xl border border-[#e5e9e6] bg-white text-[#214f40]"
               title="Notifications"
             >
-              <Bell size={18} />
-              <span className="absolute right-2 top-2 h-2 w-2 rounded-full bg-lime ring-2 ring-white" />
+              <Bell size={16} />
+              <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full border border-white bg-[#c78455]" />
             </button>
-
-            {/* User Avatar */}
             <Link
-              href="/accountant/profile"
-              className="flex items-center gap-2 rounded-full p-0.5 hover:ring-2 hover:ring-lime/60 transition-all"
+              href={settingsHref}
+              title={t("settings")}
+              aria-label={t("settings")}
+              className="grid h-10 w-10 place-items-center overflow-hidden rounded-full bg-[#254b40] text-[12px] font-bold text-[#f7faf8]"
             >
               {user?.photo ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.photo}
-                  alt={user.username}
-                  className="h-10 w-10 rounded-full object-cover ring-2 ring-lime/40"
-                />
+                <img src={user.photo} alt={user.username} className="h-full w-full object-cover" />
               ) : (
-                <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand text-xs font-bold text-lime ring-2 ring-lime/40">
-                  {user?.username?.slice(0, 2).toUpperCase() || "HD"}
-                </span>
+                user?.username?.slice(0, 2).toUpperCase()
               )}
             </Link>
           </div>
         </header>
 
-        <main className="flex-1 overflow-auto p-4 sm:p-8">{children}</main>
+        <main className="mx-auto w-full max-w-[1440px] flex-1 px-5 pb-12 pt-2 lg:px-8 lg:pb-14">
+          {children}
+        </main>
       </div>
     </div>
   );
 }
-

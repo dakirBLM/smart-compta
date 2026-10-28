@@ -3,19 +3,14 @@
 import {
   BarChart3,
   Book,
-  Building2,
   ChevronDown,
-  ChevronRight,
   FileText,
   FolderOpen,
   Landmark,
   LayoutDashboard,
-  LogOut,
   MessageSquare,
   Plus,
   Scale,
-  Settings,
-  Sparkles,
   Table2,
   Truck,
   Users,
@@ -23,19 +18,13 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { BrandLogo } from "@/components/BrandLogo";
 import { LanguageToggle } from "@/components/LanguageToggle";
 import { api } from "@/lib/api";
-import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
 import { Journal } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-const MIN_WIDTH = 230;
-const MAX_WIDTH = 460;
-const DEFAULT_WIDTH = 260;
-// Drag the edge left of this (px from screen left) and the nav collapses away.
-const COLLAPSE_AT = 150;
 
 const JOURNAL_TYPES: { key: string; label: string }[] = [
   { key: "achat", label: "Achats" },
@@ -64,28 +53,24 @@ function Item({
     <Link
       href={href}
       onClick={onNavigate}
+      title={label}
       className={cn(
-        "group flex items-center justify-between gap-3 rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all duration-200",
-        active
-          ? "bg-lime font-bold text-brand shadow-glow-sm shadow-lime/20"
-          : "text-white/80 hover:bg-white/10 hover:text-white"
+        "relative flex min-h-[49px] flex-col items-center justify-center gap-1 rounded-[11px] px-1 py-1 text-center text-[#74807b] transition-colors hover:bg-[#f2f5f3] hover:text-[#35433e] lg:min-h-0 lg:max-h-[66px] lg:flex-1",
+        "max-lg:min-h-12 max-lg:flex-none max-lg:flex-row max-lg:justify-start max-lg:gap-3 max-lg:px-3 max-lg:text-left",
+        active && "bg-[#eaf2ee] text-[#214f40]"
       )}
     >
-      <div className="flex items-center gap-3">
-        <span className={cn(active ? "text-brand" : "text-white/80 group-hover:text-white")}>
-          {icon}
-        </span>
-        <span className="truncate">{label}</span>
-      </div>
+      <span className="shrink-0">{icon}</span>
+      <span
+        className={cn(
+          "text-[9px] font-medium leading-tight tracking-tight max-lg:text-[11px]",
+          active && "font-semibold"
+        )}
+      >
+        {label}
+      </span>
       {badge && (
-        <span
-          className={cn(
-            "rounded-md px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider",
-            active
-              ? "bg-brand text-lime"
-              : "bg-lime text-brand"
-          )}
-        >
+        <span className="absolute right-1.5 top-1 rounded px-1 py-0.5 text-[6px] font-extrabold leading-none tracking-wider text-[#2d6653] bg-[#dcece5] max-lg:right-2.5 max-lg:text-[7px]">
           {badge}
         </span>
       )}
@@ -107,12 +92,13 @@ export function Sidebar({
   onClose?: () => void;
 }) {
   const { t } = useI18n();
-  const { logout, user } = useAuth();
   const pathname = usePathname();
-  const [journalOpen, setJournalOpen] = useState(pathname.includes("/journaux"));
+  const [journalOpen, setJournalOpen] = useState(false);
+  const [journalPos, setJournalPos] = useState<{ top: number; left: number } | null>(null);
   const [customJournaux, setCustomJournaux] = useState<Journal[]>([]);
+  const journalBtn = useRef<HTMLButtonElement>(null);
+  const journalPanel = useRef<HTMLDivElement>(null);
 
-  // Custom journals (type 'autre') shown in the Journaux list.
   useEffect(() => {
     if (!entrepriseId || !annee) return;
     api
@@ -121,223 +107,125 @@ export function Sidebar({
       .catch(() => setCustomJournaux([]));
   }, [entrepriseId, annee, pathname]);
 
-  const [width, setWidth] = useState(DEFAULT_WIDTH);
-  const [collapsed, setCollapsed] = useState(false);
-  const [isDragging, setIsDragging] = useState(false);
+  useEffect(() => {
+    setJournalOpen(false);
+    setJournalPos(null);
+  }, [pathname]);
 
   useEffect(() => {
-    const saved = Number(window.localStorage.getItem("sidebarWidth"));
-    if (saved >= MIN_WIDTH && saved <= MAX_WIDTH) setWidth(saved);
-    setCollapsed(window.localStorage.getItem("sidebarCollapsed") === "1");
-  }, []);
+    if (!journalOpen) return;
+    function onPointer(e: MouseEvent) {
+      const target = e.target as Node;
+      if (journalBtn.current?.contains(target) || journalPanel.current?.contains(target)) return;
+      setJournalOpen(false);
+      setJournalPos(null);
+    }
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [journalOpen]);
 
-  const beginDrag = useCallback((fromCollapsed: boolean) => {
-    setIsDragging(true);
-    let expanded = !fromCollapsed;
-    const onMove = (ev: MouseEvent) => {
-      const x = ev.clientX;
-      if (x < COLLAPSE_AT) {
-        setCollapsed(true);
-        window.localStorage.setItem("sidebarCollapsed", "1");
-        finish();
-        return;
-      }
-      expanded = true;
-      setCollapsed(false);
-      window.localStorage.setItem("sidebarCollapsed", "0");
-      const w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, x));
-      setWidth(w);
-      window.localStorage.setItem("sidebarWidth", String(w));
-    };
-    const finish = () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
-      document.body.style.userSelect = "";
-      setIsDragging(false);
-    };
-    const onUp = () => {
-      if (fromCollapsed && !expanded) {
-        setCollapsed(false);
-        window.localStorage.setItem("sidebarCollapsed", "0");
-        setWidth(DEFAULT_WIDTH);
-        window.localStorage.setItem("sidebarWidth", String(DEFAULT_WIDTH));
-      }
-      finish();
-    };
-    document.body.style.userSelect = "none";
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
-  }, []);
-
-  const startResize = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      beginDrag(false);
-    },
-    [beginDrag]
-  );
-  const startReopen = useCallback(
-    (e: React.MouseEvent) => {
-      e.preventDefault();
-      beginDrag(true);
-    },
-    [beginDrag]
-  );
-
-  const base = entrepriseId
-    ? `/accountant/entreprises/${entrepriseId}`
-    : "/accountant";
-  const anneeQuery = annee ? `&annee=${annee}` : "";
+  const base = `/accountant/entreprises/${entrepriseId}`;
   const is = (p: string) => pathname === p || pathname.startsWith(p + "/");
   const nav = () => onClose?.();
 
+  function toggleJournals() {
+    setJournalOpen((openNow) => {
+      const next = !openNow;
+      if (next && journalBtn.current && window.matchMedia("(min-width: 1024px)").matches) {
+        const rect = journalBtn.current.getBoundingClientRect();
+        setJournalPos({ top: rect.top, left: rect.right + 8 });
+      } else {
+        setJournalPos(null);
+      }
+      return next;
+    });
+  }
+
+  const journalActive = pathname.includes("/journaux");
+
   return (
-    <>
-      {/* Collapsed handle */}
-      {collapsed && (
-        <div
-          onMouseDown={startReopen}
-          title="Ouvrir le menu"
-          className="fixed inset-y-0 left-0 z-40 hidden w-2.5 cursor-col-resize bg-brand hover:bg-lime lg:block"
-        >
-          <span className="absolute left-0 top-1/2 flex h-12 w-5 -translate-y-1/2 items-center justify-center rounded-r-lg bg-brand text-lime shadow-lg">
-            <ChevronRight size={16} />
-          </span>
-        </div>
+    <aside
+      className={cn(
+        "studio-ui fixed inset-y-0 left-0 z-40 flex h-screen w-[244px] max-w-[85vw] -translate-x-full flex-col border-r border-[#e5e9e6] bg-[#fbfcfb] px-[18px] py-[18px] shadow-[20px_0_50px_rgba(20,42,35,0.13)] transition-transform duration-300 lg:sticky lg:top-0 lg:z-30 lg:w-[152px] lg:translate-x-0 lg:px-3 lg:pb-2.5 lg:pt-5 lg:shadow-none",
+        open && "translate-x-0"
       )}
+    >
+      <div className="mb-6 flex items-center justify-between px-1 lg:justify-center lg:px-0">
+        <Link
+          href="/accountant/entreprises"
+          title={entrepriseName || "Comptia"}
+          className="flex min-w-0 flex-1 items-center lg:justify-center"
+          onClick={nav}
+        >
+          <BrandLogo />
+        </Link>
+        <button
+          onClick={onClose}
+          className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#74807b] hover:bg-[#f2f5f3] lg:hidden"
+          aria-label="Fermer le menu"
+        >
+          <X size={18} />
+        </button>
+      </div>
 
-      <aside
-        style={collapsed ? undefined : { width }}
-        className={cn(
-          "fixed inset-y-0 left-0 z-40 flex h-screen w-64 max-w-[85vw] flex-col bg-brand p-4 text-white lg:sticky lg:top-0 lg:h-screen lg:self-start lg:max-w-none lg:translate-x-0 border-r border-white/5",
-          isDragging ? "" : "transition-[width,transform] duration-200",
-          open ? "translate-x-0" : "-translate-x-full",
-          collapsed && "lg:!w-0 lg:!min-w-0 lg:!border-0 lg:!p-0 lg:overflow-hidden"
-        )}
-      >
-        {/* Resize handle */}
-        <div
-          onMouseDown={startResize}
-          className="absolute inset-y-0 right-0 hidden w-1.5 cursor-col-resize hover:bg-lime/50 lg:block"
-          aria-label="Redimensionner le menu"
-        />
+      <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {entrepriseId && (
+          <>
+            <Item
+              href={`${base}/dashboard`}
+              icon={<LayoutDashboard size={18} />}
+              label={t("dashboard")}
+              active={pathname === `${base}/dashboard` || pathname === base}
+              onNavigate={nav}
+            />
 
-        {/* Brand Logo Header */}
-        <div className="mb-6 flex items-center justify-between px-2 pt-2">
-          <Link href="/accountant/dashboard" className="flex items-center gap-2">
-            <div className="flex items-baseline gap-1.5">
-              <span className="text-2xl font-black tracking-tight text-white">
-                Comptia
-              </span>
-              <span className="rounded-md bg-lime px-1.5 py-0.5 text-xs font-black text-brand">
-                DZ
-              </span>
-            </div>
-          </Link>
-          <button
-            onClick={onClose}
-            className="rounded-lg p-1.5 text-white/70 hover:bg-white/10 lg:hidden"
-            aria-label="Fermer le menu"
-          >
-            <X size={20} />
-          </button>
-        </div>
-
-        {/* Enterprise Switcher / Context info */}
-        {entrepriseName ? (
-          <div className="mb-5 rounded-2xl bg-white/10 p-3 backdrop-blur-sm border border-white/10">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-lime">
-                Entreprise active
-              </span>
-              {annee && (
-                <span className="rounded-full bg-lime/20 px-2 py-0.5 text-[11px] font-bold text-lime">
-                  {annee}
-                </span>
-              )}
-            </div>
-            <div className="mt-1 font-semibold text-white truncate text-base">
-              {entrepriseName}
-            </div>
-            <Link
-              href="/accountant/entreprises"
-              className="mt-2 block text-xs text-white/70 hover:text-lime underline transition-colors"
-            >
-              Changer d&apos;entreprise
-            </Link>
-          </div>
-        ) : (
-          <div className="mb-4 px-2">
-            <div className="flex items-center gap-2 rounded-xl bg-white/5 px-3 py-2 border border-white/10">
-              <Sparkles size={16} className="text-lime" />
-              <span className="text-xs text-white/80 font-medium">
-                Votre comptabilité devient intelligente
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* Navigation Items */}
-        <nav className="sidebar-nav-scroll min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
-          {!entrepriseId ? (
-            <>
-              <Item
-                href="/accountant/dashboard"
-                icon={<LayoutDashboard size={19} />}
-                label={t("dashboard")}
-                active={is("/accountant/dashboard")}
-                onNavigate={nav}
-              />
-              <Item
-                href="/accountant/entreprises"
-                icon={<Building2 size={19} />}
-                label={t("entreprises")}
-                active={is("/accountant/entreprises")}
-                onNavigate={nav}
-              />
-            </>
-          ) : (
-            <>
-              <Item
-                href={`${base}/dashboard`}
-                icon={<LayoutDashboard size={19} />}
-                label={t("dashboard")}
-                active={pathname === `${base}/dashboard` || pathname === base}
-                onNavigate={nav}
-              />
-
-              {/* Journaux dropdown */}
+            <div className="relative">
               <button
-                onClick={() => setJournalOpen((o) => !o)}
+                ref={journalBtn}
+                type="button"
+                onClick={toggleJournals}
+                title={t("journaux")}
                 className={cn(
-                  "flex w-full items-center justify-between rounded-xl px-3.5 py-2.5 text-sm font-medium transition-all duration-200",
-                  pathname.includes("/journaux")
-                    ? "bg-white/15 font-semibold text-white"
-                    : "text-white/80 hover:bg-white/10 hover:text-white"
+                  "flex min-h-[49px] w-full flex-col items-center justify-center gap-1 rounded-[11px] px-1 py-1 text-center text-[#74807b] transition-colors hover:bg-[#f2f5f3] hover:text-[#35433e] lg:min-h-0 lg:max-h-[66px] lg:flex-1",
+                  "max-lg:min-h-12 max-lg:flex-none max-lg:flex-row max-lg:justify-start max-lg:gap-3 max-lg:px-3 max-lg:text-left",
+                  journalActive && "bg-[#eaf2ee] text-[#214f40]"
                 )}
               >
-                <span className="flex items-center gap-3">
-                  <Book size={19} />
+                <Book size={18} />
+                <span
+                  className={cn(
+                    "text-[9px] font-medium leading-tight max-lg:text-[11px]",
+                    journalActive && "font-semibold"
+                  )}
+                >
                   {t("journaux")}
                 </span>
                 <ChevronDown
-                  size={16}
-                  className={cn("transition-transform duration-200", journalOpen && "rotate-180")}
+                  size={12}
+                  className={cn(
+                    "absolute right-1 top-1 hidden transition-transform max-lg:static max-lg:block",
+                    journalOpen && "rotate-180"
+                  )}
                 />
               </button>
 
               {journalOpen && (
-                <div className="ml-4 space-y-1 border-l-2 border-lime/30 pl-2.5 py-1">
+                <div
+                  ref={journalPanel}
+                  className={cn(
+                    "z-50 space-y-0.5 rounded-xl border border-[#e5e9e6] bg-white p-1.5 shadow-[0_12px_32px_rgba(28,55,47,0.12)]",
+                    journalPos ? "fixed w-56" : "relative mt-1"
+                  )}
+                  style={journalPos ? { top: journalPos.top, left: journalPos.left } : undefined}
+                >
                   {JOURNAL_TYPES.map((j) => (
                     <Link
                       key={j.key}
                       href={`${base}/journaux/${j.key}`}
                       onClick={nav}
                       className={cn(
-                        "block rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-                        pathname.endsWith(`/journaux/${j.key}`)
-                          ? "bg-lime font-bold text-brand"
-                          : "text-white/70 hover:bg-white/10 hover:text-white"
+                        "block rounded-lg px-3 py-2 text-xs font-medium text-[#52605b] hover:bg-[#f2f5f3]",
+                        pathname.endsWith(`/journaux/${j.key}`) && "bg-[#eaf2ee] font-semibold text-[#214f40]"
                       )}
                     >
                       {j.label}
@@ -349,10 +237,8 @@ export function Sidebar({
                       href={`${base}/journaux/${j.id}`}
                       onClick={nav}
                       className={cn(
-                        "block truncate rounded-lg px-3 py-1.5 text-xs font-medium transition-all",
-                        pathname.endsWith(`/journaux/${j.id}`)
-                          ? "bg-lime font-bold text-brand"
-                          : "text-white/70 hover:bg-white/10 hover:text-white"
+                        "block truncate rounded-lg px-3 py-2 text-xs font-medium text-[#52605b] hover:bg-[#f2f5f3]",
+                        pathname.endsWith(`/journaux/${j.id}`) && "bg-[#eaf2ee] font-semibold text-[#214f40]"
                       )}
                     >
                       {j.type_label}
@@ -361,133 +247,93 @@ export function Sidebar({
                   <Link
                     href={`${base}/journaux/achat?newjournal=1`}
                     onClick={nav}
-                    className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs text-lime hover:bg-white/10 font-medium"
+                    className="flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-[#285d4d] hover:bg-[#f2f5f3]"
                   >
                     <Plus size={13} /> Nouveau journal
                   </Link>
                 </div>
               )}
-
-              <Item
-                href={`${base}/factures`}
-                icon={<FolderOpen size={19} />}
-                label={t("mesFactures")}
-                active={is(`${base}/factures`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/releves-bancaires`}
-                icon={<Landmark size={19} />}
-                label={t("releveBancaire")}
-                active={is(`${base}/releves-bancaires`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/compte-resultat`}
-                icon={<FileText size={19} />}
-                label={t("compteResultat")}
-                active={is(`${base}/compte-resultat`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/balance`}
-                icon={<Scale size={19} />}
-                label={t("balance")}
-                active={is(`${base}/balance`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/bilan`}
-                icon={<Table2 size={19} />}
-                label="Bilan"
-                active={is(`${base}/bilan`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/grand-livre`}
-                icon={<BarChart3 size={19} />}
-                label={t("grandLivre")}
-                active={is(`${base}/grand-livre`)}
-                onNavigate={nav}
-              />
-
-              <div className="my-2 border-t border-white/10" />
-
-              <Item
-                href={`${base}/clients`}
-                icon={<Users size={19} />}
-                label={t("clients")}
-                active={is(`${base}/clients`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/fournisseurs`}
-                icon={<Truck size={19} />}
-                label={t("fournisseurs")}
-                active={is(`${base}/fournisseurs`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/scf`}
-                icon={<Table2 size={19} />}
-                label="Tableau SCF"
-                active={is(`${base}/scf`)}
-                onNavigate={nav}
-              />
-              <Item
-                href={`${base}/messages`}
-                icon={<MessageSquare size={19} />}
-                label={t("messages")}
-                active={is(`${base}/messages`)}
-                onNavigate={nav}
-              />
-            </>
-          )}
-        </nav>
-
-        {/* User Profile & Bottom Bar */}
-        <div className="mt-auto border-t border-white/10 pt-3 space-y-2">
-          <Link
-            href="/accountant/profile"
-            onClick={nav}
-            className="flex items-center justify-between gap-2 rounded-xl p-2 hover:bg-white/10 transition-colors"
-          >
-            <div className="flex items-center gap-2.5 min-w-0">
-              {user?.photo ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={user.photo}
-                  alt={user.username}
-                  className="h-8 w-8 shrink-0 rounded-full object-cover ring-2 ring-lime/50"
-                />
-              ) : (
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-lime font-bold text-brand text-xs">
-                  {user?.username?.slice(0, 2).toUpperCase()}
-                </span>
-              )}
-              <div className="min-w-0">
-                <div className="truncate text-xs font-semibold text-white">
-                  {user?.username}
-                </div>
-                <div className="text-[10px] text-lime">Comptable</div>
-              </div>
             </div>
-            <Settings size={16} className="text-white/60 hover:text-white" />
-          </Link>
-        </div>
 
-        <div className="mt-4 space-y-2 border-t border-white/10 pt-3">
-          {/* Language switcher — lives only in the left navigation */}
-          <LanguageToggle className="text-white" />
-          <button
-            onClick={logout}
-            className="flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-[16px] text-white/80 hover:bg-white/10"
-          >
-            <LogOut size={20} />
-            {t("logout")}
-          </button>
-        </div>
-      </aside>
-    </>
+            <Item
+              href={`${base}/factures`}
+              icon={<FolderOpen size={18} />}
+              label={t("mesFactures")}
+              badge="IA"
+              active={is(`${base}/factures`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/releves-bancaires`}
+              icon={<Landmark size={18} />}
+              label={t("releveBancaire")}
+              badge="IA"
+              active={is(`${base}/releves-bancaires`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/compte-resultat`}
+              icon={<FileText size={18} />}
+              label={t("compteResultat")}
+              active={is(`${base}/compte-resultat`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/balance`}
+              icon={<Scale size={18} />}
+              label={t("balance")}
+              active={is(`${base}/balance`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/bilan`}
+              icon={<Table2 size={18} />}
+              label="Bilan"
+              active={is(`${base}/bilan`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/grand-livre`}
+              icon={<BarChart3 size={18} />}
+              label={t("grandLivre")}
+              active={is(`${base}/grand-livre`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/clients`}
+              icon={<Users size={18} />}
+              label={t("clients")}
+              active={is(`${base}/clients`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/fournisseurs`}
+              icon={<Truck size={18} />}
+              label={t("fournisseurs")}
+              active={is(`${base}/fournisseurs`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/scf`}
+              icon={<Table2 size={18} />}
+              label="Tableau SCF"
+              active={is(`${base}/scf`)}
+              onNavigate={nav}
+            />
+            <Item
+              href={`${base}/messages`}
+              icon={<MessageSquare size={18} />}
+              label={t("messages")}
+              active={is(`${base}/messages`)}
+              onNavigate={nav}
+            />
+          </>
+        )}
+      </nav>
+
+      <div className="mt-3 flex justify-center border-t border-[#e5e9e6] pt-3 max-lg:justify-start max-lg:px-1">
+        <LanguageToggle compact className="text-[#214f40]" />
+      </div>
+    </aside>
   );
 }

@@ -21,7 +21,7 @@ export function RoleGuard({
     if (!user) router.replace("/login");
     else if (user.role !== role)
       router.replace(
-        user.role === "accountant" ? "/accountant/dashboard" : "/client/dashboard"
+        user.role === "accountant" ? "/accountant/entreprises" : "/client/dashboard"
       );
   }, [user, loading, role, router]);
 

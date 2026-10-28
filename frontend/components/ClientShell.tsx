@@ -1,135 +1,122 @@
 "use client";
 
-import { Camera, FileText, Home, Landmark, LogOut, Menu, MessageSquare, Settings, User, X } from "lucide-react";
+import { FileText, Home, Landmark, Menu, MessageSquare, Settings, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useState } from "react";
-import { BackButton } from "./BackButton";
-import { LanguageToggle } from "./LanguageToggle";
 import { useAuth } from "@/lib/auth-context";
+import { useI18n } from "@/lib/i18n-context";
 import { cn } from "@/lib/utils";
+import { BackButton } from "./BackButton";
+import { BrandLogo } from "./BrandLogo";
+import { LanguageToggle } from "./LanguageToggle";
 
 const NAV = [
-  { href: "/client/dashboard", icon: Home, label: "Accueil" },
-  { href: "/client/scanner", icon: Camera, label: "Scanner" },
-  { href: "/client/releves-bancaires", icon: Landmark, label: "Relevés" },
-  { href: "/client/factures", icon: FileText, label: "Factures" },
-  { href: "/client/messages", icon: MessageSquare, label: "Messages" },
-  { href: "/client/settings", icon: Settings, label: "Profil" },
+  { href: "/client/dashboard", icon: Home, labelKey: "dashboard" as const },
+  { href: "/client/releves-bancaires", icon: Landmark, labelKey: "releveBancaire" as const },
+  { href: "/client/factures", icon: FileText, labelKey: "landingInvoices" as const },
+  { href: "/client/messages", icon: MessageSquare, labelKey: "messages" as const },
+  { href: "/client/settings", icon: Settings, labelKey: "settings" as const },
 ];
 
 export function ClientShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+  const { t } = useI18n();
   const [navOpen, setNavOpen] = useState(false);
+  const heading = user?.username ? `Bonjour, ${user.username}` : t("dashboard");
 
   return (
-    <div className="flex min-h-screen bg-[#F4F7F4] font-sans antialiased text-brand selection:bg-lime selection:text-brand">
-      {/* Mobile backdrop */}
+    <div className="studio-ui flex min-h-screen bg-[#f5f7f5] antialiased selection:bg-[#eaf2ee] selection:text-[#173c32]">
       {navOpen && (
-        <div
+        <button
+          type="button"
+          aria-label="Fermer le menu"
           onClick={() => setNavOpen(false)}
-          className="fixed inset-0 z-30 bg-brand/50 backdrop-blur-sm lg:hidden transition-opacity"
+          className="fixed inset-0 z-30 bg-[rgba(20,31,27,0.35)] backdrop-blur-[2px] lg:hidden"
         />
       )}
 
-      {/* Desktop & Tablet Sidebar */}
       <aside
         className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-20 flex-col items-center gap-3 bg-brand py-6 shadow-xl transition-transform duration-200 lg:sticky lg:top-0 lg:h-screen lg:self-start lg:translate-x-0 border-r border-white/5",
-          navOpen ? "translate-x-0" : "-translate-x-full"
+          "fixed inset-y-0 left-0 z-40 flex h-screen w-[244px] max-w-[85vw] -translate-x-full flex-col border-r border-[#e5e9e6] bg-[#fbfcfb] px-[18px] py-[18px] shadow-[20px_0_50px_rgba(20,42,35,0.13)] transition-transform duration-300 lg:sticky lg:top-0 lg:z-30 lg:w-[152px] lg:translate-x-0 lg:px-3 lg:pb-2.5 lg:pt-5 lg:shadow-none",
+          navOpen && "translate-x-0"
         )}
       >
-        {/* Brand Logo Mini */}
-        <Link href="/client/dashboard" className="mb-4 flex flex-col items-center">
-          <span className="text-lg font-black text-white">C<span className="text-lime">.</span></span>
-          <span className="rounded bg-lime px-1 py-0.2 text-[9px] font-black text-brand">DZ</span>
-        </Link>
+        <div className="mb-6 flex items-center justify-between px-1 lg:justify-center lg:px-0">
+          <Link href="/client/dashboard" title="Comptia" className="flex min-w-0 flex-1 items-center lg:justify-center" onClick={() => setNavOpen(false)}>
+            <BrandLogo />
+          </Link>
+          <button
+            type="button"
+            onClick={() => setNavOpen(false)}
+            className="grid h-9 w-9 shrink-0 place-items-center rounded-xl text-[#74807b] hover:bg-[#f2f5f3] lg:hidden"
+            aria-label="Fermer le menu"
+          >
+            <X size={18} />
+          </button>
+        </div>
 
-        {/* Close button (mobile only) */}
-        <button
-          onClick={() => setNavOpen(false)}
-          className="rounded-xl p-2 text-white hover:bg-white/10 lg:hidden mb-2"
-          aria-label="Fermer le menu"
-        >
-          <X size={20} />
-        </button>
+        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {NAV.map(({ href, icon: Icon, labelKey }) => {
+            const active = pathname === href || (href !== "/client/dashboard" && pathname.startsWith(href));
+            return (
+              <Link
+                key={href}
+                href={href}
+                onClick={() => setNavOpen(false)}
+                title={t(labelKey)}
+                className={cn(
+                  "relative flex min-h-[49px] flex-col items-center justify-center gap-1 rounded-[11px] px-1 py-1 text-center text-[#74807b] transition-colors hover:bg-[#f2f5f3] hover:text-[#35433e] lg:min-h-0 lg:max-h-[66px] lg:flex-1",
+                  "max-lg:min-h-12 max-lg:flex-none max-lg:flex-row max-lg:justify-start max-lg:gap-3 max-lg:px-3 max-lg:text-left",
+                  active && "bg-[#eaf2ee] text-[#214f40]"
+                )}
+              >
+                <Icon size={18} className="shrink-0" />
+                <span className={cn("text-[9px] font-medium leading-tight tracking-tight max-lg:text-[11px]", active && "font-semibold")}>
+                  {t(labelKey)}
+                </span>
+              </Link>
+            );
+          })}
+        </nav>
 
-        {NAV.map(({ href, icon: Icon, label }) => {
-          const active = pathname === href || (href !== "/client/dashboard" && pathname.startsWith(href));
-          return (
-            <Link
-              key={href}
-              href={href}
-              onClick={() => setNavOpen(false)}
-              title={label}
-              className={cn(
-                "group relative flex flex-col items-center justify-center rounded-2xl p-3 transition-all duration-200",
-                active
-                  ? "bg-lime text-brand font-bold shadow-glow-sm shadow-lime/25"
-                  : "text-white/70 hover:bg-white/10 hover:text-white"
-              )}
-            >
-              <Icon size={22} />
-              <span className="text-[10px] font-semibold mt-1">{label}</span>
-            </Link>
-          );
-        })}
-
-        {/* Language switcher */}
-        <LanguageToggle className="mt-auto text-white" compact />
-
-        {/* Logout */}
-        <button
-          onClick={logout}
-          title="Déconnexion"
-          className="rounded-2xl p-3 text-rose-300 hover:bg-rose-500/20 hover:text-rose-200 transition-colors"
-        >
-          <LogOut size={22} />
-        </button>
+        <div className="mt-3 flex justify-center border-t border-[#e5e9e6] pt-3 max-lg:justify-start max-lg:px-1">
+          <LanguageToggle compact className="text-[#214f40]" />
+        </div>
       </aside>
 
-      <div className="flex flex-1 flex-col min-w-0">
-        <header className="sticky top-0 z-20 flex h-18 items-center justify-between bg-white/90 px-4 py-3 sm:px-8 border-b border-gray-200/70 backdrop-blur-md">
-          <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="sticky top-0 z-20 flex h-[78px] items-center justify-between bg-[#f5f7f5]/90 px-5 backdrop-blur-md lg:h-[94px] lg:px-8">
+          <div className="flex min-w-0 items-center gap-2">
             <button
+              type="button"
               onClick={() => setNavOpen(true)}
-              className="rounded-xl p-2 text-brand hover:bg-gray-100 lg:hidden transition-colors"
+              className="grid h-10 w-10 place-items-center rounded-xl border border-[#e5e9e6] bg-white text-[#214f40] lg:hidden"
               aria-label="Ouvrir le menu"
             >
-              <Menu size={22} />
+              <Menu size={18} />
             </button>
             <BackButton />
-            <div className="flex items-center gap-2">
-              <span className="text-lg font-extrabold text-brand sm:text-xl">
-                Comptia <span className="rounded bg-lime px-1.5 py-0.5 text-xs text-brand">DZ</span>
-              </span>
-              <span className="text-xs text-gray-400 hidden sm:inline">· Espace Client</span>
-            </div>
+            <h1 className="truncate text-lg font-semibold tracking-tight text-[#17221f]">{heading}</h1>
           </div>
-
-          <div className="flex items-center gap-3">
-            {/* Maiase Assistant chip */}
-            <div className="hidden sm:flex items-center gap-2 rounded-full bg-lime-light/60 border border-lime/30 px-3 py-1 text-xs font-semibold text-brand">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src="/maiase.png" alt="Maiase" className="h-6 w-6 rounded-full object-contain" />
-              <span>Maiase IA active</span>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-bold text-brand hidden sm:inline">
-                {user?.username}
-              </span>
-              <span className="flex h-9 w-9 items-center justify-center rounded-full bg-brand text-xs font-bold text-lime ring-2 ring-lime/40">
-                {user?.username?.slice(0, 2).toUpperCase() || <User size={16} />}
-              </span>
-            </div>
-          </div>
+          <Link
+            href="/client/settings"
+            title={t("settings")}
+            aria-label={t("settings")}
+            className="grid h-10 w-10 place-items-center overflow-hidden rounded-full bg-[#254b40] text-[12px] font-bold text-[#f7faf8]"
+          >
+            {user?.photo ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={user.photo} alt={user.username} className="h-full w-full object-cover" />
+            ) : (
+              user?.username?.slice(0, 2).toUpperCase()
+            )}
+          </Link>
         </header>
 
-        <main className="flex-1 overflow-auto p-4 sm:p-8">{children}</main>
+        <main className="mx-auto w-full max-w-[1440px] flex-1 px-5 pb-12 pt-2 lg:px-8 lg:pb-14">{children}</main>
       </div>
     </div>
   );
 }
-

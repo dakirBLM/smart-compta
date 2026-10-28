@@ -1,7 +1,8 @@
 "use client";
 
 import { useSearchParams } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { ClientScanner } from "@/components/ClientScanner";
 import { ClientShell } from "@/components/ClientShell";
 import { InvoiceCard } from "@/components/InvoiceCard";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -19,10 +20,15 @@ export default function ClientFactures() {
   const [detail, setDetail] = useState<Facture | null>(null);
   const [deleteError, setDeleteError] = useState("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [panel, setPanel] = useState<"history" | "scan">("scan");
 
-  useEffect(() => {
+  const load = useCallback(() => {
     api.get<Facture[]>("/api/factures/").then(setFactures).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
 
   const deleteFacture = async (id: number) => {
     setDeleteError("");
@@ -74,23 +80,52 @@ export default function ClientFactures() {
 
   return (
     <ClientShell>
-      <h2 className="mb-4 text-lg font-bold text-brand">{t("mesFactures")}</h2>
-      {deleteError && (
-        <p role="alert" className="mb-3 text-sm text-red-700">
-          {deleteError}
-        </p>
-      )}
-      <div className="grid gap-3 sm:grid-cols-2">
-        {factures.map((f) => (
-          <InvoiceCard
-            key={f.id}
-            facture={f}
-            onDelete={deleteFacture}
-            deleting={deletingId === f.id}
-          />
-        ))}
-        {factures.length === 0 && <p className="text-gray-400">{t("aucuneDonnee")}</p>}
-      </div>
+      <section className="space-y-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold tracking-tight text-[#214f40]">{t("landingInvoices")}</h2>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => setPanel("history")}
+              className={`h-10 rounded-full px-4 text-sm font-semibold ${
+                panel === "history" ? "bg-[#1f3d35] text-white" : "border border-[#e5e9e6] bg-white text-[#214f40]"
+              }`}
+            >
+              {t("mesFactures")}
+            </button>
+            <button
+              type="button"
+              onClick={() => setPanel("scan")}
+              className={`h-10 rounded-full px-4 text-sm font-semibold ${
+                panel === "scan" ? "bg-[#1f3d35] text-white" : "border border-[#e5e9e6] bg-white text-[#214f40]"
+              }`}
+            >
+              {t("scanner")}
+            </button>
+          </div>
+        </div>
+        {panel === "history" && (
+          <div className="space-y-3">
+            {deleteError && (
+              <p role="alert" className="text-sm text-red-700">
+                {deleteError}
+              </p>
+            )}
+            <div className="grid gap-3 sm:grid-cols-2">
+              {factures.map((f) => (
+                <InvoiceCard
+                  key={f.id}
+                  facture={f}
+                  onDelete={deleteFacture}
+                  deleting={deletingId === f.id}
+                />
+              ))}
+              {factures.length === 0 && <p className="text-sm text-[#69736f]">{t("aucuneDonnee")}</p>}
+            </div>
+          </div>
+        )}
+        {panel === "scan" && <ClientScanner onSent={load} />}
+      </section>
     </ClientShell>
   );
 }

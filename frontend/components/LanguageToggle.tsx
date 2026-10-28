@@ -25,6 +25,8 @@ export function LanguageToggle({
 }) {
   const { lang, setLang } = useI18n();
   const [open, setOpen] = useState(false);
+  const [dropUp, setDropUp] = useState(false);
+  const [alignRight, setAlignRight] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,13 +37,27 @@ export function LanguageToggle({
     return () => document.removeEventListener("mousedown", onClick);
   }, []);
 
+  function placeMenu() {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box) return;
+    const menuWidth = 160;
+    const menuHeight = 96;
+    const roomBelow = window.innerHeight - box.bottom;
+    const roomRight = window.innerWidth - box.left;
+    setDropUp(roomBelow < menuHeight && box.top > roomBelow);
+    setAlignRight(roomRight < menuWidth && box.right > roomRight);
+  }
+
   const current = LANGS.find((l) => l.code === lang)!;
 
   return (
-    <div ref={ref} className={cn("relative text-current", className)}>
+    <div ref={ref} className={cn("relative text-current", open && "z-50", className)}>
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => {
+          if (!open) placeMenu();
+          setOpen((current) => !current);
+        }}
         aria-label="Langue"
         className={cn(
           "flex items-center gap-2 text-sm",
@@ -73,8 +89,10 @@ export function LanguageToggle({
       {open && (
         <div
           className={cn(
-            "absolute top-full z-50 mt-1 min-w-[150px] overflow-hidden rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg",
-            compact ? "left-0" : "left-0 w-full"
+            "absolute z-50 min-w-[150px] overflow-hidden rounded-lg border border-gray-200 bg-white text-gray-900 shadow-lg",
+            dropUp ? "bottom-full mb-1" : "top-full mt-1",
+            alignRight ? "right-0" : "left-0",
+            !compact && "w-full"
           )}
         >
           {LANGS.map((l) => (

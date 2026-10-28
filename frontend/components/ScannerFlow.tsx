@@ -4,16 +4,15 @@ import {
   Camera,
   CheckCircle2,
   Circle,
-  FileText,
   Pencil,
   Plus,
   RotateCcw,
   Trash2,
-  Upload,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { CameraCapture } from "@/components/CameraCapture";
+import { FileDropZone, isAcceptedFile } from "@/components/FileDropZone";
 import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 import { api, scannerUpload } from "@/lib/api";
@@ -29,19 +28,6 @@ const STEPS: { key: string; labelKey: "lectureDocument" | "extractionInfos" | "a
   { key: "3", labelKey: "analyseClassification" },
   { key: "4", labelKey: "generationEcritures" },
 ];
-
-const ACCEPTED_ACCEPT = ".pdf,.jpg,.jpeg,.png,image/jpeg,image/png,application/pdf";
-const ACCEPTED_EXT = /\.(pdf|jpe?g|png)$/i;
-
-function isAcceptedFile(f: File): boolean {
-  const name = f.name.toLowerCase();
-  return (
-    f.type === "application/pdf" ||
-    f.type === "image/jpeg" ||
-    f.type === "image/png" ||
-    ACCEPTED_EXT.test(name)
-  );
-}
 
 export function ScannerFlow({
   entrepriseId,
@@ -69,8 +55,6 @@ export function ScannerFlow({
   const [submitting, setSubmitting] = useState(false);
   const [journalHint, setJournalHint] = useState("");
   const [showCamera, setShowCamera] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const importRef = useRef<HTMLInputElement>(null);
 
   const isPdf =
     !!file &&
@@ -86,11 +70,6 @@ export function ScannerFlow({
     // PDFs can't be shown in an <img>; we show a file card instead.
     const pdf = f.type === "application/pdf" || f.name.toLowerCase().endsWith(".pdf");
     setPreview(pdf ? null : URL.createObjectURL(f));
-  }
-
-  function pickFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0];
-    if (f) acceptFile(f);
   }
 
   async function send() {
@@ -192,49 +171,23 @@ export function ScannerFlow({
   // ---- CAPTURE ----
   if (phase === "capture")
     return (
-      <Card className="mx-auto max-w-xl text-center">
-        {/* Camera (mobile) */}
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPTED_ACCEPT}
-          capture="environment"
-          className="hidden"
-          onChange={pickFile}
+      <div className="mx-auto max-w-xl">
+        <FileDropZone
+          title={t("importerFacture")}
+          file={file}
+          preview={preview}
+          isPdf={isPdf}
+          onFile={acceptFile}
         />
-        <input
-          ref={importRef}
-          type="file"
-          accept={ACCEPTED_ACCEPT}
-          className="hidden"
-          onChange={pickFile}
-        />
-        {preview ? (
-          <img src={preview} alt="facture" className="mx-auto mb-4 max-h-80 rounded-lg" />
-        ) : file && isPdf ? (
-          <div className="mx-auto mb-4 flex h-64 flex-col items-center justify-center rounded-xl border-2 border-dashed text-brand">
-            <FileText size={48} />
-            <p className="mt-2 max-w-xs truncate px-4 text-sm">{file.name}</p>
-            <p className="text-xs text-gray-400">PDF — toutes les pages seront analysées</p>
-          </div>
-        ) : (
-          <div
-            onClick={() => inputRef.current?.click()}
-            className="mx-auto mb-4 flex h-64 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed text-gray-400"
-          >
-            <Camera size={48} />
-            <p className="mt-2">{t("prendrePhoto")}</p>
-          </div>
-        )}
-        {/* Optional: pre-select the journal to help the AI classify (facultatif) */}
-        <div className="mx-auto mb-3 max-w-xs text-left">
-          <label className="mb-1 block text-xs text-gray-500">
-            Journal (facultatif — aide l'IA)
+
+        <div className="mx-auto mb-3 mt-4 max-w-xs text-left">
+          <label className="mb-1 block text-xs text-[#69736f]">
+            Journal (facultatif — aide l&apos;IA)
           </label>
           <select
             value={journalHint}
             onChange={(e) => setJournalHint(e.target.value)}
-            className="h-10 w-full rounded-lg border border-gray-300 px-3 text-sm"
+            className="h-10 w-full rounded-xl border border-[#e5e9e6] bg-white px-3 text-sm"
           >
             <option value="">Détection automatique</option>
             <option value="Achats">Achats</option>
@@ -245,16 +198,10 @@ export function ScannerFlow({
           </select>
         </div>
 
-        {error && <p className="mb-3 text-sm text-danger">{error}</p>}
+        {error && <p className="mb-3 text-center text-sm text-danger">{error}</p>}
         <div className="flex flex-wrap justify-center gap-2">
-          <Button variant="success" onClick={() => setShowCamera(true)}>
-            <Camera size={16} /> Scanner (caméra guidée)
-          </Button>
-          <Button variant="outline" onClick={() => inputRef.current?.click()}>
-            <Camera size={16} /> Photo
-          </Button>
-          <Button variant="outline" onClick={() => importRef.current?.click()}>
-            <Upload size={16} /> Importer (PDF / Image)
+          <Button variant="outline" onClick={() => setShowCamera(true)}>
+            <Camera size={16} /> Scanner
           </Button>
           <Button variant="success" onClick={send} disabled={!file}>
             {t("envoyer")}
@@ -269,7 +216,7 @@ export function ScannerFlow({
             onClose={() => setShowCamera(false)}
           />
         )}
-      </Card>
+      </div>
     );
 
   // ---- LOADING ----
