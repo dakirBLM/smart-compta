@@ -4,7 +4,7 @@ import { ArrowLeft, Camera, LogOut } from "lucide-react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useRef, useState } from "react";
-import { PasswordHints, passwordIsStrong } from "@/components/PasswordHints";
+import { PasswordHints, passwordIsStrong, passwordMissingRules } from "@/components/PasswordHints";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
@@ -64,7 +64,7 @@ function ProfileScreen() {
     setError("");
     setOk(false);
     if (password && !passwordIsStrong(password)) {
-      setError("Le mot de passe doit être solide.");
+      setError(`${t("passwordStillNeeds")} : ${passwordMissingRules(password).map((key) => t(key)).join(", ")}.`);
       return;
     }
     setSaving(true);

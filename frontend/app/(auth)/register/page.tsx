@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageToggle";
-import { PasswordHints, passwordIsStrong } from "@/components/PasswordHints";
+import { PasswordHints, passwordIsStrong, passwordMissingRules } from "@/components/PasswordHints";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
 
@@ -39,7 +39,7 @@ export default function RegisterPage() {
       return;
     }
     if (!passwordIsStrong(password)) {
-      setError("Le mot de passe doit être solide.");
+      setError(`${t("passwordStillNeeds")} : ${passwordMissingRules(password).map((key) => t(key)).join(", ")}.`);
       return;
     }
     setSubmitting(true);
