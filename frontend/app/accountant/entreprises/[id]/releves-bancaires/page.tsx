@@ -13,6 +13,7 @@ import {
 } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { BankStatementSubmission, Ecriture, Journal } from "@/lib/types";
+import { saveBlob } from "@/lib/download";
 import { useEntreprise } from "@/lib/useEntreprise";
 import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
 
@@ -93,14 +94,7 @@ export default function RelevesBancairesPage() {
     setReceivedError("");
     try {
       const blob = await downloadBankStatementSubmission(submission.id);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = submission.original_filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      saveBlob(blob, submission.original_filename);
     } catch (error) {
       setReceivedError(error instanceof Error ? error.message : "Erreur de téléchargement");
     } finally {

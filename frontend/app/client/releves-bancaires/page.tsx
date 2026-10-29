@@ -12,6 +12,7 @@ import {
   downloadBankStatementSubmission,
   submitClientBankStatement,
 } from "@/lib/api";
+import { saveBlob } from "@/lib/download";
 import { useI18n } from "@/lib/i18n-context";
 import { BankStatementSubmission, ClientEntreprise } from "@/lib/types";
 import { formatDateTime } from "@/lib/utils";
@@ -220,13 +221,16 @@ export default function ClientBankStatementsPage() {
                   >
                     <ExternalLink size={16} /> {t("ouvrirDocument")}
                   </a>
-                  <a
-                    href={previewUrl}
-                    download={detail.original_filename}
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const blob = await fetch(previewUrl).then((response) => response.blob());
+                      saveBlob(blob, detail.original_filename);
+                    }}
                     className="inline-flex items-center gap-2 rounded-lg bg-brand px-3 py-2 text-sm font-semibold text-white"
                   >
                     <Download size={16} /> {t("telechargerReleve")}
-                  </a>
+                  </button>
                 </div>
               )}
 
