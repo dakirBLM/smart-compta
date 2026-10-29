@@ -4,6 +4,7 @@ import { KeyRound, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Modal } from "@/components/Modal";
+import { PasswordHints, passwordIsStrong } from "@/components/PasswordHints";
 import { Button, Card, Input, Label } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
@@ -275,6 +276,7 @@ export default function ClientsPage() {
           <div>
             <Label>{t("password")}</Label>
             <Input type="password" value={accessForm.password} onChange={(e) => setAccessForm({ ...accessForm, password: e.target.value })} />
+            <PasswordHints password={accessForm.password} />
           </div>
           <div>
             <Label>Email</Label>
@@ -285,7 +287,7 @@ export default function ClientsPage() {
             <Button variant="ghost" onClick={() => setAccessOpen(false)}>
               {t("annuler")}
             </Button>
-            <Button variant="success" onClick={createAccess}>
+            <Button variant="success" onClick={createAccess} disabled={!passwordIsStrong(accessForm.password)}>
               {t("creer")}
             </Button>
           </div>

@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Button, Input, Label } from "@/components/ui";
+import { PasswordHints, passwordIsStrong } from "@/components/PasswordHints";
 import { api } from "@/lib/api";
 import {
   ACTIVITES,
@@ -150,6 +151,7 @@ export function EntrepriseForm({
   }
 
   const lastStep = mode === "edit" ? 2 : 3;
+  const portalPasswordOk = !client.password || passwordIsStrong(client.password);
   const lockedCls = "text-danger";
 
   return (
@@ -321,6 +323,7 @@ export function EntrepriseForm({
             <div>
               <Label>Mot de passe</Label>
               <Input type="password" value={client.password} onChange={(e) => setClient({ ...client, password: e.target.value })} />
+              <PasswordHints password={client.password} />
             </div>
             <div>
               <Label>Email (optionnel)</Label>
@@ -345,11 +348,11 @@ export function EntrepriseForm({
           </Button>
         ) : (
           <div className="flex gap-2">
-            <Button variant="success" onClick={() => handleCreate(false)} disabled={saving}>
+            <Button variant="success" onClick={() => handleCreate(false)} disabled={saving || !portalPasswordOk}>
               {t("creer")}
             </Button>
             {client.email && (
-              <Button onClick={() => handleCreate(true)} disabled={saving}>
+              <Button onClick={() => handleCreate(true)} disabled={saving || !portalPasswordOk}>
                 {t("creerEtEnvoyer")}
               </Button>
             )}

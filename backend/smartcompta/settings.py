@@ -91,9 +91,19 @@ DATABASES = {
 
 AUTH_USER_MODEL = "accounts.User"
 
+# Argon2id is the preferred hasher. It stores a random salt with the hash in
+# the password column. Older PBKDF2 hashes still verify, and Django rewrites
+# them with Argon2 the next time that user logs in.
+PASSWORD_HASHERS = [
+    "django.contrib.auth.hashers.Argon2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2PasswordHasher",
+    "django.contrib.auth.hashers.PBKDF2SHA1PasswordHasher",
+]
+
 AUTH_PASSWORD_VALIDATORS = [
-    {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
-     "OPTIONS": {"min_length": 4}},
+    {"NAME": "accounts.validators.PasswordComplexityValidator"},
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
 ]
 
 LANGUAGE_CODE = "fr-fr"

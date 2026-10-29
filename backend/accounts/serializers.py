@@ -1,3 +1,4 @@
+from django.contrib.auth.password_validation import validate_password
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
@@ -24,7 +25,7 @@ class UserSerializer(serializers.ModelSerializer):
 class RegisterSerializer(serializers.ModelSerializer):
     """Public sign-up for a new comptable (accountant) account."""
 
-    password = serializers.CharField(write_only=True, min_length=4)
+    password = serializers.CharField(write_only=True)
 
     class Meta:
         model = User
@@ -33,6 +34,10 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate_username(self, value):
         if User.objects.filter(username=value).exists():
             raise serializers.ValidationError("Ce nom d'utilisateur existe déjà.")
+        return value
+
+    def validate_password(self, value):
+        validate_password(value, User(username=self.initial_data.get("username", "")))
         return value
 
     def create(self, validated_data):
@@ -46,9 +51,7 @@ class RegisterSerializer(serializers.ModelSerializer):
 class UpdateProfileSerializer(serializers.ModelSerializer):
     """Update the current user's own profile (and optionally the password)."""
 
-    password = serializers.CharField(
-        write_only=True, required=False, allow_blank=True, min_length=4
-    )
+    password = serializers.CharField(write_only=True, required=False, allow_blank=True)
 
     class Meta:
         model = User
@@ -58,6 +61,12 @@ class UpdateProfileSerializer(serializers.ModelSerializer):
         qs = User.objects.filter(username=value).exclude(pk=self.instance.pk)
         if qs.exists():
             raise serializers.ValidationError("Ce nom d'utilisateur existe déjà.")
+        return value
+
+    def validate_password(self, value):
+        if not value:
+            return value
+        validate_password(value, self.instance)
         return value
 
     def update(self, instance, validated_data):
