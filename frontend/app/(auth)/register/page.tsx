@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import { LanguageToggle } from "@/components/LanguageToggle";
+import { PasswordHints, passwordIsStrong, passwordMissingRules } from "@/components/PasswordHints";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
 
@@ -35,6 +36,10 @@ export default function RegisterPage() {
     setError("");
     if (!username || !password) {
       setError("Nom et mot de passe requis.");
+      return;
+    }
+    if (!passwordIsStrong(password)) {
+      setError(`${t("passwordStillNeeds")} : ${passwordMissingRules(password).map((key) => t(key)).join(", ")}.`);
       return;
     }
     setSubmitting(true);
@@ -114,6 +119,7 @@ export default function RegisterPage() {
               required
               className={field}
             />
+            <PasswordHints password={password} />
           </label>
 
           <label className="block">
@@ -145,7 +151,7 @@ export default function RegisterPage() {
 
           <button
             type="submit"
-            disabled={submitting}
+            disabled={submitting || !passwordIsStrong(password)}
             className="h-12 w-full rounded-full bg-[#1f3d35] text-sm font-semibold text-white hover:bg-[#173c32] disabled:opacity-60"
           >
             {submitting ? "…" : t("footerSignup")}

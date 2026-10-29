@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
 from rest_framework import serializers
 
@@ -179,6 +180,10 @@ class CreateClientSerializer(serializers.Serializer):
     def validate_username(self, value):
         if User.objects.filter(username=value).exists():
             raise serializers.ValidationError("Ce nom d'utilisateur existe déjà.")
+        return value
+
+    def validate_password(self, value):
+        validate_password(value, User(username=self.initial_data.get("username", "")))
         return value
 
 
