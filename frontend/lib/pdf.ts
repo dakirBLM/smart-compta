@@ -3,6 +3,7 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import html2canvas from "html2canvas";
+import { saveBlob } from "@/lib/download";
 
 /** Generic table -> PDF export used by Balance / Grand Livre / etc. */
 export function exportTablePDF(
@@ -26,7 +27,7 @@ export function exportTablePDF(
     styles: { fontSize: 8 },
     headStyles: { fillColor: [17, 17, 17] },
   });
-  doc.save(`${title.replace(/\s+/g, "_").toLowerCase()}.pdf`);
+  saveBlob(doc.output("blob"), `${title.replace(/\s+/g, "_").toLowerCase()}.pdf`);
 }
 
 function isMobileBrowser() {
@@ -119,5 +120,5 @@ export async function exportReportElementPDF(element: HTMLElement, title: string
     pageIndex += 1;
   }
 
-  doc.save(filename);
+  saveBlob(doc.output("blob"), filename);
 }
