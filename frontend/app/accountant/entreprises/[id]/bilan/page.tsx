@@ -546,7 +546,11 @@ export default function BilanPage() {
       ) : (
         <>
         <div className="mb-3 flex justify-end print:hidden">
-          <ReportActions title={`Bilan ${currentYear}`} disabled={!bilan} />
+          <ReportActions
+            title={`Bilan ${currentYear}`}
+            excelUrl={`/api/entreprises/${id}/bilan/export/?annee=${currentYear}`}
+            disabled={!bilan}
+          />
         </div>
         <div className="print-report mx-auto max-w-5xl space-y-5 bg-white p-3 font-sans text-[13px] text-black sm:p-5">
           <header className="grid gap-4 border-b-2 border-black pb-4 md:grid-cols-[1fr_auto] md:items-start">

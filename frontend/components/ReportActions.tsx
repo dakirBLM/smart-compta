@@ -1,18 +1,22 @@
 "use client";
 
-import { Download, Printer } from "lucide-react";
+import { Download, FileSpreadsheet, Printer } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui";
+import { api } from "@/lib/api";
 import { exportReportElementPDF } from "@/lib/pdf";
 
 export function ReportActions({
   title,
+  excelUrl,
   disabled = false,
 }: {
   title: string;
+  excelUrl?: string;
   disabled?: boolean;
 }) {
   const [exporting, setExporting] = useState(false);
+  const [exportingExcel, setExportingExcel] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -39,6 +43,20 @@ export function ReportActions({
     }
   }
 
+  async function exportExcel() {
+    if (!excelUrl) return;
+    setError(null);
+    setExportingExcel(true);
+    try {
+      await api.download(excelUrl, `${title}.xlsx`);
+    } catch (cause) {
+      console.error("Excel report export failed", cause);
+      setError("L’export Excel a échoué. Réessayez.");
+    } finally {
+      setExportingExcel(false);
+    }
+  }
+
   return (
     <div className="print:hidden">
       <div className="flex flex-wrap items-center gap-2">
@@ -50,6 +68,16 @@ export function ReportActions({
         <Download size={16} />
         {exporting ? "Génération du PDF…" : "Exporter en PDF"}
       </Button>
+      {excelUrl && (
+        <Button
+          variant="outline"
+          onClick={exportExcel}
+          disabled={disabled || exportingExcel}
+        >
+          <FileSpreadsheet size={16} />
+          {exportingExcel ? "Génération du fichier…" : "Exporter en Excel"}
+        </Button>
+      )}
       </div>
       {error && <p className="mt-2 text-sm text-danger" role="alert">{error}</p>}
     </div>

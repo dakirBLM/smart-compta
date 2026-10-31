@@ -1,5 +1,6 @@
 import csv
 from datetime import date
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
 
@@ -10,6 +11,7 @@ from rest_framework import status
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework.test import APITestCase
+from openpyxl import load_workbook
 
 from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
 from .account_helpers import apply_scf_subaccounts
@@ -295,6 +297,270 @@ class ReportAccountLabelTests(APITestCase):
         self.assertEqual(balance_labels["4019"], "Company-only SCF label")
         self.assertEqual(ledger_labels["4019"], "Company-only SCF label")
 
+
+class ExcelReportExportTests(APITestCase):
+    def setUp(self):
+        user = get_user_model().objects.create_user(
+            username="excel-reports", password="export-test-password", role="accountant"
+        )
+        self.client.force_authenticate(user)
+        self.entreprise = Entreprise.objects.create(
+            nom="Excel Reports",
+            activite="Commerce",
+            adresse="12 rue des Fleurs",
+            nin="NIN-01",
+            nif="NIF-02",
+            nis="RC-03",
+            date_creation=date(2025, 1, 1),
+            exercice_comptable="2025",
+            accountant=user,
+        )
+        self._create_year(2025, date(2025, 1, 10), 80, 20)
+        self._create_year(2026, date(2026, 1, 10), 100, 40)
+
+    def _create_year(self, year, entry_date, revenue, expense):
+        exercice = ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=year, is_active=year == 2026
+        )
+        journal = Journal.objects.create(
+            entreprise=self.entreprise,
+            annee=exercice,
+            type_journal=Journal.Type.OD,
+        )
+        revenue_entry = Ecriture.objects.create(
+            journal=journal, date_ecriture=entry_date, numero_piece=f"V-{year}"
+        )
+        LigneEcriture.objects.create(
+            ecriture=revenue_entry,
+            numero_compte="512",
+            libelle="Bank",
+            montant_debit=revenue,
+        )
+        LigneEcriture.objects.create(
+            ecriture=revenue_entry,
+            numero_compte="707",
+            libelle="Sales",
+            montant_credit=revenue,
+        )
+        expense_entry = Ecriture.objects.create(
+            journal=journal, date_ecriture=entry_date, numero_piece=f"A-{year}"
+        )
+        LigneEcriture.objects.create(
+            ecriture=expense_entry,
+            numero_compte="607",
+            libelle="Purchases",
+            montant_debit=expense,
+        )
+        LigneEcriture.objects.create(
+            ecriture=expense_entry,
+            numero_compte="401",
+            libelle="Supplier",
+            montant_credit=expense,
+        )
+        if year == 2026:
+            transfer_entry = Ecriture.objects.create(
+                journal=journal,
+                date_ecriture=date(2026, 2, 10),
+                numero_piece="V-TRANSFER",
+            )
+            LigneEcriture.objects.create(
+                ecriture=transfer_entry,
+                numero_compte="512",
+                libelle="Bank transfer",
+                montant_debit=5,
+            )
+            LigneEcriture.objects.create(
+                ecriture=transfer_entry,
+                numero_compte="530",
+                libelle="Cash",
+                montant_credit=5,
+            )
+
+    def _workbook(self, url):
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            response["Content-Type"],
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+        self.assertIn(".xlsx", response["Content-Disposition"])
+        return load_workbook(BytesIO(response.content), data_only=True)
+
+    def _header_row(self, sheet, label):
+        return next(
+            row for row in range(1, sheet.max_row + 1)
+            if sheet.cell(row, 1).value == label
+        )
+
+    def _metadata(self, sheet, header_row):
+        return {
+            sheet.cell(row, 1).value: sheet.cell(row, 2).value
+            for row in range(4, header_row - 1)
+            if sheet.cell(row, 1).value
+        }
+
+    def test_long_company_details_are_wrapped_in_wide_metadata_cells(self):
+        self.entreprise.adresse = "Long address information " * 8
+        self.entreprise.save(update_fields=["adresse"])
+
+        sheet = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=nature"
+        )["Compte de résultat"]
+        address_row = next(
+            row for row in range(4, sheet.max_row + 1)
+            if sheet.cell(row, 1).value == "Adresse"
+        )
+
+        self.assertEqual(sheet.cell(address_row, 2).value, self.entreprise.adresse)
+        self.assertIn(f"B{address_row}:D{address_row}", {
+            str(merged_range) for merged_range in sheet.merged_cells.ranges
+        })
+        self.assertTrue(sheet.cell(address_row, 2).alignment.wrap_text)
+        self.assertEqual(sheet.cell(address_row, 2).font.sz, 10)
+        self.assertGreater(sheet.row_dimensions[address_row].height, 28)
+
+    def test_balance_export_has_numeric_account_rows_and_balanced_totals(self):
+        sheet = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/balance/export/?annee=2026"
+        )["Balance"]
+        header = self._header_row(sheet, "Compte")
+        account_rows = {
+            sheet.cell(row, 1).value: row
+            for row in range(header + 1, sheet.max_row + 1)
+        }
+        self.assertEqual(sheet.cell(account_rows["607"], 3).value, 40)
+        self.assertEqual(sheet.cell(account_rows["401"], 4).value, 40)
+        self.assertEqual(sheet.cell(sheet.max_row, 3).value, 145)
+        self.assertEqual(sheet.cell(sheet.max_row, 4).value, 145)
+        self.assertEqual(sheet.freeze_panes, f"A{header + 1}")
+        self.assertEqual(
+            [sheet.cell(header, column).value for column in range(1, 7)],
+            ["Compte", "Libellé", "Débit (DZD)", "Crédit (DZD)", "Solde débiteur (DZD)", "Solde créditeur (DZD)"],
+        )
+        metadata = self._metadata(sheet, header)
+        self.assertEqual(metadata["Entreprise"], "Excel Reports")
+        self.assertEqual(metadata["Exercice"], 2026)
+        self.assertTrue(any(
+            value and value.startswith("Classe 6 —")
+            for value in [
+                sheet.cell(row, 1).value
+                for row in range(header + 1, sheet.max_row)
+            ]
+        ))
+        self.assertFalse(sheet.sheet_view.showGridLines)
+        self.assertEqual(sheet.sheet_view.zoomScale, 90)
+        workbook_view = sheet.parent.views[0]
+        self.assertTrue(workbook_view.showHorizontalScroll)
+        self.assertTrue(workbook_view.showVerticalScroll)
+        self.assertEqual(sheet["A1"].fill.fgColor.rgb[-6:], "404040")
+        self.assertEqual(sheet.cell(header, 1).fill.fgColor.rgb[-6:], "E7E6E6")
+        self.assertEqual(sheet.cell(header, 1).font.color.rgb[-6:], "404040")
+        self.assertEqual(sheet.cell(account_rows["607"], 3).number_format, "#,##0.00;[Red](#,##0.00);-")
+        self.assertEqual(sheet.print_title_rows, f"$1:${header}")
+        self.assertEqual(sheet.page_setup.orientation, "landscape")
+
+    def test_income_statement_export_matches_current_and_prior_year_calculations(self):
+        workbook = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=nature"
+        )
+        sheet = workbook["Compte de résultat"]
+        header = self._header_row(sheet, "Rubriques")
+        rows = {
+            sheet.cell(row, 1).value: row
+            for row in range(header + 1, sheet.max_row + 1)
+        }
+        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 3).value, 100)
+        self.assertEqual(sheet.cell(rows["Chiffre d'affaires"], 4).value, 80)
+        self.assertEqual(sheet.cell(rows["X - RÉSULTAT NET DE L'EXERCICE"], 3).value, 60)
+        self.assertEqual(
+            [sheet.cell(header, column).value for column in range(1, 5)],
+            ["Rubriques", "Note", "Exercice 2026 (DZD)", "Exercice 2025 (DZD)"],
+        )
+        metadata = self._metadata(sheet, header)
+        self.assertEqual(metadata["Désignation de l'entreprise"], "Excel Reports")
+        self.assertEqual(metadata["Activité"], "Commerce")
+        self.assertEqual(metadata["Adresse"], "12 rue des Fleurs")
+        self.assertEqual(metadata["N° Article"], "NIN-01")
+        self.assertEqual(metadata["N° NIF"], "NIF-02")
+        self.assertEqual(metadata["N° RC"], "RC-03")
+        self.assertEqual(metadata["Édition"], "ÉDITION PROVISOIRE")
+        self.assertEqual(metadata["La période"], "Du : 01/01/2026 au : 31/12/2026")
+        self.assertIn("Édition du", metadata)
+
+        function_sheet = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/compte-resultat/export/"
+            "?annee=2026&presentation=fonction"
+        )["Compte de résultat"]
+        function_header = self._header_row(function_sheet, "Rubriques")
+        function_rows = {
+            function_sheet.cell(row, 1).value: row
+            for row in range(function_header + 1, function_sheet.max_row + 1)
+        }
+        self.assertEqual(
+            function_sheet.cell(function_rows["MARGE BRUTE"], 3).value, 60
+        )
+
+    def test_grand_livre_export_respects_account_and_date_filters(self):
+        workbook = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/grand-livre/export/"
+            "?annee=2026&compte=512&start=2026-01-01&end=2026-01-31"
+        )
+        sheet = workbook["Grand livre"]
+        header = self._header_row(sheet, "Date")
+        movement_row = header + 1
+        self.assertEqual(sheet.cell(movement_row, 1).value.date(), date(2026, 1, 10))
+        self.assertEqual(sheet.cell(movement_row, 1).number_format, "dd/mm/yyyy")
+        self.assertEqual(sheet.cell(movement_row, 2).value, "V-2026")
+        self.assertEqual(sheet.cell(movement_row, 4).value, 100)
+        self.assertEqual(sheet.cell(movement_row, 6).value, 100)
+        self.assertEqual(sheet.cell(movement_row, 4).number_format, "#,##0.00;[Red](#,##0.00);-")
+        self.assertEqual(sheet.cell(movement_row, 1).alignment.horizontal, "center")
+        metadata = self._metadata(sheet, header)
+        self.assertEqual(metadata["Entreprise"], "Excel Reports")
+        self.assertEqual(metadata["Période"], "Du 01/01/2026 au 31/01/2026")
+        self.assertEqual(metadata["Solde final"], 100)
+        self.assertEqual(sheet.cell(sheet.max_row, 3).value, "SOLDE FINAL")
+        self.assertEqual(sheet.cell(sheet.max_row, 6).value, 100)
+
+    def test_bilan_export_matches_current_and_prior_year_account_balances(self):
+        workbook = self._workbook(
+            f"/api/entreprises/{self.entreprise.id}/bilan/export/?annee=2026"
+        )
+        asset_sheet = workbook["Actif"]
+        asset_header = self._header_row(asset_sheet, "Rubrique")
+        asset_rows = {
+            asset_sheet.cell(row, 1).value.strip(): row
+            for row in range(asset_header + 1, asset_sheet.max_row + 1)
+        }
+        self.assertEqual(asset_sheet.cell(asset_rows["Trésorerie"], 5).value, 100)
+        self.assertEqual(asset_sheet.cell(asset_rows["Trésorerie"], 6).value, 80)
+        liability_sheet = workbook["Passif"]
+        liability_header = self._header_row(liability_sheet, "Rubrique")
+        liability_rows = {
+            liability_sheet.cell(row, 1).value.strip(): row
+            for row in range(liability_header + 1, liability_sheet.max_row + 1)
+        }
+        self.assertEqual(
+            liability_sheet.cell(liability_rows["Fournisseurs et comptes rattachés"], 3).value,
+            40,
+        )
+        self.assertEqual(
+            liability_sheet.cell(liability_rows["Fournisseurs et comptes rattachés"], 4).value,
+            20,
+        )
+        self.assertFalse(asset_sheet.sheet_view.showGridLines)
+        self.assertEqual(asset_sheet.cell(asset_header, 1).fill.fgColor.rgb[-6:], "E7E6E6")
+        self.assertEqual(str(asset_sheet.page_setup.paperSize), asset_sheet.PAPERSIZE_A4)
+        self.assertEqual(
+            self._metadata(asset_sheet, asset_header)["Désignation de l'entreprise"],
+            "Excel Reports",
+        )
+        self.assertEqual(
+            self._metadata(liability_sheet, liability_header)["N° RC"],
+            "RC-03",
+        )
 
 class BankStatementImportTests(APITestCase):
     def setUp(self):

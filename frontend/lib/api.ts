@@ -132,6 +132,39 @@ function extractErrorMessage(data: unknown, status: number): string {
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
+  download: async (path: string, filename: string) => {
+    const headers: Record<string, string> = {};
+    const token = getToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_URL}${path}`, { headers });
+    } catch {
+      throw new ApiError(0, "Connexion au serveur impossible. Vérifiez votre réseau.");
+    }
+
+    if (!response.ok) {
+      const text = await response.text();
+      let data: unknown = text;
+      try {
+        data = text ? JSON.parse(text) : null;
+      } catch {
+        data = text;
+      }
+      throw new ApiError(response.status, extractErrorMessage(data, response.status), data);
+    }
+
+    const blob = await response.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = objectUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  },
   post: <T>(path: string, body?: unknown, opts?: { timeoutMs?: number }) =>
     request<T>(path, {
       method: "POST",

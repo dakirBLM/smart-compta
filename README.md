@@ -112,6 +112,10 @@ WEBHOOK_URL=http://localhost:8000/api/scanner/mock-webhook/
 | POST | `/api/scanner/upload/` `/confirm/` | — / Comptable |
 | GET/POST/GET | `/api/factures/...` | Client + Comptable |
 | GET | `/api/entreprises/:id/balance/` `/compte-resultat/` `/grand-livre/` `/dashboard/` | Comptable |
+| GET | `/api/entreprises/:id/balance/export/` | Comptable |
+| GET | `/api/entreprises/:id/compte-resultat/export/` | Comptable |
+| GET | `/api/entreprises/:id/grand-livre/export/` | Comptable |
+| GET | `/api/entreprises/:id/bilan/export/` | Comptable |
 
 ## Notes
 
@@ -119,7 +123,9 @@ WEBHOOK_URL=http://localhost:8000/api/scanner/mock-webhook/
 - `NIF`, `NIS`, `exercice_comptable` sont **verrouillés** après création
   (champs rouges en modification, ignorés côté serveur).
 - Bascule de langue FR/AR instantanée, avec passage en RTL pour l'arabe.
-- Tableaux exportables en PDF (Balance, Grand Livre).
+- Rapports exportables en Excel (.xlsx) : Compte de résultat, Grand livre,
+  Balance et Bilan. Les fichiers peuvent être ouverts dans Excel, Google Sheets
+  ou Apple Numbers. Les rapports restent également imprimables/exportables en PDF.
 - Le client ne voit que ses propres factures ; le comptable voit tous ses clients.
 - Interface responsive (les clients utilisent un téléphone).
 ```

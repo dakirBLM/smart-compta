@@ -3,7 +3,9 @@ import logging
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.http import FileResponse
+from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
+from django.utils.text import slugify
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -39,6 +41,13 @@ from .reports import (
     build_compte_resultat,
     build_dashboard,
     build_grand_livre,
+)
+from .report_exports import (
+    XLSX_CONTENT_TYPE,
+    export_balance,
+    export_bilan,
+    export_compte_resultat,
+    export_grand_livre,
 )
 from .scanner import (
     WebhookError,
@@ -1408,12 +1417,38 @@ class BalanceView(APIView):
         return Response(build_balance(entreprise, _annee_param(request)))
 
 
+class BalanceExportView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        content, filename = export_balance(entreprise, _annee_param(request))
+        return _xlsx_response(content, filename)
+
+
 class CompteResultatView(APIView):
     permission_classes = [IsAccountant]
 
     def get(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
         return Response(build_compte_resultat(entreprise, _annee_param(request)))
+
+
+class CompteResultatExportView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        presentation = request.query_params.get("presentation", "fonction")
+        if presentation not in ("fonction", "nature"):
+            return Response(
+                {"detail": "La présentation doit être « fonction » ou « nature »."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        content, filename = export_compte_resultat(
+            entreprise, _annee_param(request), presentation
+        )
+        return _xlsx_response(content, filename)
 
 
 class GrandLivreView(APIView):
@@ -1426,6 +1461,46 @@ class GrandLivreView(APIView):
             request.query_params.get("start"),
             request.query_params.get("end"),
         ))
+
+
+class GrandLivreExportView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        try:
+            content, filename = export_grand_livre(
+                entreprise,
+                _annee_param(request),
+                request.query_params.get("start"),
+                request.query_params.get("end"),
+                request.query_params.get("compte"),
+            )
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
+        except LookupError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_404_NOT_FOUND)
+        return _xlsx_response(content, filename)
+
+
+class BilanExportView(APIView):
+    permission_classes = [IsAccountant]
+
+    def get(self, request, pk):
+        entreprise = _accountant_entreprise(request, pk)
+        year = _annee_param(request)
+        if year is None:
+            year = timezone.localdate().year
+        content, filename = export_bilan(entreprise, year)
+        return _xlsx_response(content, filename)
+
+
+def _xlsx_response(content, filename):
+    name = filename[:-5] if filename.lower().endswith(".xlsx") else filename
+    safe_filename = f"{slugify(name, allow_unicode=False) or 'report'}.xlsx"
+    response = HttpResponse(content, content_type=XLSX_CONTENT_TYPE)
+    response["Content-Disposition"] = f'attachment; filename="{safe_filename}"'
+    return response
 
 
 class DashboardView(APIView):
