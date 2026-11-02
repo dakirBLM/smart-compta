@@ -13,12 +13,12 @@ from django.test import override_settings
 from rest_framework.test import APITestCase
 from openpyxl import load_workbook
 
-from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, SCFAccount
+from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
 from .account_helpers import apply_scf_subaccounts
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction
 from .bank_statements import BankStatementError
-from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES
+from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES, MAX_MESSAGE_ATTACHMENT_BYTES
 
 
 class PrivateDurableTestStorage(Storage):
@@ -1472,3 +1472,79 @@ class InvoiceReuseAfterEntryDeletionTests(APITestCase):
                 entreprise=self.entreprise, numero_facture="FAC-FOREIGN"
             ).exists()
         )
+
+
+@override_settings(STORAGES=TEST_STORAGES)
+class MessageAttachmentAPITests(APITestCase):
+    def setUp(self):
+        PrivateDurableTestStorage.files.clear()
+        super().setUp()
+        User = get_user_model()
+        self.accountant = User.objects.create_user(
+            username="msg-accountant", password="StrongPass!123", role="accountant"
+        )
+        self.client_user = User.objects.create_user(
+            username="msg-client", password="StrongPass!123", role="client"
+        )
+        self.other_client = User.objects.create_user(
+            username="other-msg-client", password="StrongPass!123", role="client"
+        )
+        self.company = Entreprise.objects.create(
+            nom="Messagerie SAS",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ClientAccess.objects.create(client=self.client_user, entreprise=self.company, nom_client="Client Portal")
+
+    def test_client_can_send_document_attachment_and_accountant_can_download_it(self):
+        self.client.force_authenticate(self.client_user)
+        pdf = SimpleUploadedFile("rapport.pdf", b"%PDF-1.4 hello", content_type="application/pdf")
+        response = self.client.post(
+            "/api/messages/",
+            {"content": "", "file": pdf},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        message = Message.objects.get()
+        attachment = message.attachments.get()
+        self.assertEqual(attachment.original_filename, "rapport.pdf")
+        self.assertEqual(attachment.size, len(b"%PDF-1.4 hello"))
+
+        self.client.force_authenticate(self.accountant)
+        download = self.client.get(f"/api/messages/attachments/{attachment.id}/download/")
+        self.assertEqual(download.status_code, status.HTTP_200_OK)
+        self.assertIn("attachment", download["Content-Disposition"])
+        self.assertEqual(b"".join(download.streaming_content), b"%PDF-1.4 hello")
+
+    def test_invalid_or_oversized_attachment_is_rejected(self):
+        self.client.force_authenticate(self.client_user)
+        invalid = self.client.post(
+            "/api/messages/",
+            {"file": SimpleUploadedFile("bad.txt", b"not allowed", content_type="text/plain")},
+            format="multipart",
+        )
+        oversized = self.client.post(
+            "/api/messages/",
+            {"file": SimpleUploadedFile("large.pdf", b"%PDF-" + b"x" * (MAX_MESSAGE_ATTACHMENT_BYTES + 1), content_type="application/pdf")},
+            format="multipart",
+        )
+
+        self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(oversized.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(MessageAttachment.objects.count(), 0)
+
+    def test_attachment_access_is_limited_to_company_conversation(self):
+        self.client.force_authenticate(self.client_user)
+        pdf = SimpleUploadedFile("rapport.pdf", b"%PDF-1.4 hello", content_type="application/pdf")
+        self.client.post("/api/messages/", {"file": pdf}, format="multipart")
+        attachment = MessageAttachment.objects.get()
+
+        self.client.force_authenticate(self.other_client)
+        forbidden = self.client.get(f"/api/messages/attachments/{attachment.id}/download/")
+        self.assertEqual(forbidden.status_code, status.HTTP_403_FORBIDDEN)
+
+        self.client.force_authenticate(self.accountant)
+        allowed = self.client.get(f"/api/messages/attachments/{attachment.id}/download/?inline=1")
+        self.assertEqual(allowed.status_code, status.HTTP_200_OK)

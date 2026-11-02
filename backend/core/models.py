@@ -320,7 +320,7 @@ class Message(models.Model):
         on_delete=models.CASCADE,
         related_name="conversation_messages",
     )
-    content = models.TextField()
+    content = models.TextField(blank=True, default="")
     read_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
@@ -329,6 +329,29 @@ class Message(models.Model):
 
     def __str__(self) -> str:
         return f"Message {self.id} ({self.entreprise.nom})"
+
+
+def message_attachment_path(instance, filename):
+    safe_name = get_valid_filename(filename.replace("\\", "/").rsplit("/", 1)[-1])
+    return f"message_attachments/{uuid4().hex}_{safe_name}"
+
+
+class MessageAttachment(models.Model):
+    """Document joint à un message de conversation."""
+    message = models.ForeignKey(
+        Message, on_delete=models.CASCADE, related_name="attachments"
+    )
+    file = models.FileField(upload_to=message_attachment_path)
+    original_filename = models.CharField(max_length=255)
+    content_type = models.CharField(max_length=120, blank=True, default="")
+    size = models.PositiveBigIntegerField(default=0)
+    uploaded_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["uploaded_at"]
+
+    def __str__(self) -> str:
+        return f"Pièce jointe {self.original_filename} ({self.message_id})"
 
 
 class Facture(models.Model):
