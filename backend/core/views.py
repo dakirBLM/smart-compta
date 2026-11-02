@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -88,6 +89,24 @@ def _accountant_entreprise(request, pk):
 MAX_BANK_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
+_ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
+    "application/pdf": ".pdf",
+    "image/png": ".png",
+    "image/jpeg": ".jpg",
+    "image/webp": ".webp",
+    "application/msword": ".doc",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+}
+
+_INLINE_ATTACHMENT_MIME_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+}
+
 
 def _client_entreprise(request, pk):
     access = get_object_or_404(
@@ -125,23 +144,44 @@ def _validate_message_attachment(uploaded):
         raise ValueError("Le fichier dépasse la taille maximale de 10 Mo.")
 
     filename = (uploaded.name or "piece-jointe").replace("\\", "/").rsplit("/", 1)[-1]
-    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    allowed_exts = {"pdf", "png", "jpg", "jpeg", "webp", "doc", "docx", "xls", "xlsx"}
-    allowed_mime_types = {
-        "application/pdf",
-        "image/png",
-        "image/jpeg",
-        "image/webp",
+    if not filename:
+        filename = "piece-jointe"
+    ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "").strip()
+    if ext == "jpeg":
+        ext = "jpg"
+    normalized_ext = f".{ext}" if ext else ""
+    allowed_exts = {".pdf", ".png", ".jpg", ".webp", ".doc", ".docx", ".xls", ".xlsx"}
+    content_type = (uploaded.content_type or "").lower().strip()
+    expected_ext = _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES.get(content_type)
+    if content_type not in _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES:
+        raise ValueError(
+            "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX."
+        )
+    if expected_ext and expected_ext not in (normalized_ext, ".jpg"):
+        raise ValueError("Le type du fichier ne correspond pas au nom du fichier.")
+    if not normalized_ext or normalized_ext not in allowed_exts:
+        raise ValueError(
+            "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX."
+        )
+
+    file_bytes = uploaded.read(512)
+    uploaded.seek(0)
+    if content_type == "application/pdf" and not file_bytes.startswith(b"%PDF-"):
+        raise ValueError("Le fichier PDF semble être invalide.")
+    if content_type == "image/png" and not file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Le fichier image PNG semble être invalide.")
+    if content_type == "image/jpeg" and not file_bytes.startswith((b"\xff\xd8\xff",)):
+        raise ValueError("Le fichier image JPG semble être invalide.")
+    if content_type == "image/webp" and not file_bytes.startswith(b"RIFF"):
+        raise ValueError("Le fichier image WEBP semble être invalide.")
+    if content_type in (
         "application/msword",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         "application/vnd.ms-excel",
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    }
-    content_type = (uploaded.content_type or "").lower()
-    if ext not in allowed_exts and content_type not in allowed_mime_types:
-        raise ValueError(
-            "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX."
-        )
+    ) and not file_bytes.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")):
+        raise ValueError("Le document semble être invalide.")
+
     return filename[:255]
 
 
@@ -600,17 +640,21 @@ class MessageAttachmentDownloadView(APIView):
             return Response({"error": "Accès refusé."}, status=status.HTTP_403_FORBIDDEN)
 
         inline = request.query_params.get("inline") == "1"
+        content_type = (attachment.content_type or "application/octet-stream").lower().strip()
+        if content_type not in _INLINE_ATTACHMENT_MIME_TYPES:
+            inline = False
+
         file_obj = attachment.file.open("rb")
         response = FileResponse(
             file_obj,
             as_attachment=not inline,
             filename=attachment.original_filename,
         )
-        content_type = attachment.content_type or "application/octet-stream"
-        response["Content-Type"] = content_type
+        response["Content-Type"] = content_type if content_type else "application/octet-stream"
         disposition = "inline" if inline else "attachment"
+        safe_filename = attachment.original_filename.replace("\r", "").replace("\n", "")
         response["Content-Disposition"] = (
-            f'{disposition}; filename="{attachment.original_filename}"'
+            f"{disposition}; filename*=UTF-8''{quote(safe_filename.encode('utf-8'))}"
         )
         return response
 
