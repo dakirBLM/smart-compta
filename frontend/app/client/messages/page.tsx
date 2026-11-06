@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, FileText, Paperclip, Send, Trash2 } from "lucide-react";
+import { FileText, Paperclip, Send, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ClientShell } from "@/components/ClientShell";
 import { Button, Input, Spinner } from "@/components/ui";
@@ -11,6 +11,7 @@ import { cn, formatDateTime } from "@/lib/utils";
 
 const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp,.doc,.docx,.xls,.xlsx";
 const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 
 function validateAttachmentFile(file: File | null): string | null {
   if (!file) return null;
@@ -22,6 +23,17 @@ function validateAttachmentFile(file: File | null): string | null {
   const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
   if (!isAllowed) {
     return "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX.";
+  }
+  return null;
+}
+
+function getAttachmentSelectionError(files: File[]): string | null {
+  if (files.length > MAX_MESSAGE_ATTACHMENT_COUNT) {
+    return `Vous pouvez joindre jusqu'à ${MAX_MESSAGE_ATTACHMENT_COUNT} fichiers maximum.`;
+  }
+  const totalSize = files.reduce((total, file) => total + file.size, 0);
+  if (totalSize > MAX_MESSAGE_ATTACHMENT_BYTES) {
+    return "Le total des fichiers dépasse la limite de 10 Mo.";
   }
   return null;
 }
@@ -49,7 +61,7 @@ export default function ClientMessagesPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [attachmentPreviewUrls, setAttachmentPreviewUrls] = useState<Record<number, string>>({});
   const [previewAttachment, setPreviewAttachment] = useState<
     { id: number; filename: string; content_type: string; open_url: string } | null
@@ -149,17 +161,23 @@ export default function ClientMessagesPage() {
   }, [messages]);
 
   async function send() {
-    if ((!text.trim() && !selectedFile) || sending) return;
+    const hasContent = Boolean(text.trim()) || selectedFiles.length > 0;
+    if (!hasContent || sending) return;
+    const selectionError = getAttachmentSelectionError(selectedFiles);
+    if (selectionError) {
+      setError(selectionError);
+      return;
+    }
     setError("");
     setSending(true);
     try {
       const form = new FormData();
       if (text.trim()) form.append("content", text.trim());
-      if (selectedFile) form.append("file", selectedFile);
+      selectedFiles.forEach((file) => form.append("file", file));
       const msg = await api.post<ChatMessage>("/api/messages/", form);
       setMessages((prev) => [...prev, msg]);
       setText("");
-      setSelectedFile(null);
+      setSelectedFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur lors de l'envoi du message");
@@ -213,7 +231,7 @@ export default function ClientMessagesPage() {
         <div className="flex h-[calc(100vh-12rem)] min-h-[400px] flex-col overflow-hidden rounded-2xl border border-[#e5e9e6] bg-white shadow-[0_4px_18px_rgba(27,55,46,0.025)]">
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/50">
             {error && (
-              <div className="rounded-lg bg-red-50 border border-red-200 px-3 py-2 text-sm text-red-700">
+              <div className="sticky top-0 z-10 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 shadow-sm">
                 {error}
               </div>
             )}
@@ -284,21 +302,11 @@ export default function ClientMessagesPage() {
                                   </button>
                                 </div>
                               )}
-                              <div className="flex items-center justify-between gap-2 px-2.5 py-2">
-                                {!isImage && (
-                                  <span className={cn("text-[10px]", m.is_mine ? "text-white/70" : "text-gray-500")}>
-                                    {formatFileSize(attachment.size)}
-                                  </span>
-                                )}
-                                <button
-                                  type="button"
-                                  className={cn("inline-flex items-center gap-1 text-[10px] font-semibold", m.is_mine ? "text-white/80 hover:text-white" : "text-brand hover:text-brand-dark")}
-                                  onClick={() => openAttachment(attachment)}
-                                >
-                                  <ExternalLink size={12} />
-                                  Ouvrir
-                                </button>
-                              </div>
+                              {!isImage && (
+                                <div className={cn("px-2.5 pb-2 text-[10px]", m.is_mine ? "text-white/70" : "text-gray-500")}>
+                                  {formatFileSize(attachment.size)}
+                                </div>
+                              )}
                             </div>
                           );
                         })}
@@ -319,23 +327,35 @@ export default function ClientMessagesPage() {
             <div ref={bottomRef} />
           </div>
           <div className="border-t bg-white p-3">
-            {selectedFile && (
-              <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-[#e5e9e6] bg-gray-50 px-3 py-2 text-[11px] text-[#17221f]">
-                <div className="min-w-0">
-                  <div className="truncate font-semibold text-brand">{selectedFile.name}</div>
-                  <div className="text-gray-500">{formatFileSize(selectedFile.size)}</div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedFile(null);
-                    if (fileInputRef.current) fileInputRef.current.value = "";
-                  }}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e5e9e6] bg-white text-gray-500 hover:text-rose-600"
-                  aria-label="Supprimer la pièce jointe"
-                >
-                  <Trash2 size={14} />
-                </button>
+            {selectedFiles.length > 0 && (
+              <div className="mb-2 space-y-2">
+                {selectedFiles.map((file, index) => (
+                  <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-xl border border-[#e5e9e6] bg-gray-50 px-3 py-2 text-[11px] text-[#17221f]">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {isImageAttachment(file.name, file.type) ? (
+                        <img src={URL.createObjectURL(file)} alt={file.name} className="h-8 w-8 rounded-lg object-cover" />
+                      ) : (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-brand">
+                          <FileText size={14} />
+                        </div>
+                      )}
+                      <div className="min-w-0">
+                        <div className="truncate font-semibold text-brand">{file.name}</div>
+                        <div className="text-gray-500">{formatFileSize(file.size)}</div>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedFiles((current) => current.filter((item) => item !== file));
+                      }}
+                      className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-[#e5e9e6] bg-white text-gray-500 hover:text-rose-600"
+                      aria-label="Supprimer la pièce jointe"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
             <div className="flex gap-2">
@@ -343,18 +363,34 @@ export default function ClientMessagesPage() {
                 ref={fileInputRef}
                 type="file"
                 hidden
+                multiple
                 accept={ATTACHMENT_ACCEPT}
                 onChange={(event) => {
-                  const file = event.target.files?.[0] ?? null;
-                  const validationError = validateAttachmentFile(file);
-                  if (validationError) {
-                    setError(validationError);
-                    setSelectedFile(null);
+                  const nextFiles = Array.from(event.target.files ?? []);
+                  const allFiles = [...selectedFiles, ...nextFiles];
+                  if (allFiles.length > MAX_MESSAGE_ATTACHMENT_COUNT) {
+                    setError("Vous pouvez joindre jusqu'à 3 fichiers maximum.");
                     event.target.value = "";
                     return;
                   }
+                  const validationError = getAttachmentSelectionError(allFiles);
+                  if (validationError) {
+                    setError(validationError);
+                    event.target.value = "";
+                    return;
+                  }
+                  const validFiles: File[] = [];
+                  for (const file of nextFiles) {
+                    const validationMessage = validateAttachmentFile(file);
+                    if (validationMessage) {
+                      setError(validationMessage);
+                      event.target.value = "";
+                      return;
+                    }
+                    validFiles.push(file);
+                  }
                   setError("");
-                  setSelectedFile(file);
+                  setSelectedFiles((current) => [...current, ...validFiles]);
                   event.target.value = "";
                 }}
               />
@@ -376,7 +412,7 @@ export default function ClientMessagesPage() {
                 onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
                 className="flex-1"
               />
-              <Button onClick={send} disabled={(!text.trim() && !selectedFile) || sending}>
+              <Button onClick={send} disabled={(!text.trim() && selectedFiles.length === 0) || sending || getAttachmentSelectionError(selectedFiles) !== null}>
                 {sending ? <Spinner className="h-4 w-4 text-brand" /> : <Send size={16} />}
               </Button>
             </div>

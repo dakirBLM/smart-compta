@@ -90,12 +90,12 @@ MAX_BANK_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024
 
 _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
-    ".pdf": {"application/pdf"},
-    ".png": {"image/png"},
-    ".jpg": {"image/jpeg"},
-    ".jpeg": {"image/jpeg"},
+    ".pdf": {"application/pdf", "application/x-pdf"},
+    ".png": {"image/png", "image/x-png"},
+    ".jpg": {"image/jpeg", "image/jpg", "image/pjpeg", "image/x-jpeg"},
+    ".jpeg": {"image/jpeg", "image/jpg", "image/pjpeg", "image/x-jpeg"},
     ".webp": {"image/webp"},
-    ".doc": {"application/msword"},
+    ".doc": {"application/msword", "application/vnd.ms-word"},
     ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
     ".xls": {"application/vnd.ms-excel"},
     ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
@@ -553,8 +553,8 @@ class MessageListCreateView(APIView):
 
     def post(self, request, pk=None, client_id=None):
         content = (request.data.get("content") or "").strip()
-        uploaded_file = request.FILES.get("file")
-        has_attachment = uploaded_file is not None
+        uploaded_files = request.FILES.getlist("file")
+        has_attachment = bool(uploaded_files)
         if not content and not has_attachment:
             return Response(
                 {"content": "Le message ne peut pas être vide."},
@@ -581,9 +581,18 @@ class MessageListCreateView(APIView):
                 status=status.HTTP_403_FORBIDDEN,
             )
 
+        validated_files = []
         try:
             if has_attachment:
-                filename = _validate_message_attachment(uploaded_file)
+                if len(uploaded_files) > 3:
+                    raise ValueError("Vous pouvez joindre jusqu'à 3 fichiers maximum.")
+                total_size = sum(file.size for file in uploaded_files)
+                if total_size > MAX_MESSAGE_ATTACHMENT_BYTES:
+                    raise ValueError("Le total des fichiers dépasse la taille maximale de 10 Mo.")
+                for uploaded_file in uploaded_files:
+                    validated_files.append(
+                        (uploaded_file, _validate_message_attachment(uploaded_file))
+                    )
         except ValueError as exc:
             return Response({"file": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -595,17 +604,19 @@ class MessageListCreateView(APIView):
                     client_user=client_user,
                     content=content,
                 )
-                if has_attachment:
-                    MessageAttachment.objects.create(
+                for uploaded_file, filename in validated_files:
+                    attachment = MessageAttachment(
                         message=msg,
-                        file=uploaded_file,
                         original_filename=filename,
                         content_type=uploaded_file.content_type or "",
                         size=uploaded_file.size,
                     )
-        except Exception as exc:
+                    attachment.file.save(filename, uploaded_file, save=False)
+                    attachment.save()
+        except Exception:
+            logger.exception("Message attachment upload failed")
             return Response(
-                {"error": f"Erreur lors de la création du message: {str(exc)}"},
+                {"error": "Erreur lors de la création du message."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         return Response(

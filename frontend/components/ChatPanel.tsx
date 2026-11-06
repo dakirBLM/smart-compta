@@ -1,6 +1,6 @@
 "use client";
 
-import { ExternalLink, FileText, Paperclip, Send, Trash2 } from "lucide-react";
+import { FileText, Paperclip, Send, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Spinner } from "@/components/ui";
 import { api, getToken } from "@/lib/api";
@@ -10,6 +10,7 @@ import { cn, formatDateTime } from "@/lib/utils";
 
 const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp,.doc,.docx,.xls,.xlsx";
 const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
+const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 
 function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
@@ -25,6 +26,17 @@ function validateAttachmentFile(file: File | null): string | null {
   const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
   if (!isAllowed) {
     return "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX.";
+  }
+  return null;
+}
+
+function getAttachmentSelectionError(files: File[]): string | null {
+  if (files.length > MAX_MESSAGE_ATTACHMENT_COUNT) {
+    return `Vous pouvez joindre jusqu'à ${MAX_MESSAGE_ATTACHMENT_COUNT} fichiers maximum.`;
+  }
+  const totalSize = files.reduce((total, file) => total + file.size, 0);
+  if (totalSize > MAX_MESSAGE_ATTACHMENT_BYTES) {
+    return "Le total des fichiers dépasse la limite de 10 Mo.";
   }
   return null;
 }
@@ -58,7 +70,7 @@ export function ChatPanel({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState("");
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
   const [attachmentPreviewUrls, setAttachmentPreviewUrls] = useState<Record<number, string>>({});
   const [previewAttachment, setPreviewAttachment] = useState<
     { id: number; filename: string; content_type: string; open_url: string } | null
@@ -162,20 +174,26 @@ export function ChatPanel({
   }, [messages]);
 
   async function send() {
-    if (!selectedClientId || (!text.trim() && !selectedFile) || sending) return;
+    const hasContent = Boolean(text.trim()) || selectedFiles.length > 0;
+    if (!selectedClientId || !hasContent || sending) return;
+    const selectionError = getAttachmentSelectionError(selectedFiles);
+    if (selectionError) {
+      setError(selectionError);
+      return;
+    }
     setError("");
     setSending(true);
     try {
       const form = new FormData();
       if (text.trim()) form.append("content", text.trim());
-      if (selectedFile) form.append("file", selectedFile);
+      selectedFiles.forEach((file) => form.append("file", file));
       const msg = await api.post<ChatMessage>(
         `/api/entreprises/${entrepriseId}/conversations/${selectedClientId}/messages/`,
         form
       );
       setMessages((prev) => [...prev, msg]);
       setText("");
-      setSelectedFile(null);
+      setSelectedFiles([]);
       if (fileInputRef.current) fileInputRef.current.value = "";
     } catch (e) {
       setError(e instanceof Error ? e.message : "Erreur lors de l'envoi du message");
@@ -279,7 +297,7 @@ export function ChatPanel({
 
             <div className="flex-1 overflow-y-auto p-5 space-y-3.5 bg-[#F9FBF9]">
               {error && (
-                <div className="rounded-xl bg-rose-50 border border-rose-200 px-4 py-2.5 text-xs font-semibold text-rose-700">
+                <div className="sticky top-0 z-10 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 shadow-sm">
                   {error}
                 </div>
               )}
@@ -352,24 +370,11 @@ export function ChatPanel({
                                     </button>
                                   </div>
                                 )}
-                                <div className="flex items-center justify-between gap-2 px-2.5 py-2">
-                                  {!isImage && (
-                                    <div className={cn("text-[10px]", m.is_mine ? "text-white/70" : "text-gray-500")}>
-                                      {formatFileSize(attachment.size)}
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    className={cn(
-                                      "inline-flex items-center gap-1 text-[10px] font-semibold",
-                                      m.is_mine ? "text-white/80 hover:text-white" : "text-brand hover:text-brand-dark"
-                                    )}
-                                    onClick={() => void openAttachment(attachment)}
-                                  >
-                                    <ExternalLink size={12} />
-                                    Ouvrir
-                                  </button>
-                                </div>
+                                {!isImage && (
+                                  <div className={cn("px-2.5 pb-2 text-[10px]", m.is_mine ? "text-white/70" : "text-gray-500")}>
+                                    {formatFileSize(attachment.size)}
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -391,23 +396,39 @@ export function ChatPanel({
             </div>
 
             <div className="border-t border-gray-200 bg-white p-3.5">
-              {selectedFile && (
-                <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-700">
-                  <div className="min-w-0">
-                    <div className="truncate font-semibold text-brand">{selectedFile.name}</div>
-                    <div className="text-gray-500">{formatFileSize(selectedFile.size)}</div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelectedFile(null);
-                      if (fileInputRef.current) fileInputRef.current.value = "";
-                    }}
-                    className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 hover:text-rose-600"
-                    aria-label="Supprimer la pièce jointe"
-                  >
-                    <Trash2 size={14} />
-                  </button>
+              {selectedFiles.length > 0 && (
+                <div className="mb-2 space-y-2">
+                  {selectedFiles.map((file, index) => (
+                    <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-700">
+                      <div className="flex min-w-0 items-center gap-2">
+                        {isImageAttachment(file.name, file.type) ? (
+                          <img
+                            src={URL.createObjectURL(file)}
+                            alt={file.name}
+                            className="h-8 w-8 rounded-lg object-cover"
+                          />
+                        ) : (
+                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-brand">
+                            <FileText size={14} />
+                          </div>
+                        )}
+                        <div className="min-w-0">
+                          <div className="truncate font-semibold text-brand">{file.name}</div>
+                          <div className="text-gray-500">{formatFileSize(file.size)}</div>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedFiles((current) => current.filter((item) => item !== file));
+                        }}
+                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 hover:text-rose-600"
+                        aria-label="Supprimer la pièce jointe"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  ))}
                 </div>
               )}
               <div className="flex gap-2.5">
@@ -415,18 +436,34 @@ export function ChatPanel({
                   ref={fileInputRef}
                   type="file"
                   hidden
+                  multiple
                   accept={ATTACHMENT_ACCEPT}
                   onChange={(event) => {
-                    const file = event.target.files?.[0] ?? null;
-                    const validationError = validateAttachmentFile(file);
-                    if (validationError) {
-                      setError(validationError);
-                      setSelectedFile(null);
+                    const nextFiles = Array.from(event.target.files ?? []);
+                    const allFiles = [...selectedFiles, ...nextFiles];
+                    if (allFiles.length > MAX_MESSAGE_ATTACHMENT_COUNT) {
+                      setError("Vous pouvez joindre jusqu'à 3 fichiers maximum.");
                       event.target.value = "";
                       return;
                     }
+                    const validationError = getAttachmentSelectionError(allFiles);
+                    if (validationError) {
+                      setError(validationError);
+                      event.target.value = "";
+                      return;
+                    }
+                    const validFiles: File[] = [];
+                    for (const file of nextFiles) {
+                      const validationMessage = validateAttachmentFile(file);
+                      if (validationMessage) {
+                        setError(validationMessage);
+                        event.target.value = "";
+                        return;
+                      }
+                      validFiles.push(file);
+                    }
                     setError("");
-                    setSelectedFile(file);
+                    setSelectedFiles((current) => [...current, ...validFiles]);
                     event.target.value = "";
                   }}
                 />
@@ -451,7 +488,7 @@ export function ChatPanel({
                 <Button
                   variant="primary"
                   onClick={send}
-                  disabled={(!text.trim() && !selectedFile) || sending}
+                  disabled={(!text.trim() && selectedFiles.length === 0) || sending || getAttachmentSelectionError(selectedFiles) !== null}
                   className="font-bold text-xs gap-1.5 shadow-glow-sm"
                 >
                   {sending ? <Spinner className="h-4 w-4 text-brand" /> : <Send size={15} />}
