@@ -9,9 +9,24 @@ import { ChatMessage, Conversation } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 
 const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp,.doc,.docx,.xls,.xlsx";
+const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 
 function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
+}
+
+function validateAttachmentFile(file: File | null): string | null {
+  if (!file) return null;
+  if (file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
+    return "Le fichier dépasse la taille maximale de 10 Mo.";
+  }
+  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".doc", ".docx", ".xls", ".xlsx"];
+  const fileName = file.name.toLowerCase();
+  const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
+  if (!isAllowed) {
+    return "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX.";
+  }
+  return null;
 }
 
 function formatFileSize(size: number) {
@@ -59,7 +74,7 @@ export function ChatPanel({
     setPreviewAttachment(attachment);
     setPreviewLoading(true);
     setPreviewUrl(null);
-    const token = localStorage.getItem("sc_token");
+    const token = getToken();
     try {
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
@@ -403,6 +418,14 @@ export function ChatPanel({
                   accept={ATTACHMENT_ACCEPT}
                   onChange={(event) => {
                     const file = event.target.files?.[0] ?? null;
+                    const validationError = validateAttachmentFile(file);
+                    if (validationError) {
+                      setError(validationError);
+                      setSelectedFile(null);
+                      event.target.value = "";
+                      return;
+                    }
+                    setError("");
                     setSelectedFile(file);
                     event.target.value = "";
                   }}
