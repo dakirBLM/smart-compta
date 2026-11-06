@@ -122,10 +122,35 @@ STORAGES = {
     },
 }
 
+# Production private storage for uploaded media (message attachments, files).
+# Cloudflare R2 uses an S3-compatible API; local development keeps using the
+# filesystem unless credentials are configured.
+r2_bucket = os.getenv("R2_BUCKET_NAME") or os.getenv("AWS_STORAGE_BUCKET_NAME")
+r2_access_key = os.getenv("R2_ACCESS_KEY_ID") or os.getenv("AWS_ACCESS_KEY_ID")
+r2_secret_key = os.getenv("R2_SECRET_ACCESS_KEY") or os.getenv("AWS_SECRET_ACCESS_KEY")
+r2_endpoint = os.getenv("R2_ENDPOINT_URL") or os.getenv("AWS_S3_ENDPOINT_URL")
+if r2_bucket and r2_access_key and r2_secret_key and r2_endpoint:
+    STORAGES["default"] = {
+        "BACKEND": "storages.backends.s3.S3Storage",
+        "OPTIONS": {
+            "bucket_name": r2_bucket,
+            "access_key": r2_access_key,
+            "secret_key": r2_secret_key,
+            "endpoint_url": r2_endpoint,
+            "region_name": os.getenv("R2_REGION_NAME") or os.getenv("AWS_S3_REGION_NAME") or "auto",
+            "file_overwrite": False,
+            "default_acl": None,
+            "querystring_auth": True,
+            "signature_version": "s3v4",
+            "addressing_style": "virtual",
+        },
+    }
+
 # When CLOUDINARY_URL is set (cloudinary://<api_key>:<api_secret>@<cloud_name>),
 # uploaded media (avatars, invoice images) goes to Cloudinary and persists.
-# Without it, media falls back to local disk (fine for dev).
-if os.getenv("CLOUDINARY_URL") and cloudinary_available:
+# Without it, media falls back to local disk (fine for dev). R2 takes
+# precedence for private message attachments when configured.
+if not r2_bucket and os.getenv("CLOUDINARY_URL") and cloudinary_available:
     STORAGES["default"] = {
         "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage"
     }

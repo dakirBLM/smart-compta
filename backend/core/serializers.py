@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db.models import Q
+from django.urls import reverse
 from rest_framework import serializers
 
 from .models import (
@@ -16,6 +17,7 @@ from .models import (
     Journal,
     LigneEcriture,
     Message,
+    MessageAttachment,
 )
 
 User = get_user_model()
@@ -207,9 +209,40 @@ class ClientComptableSerializer(serializers.ModelSerializer):
         read_only_fields = ["entreprise", "numero_compte", "created_at"]
 
 
+class MessageAttachmentSerializer(serializers.ModelSerializer):
+    filename = serializers.SerializerMethodField()
+    download_url = serializers.SerializerMethodField()
+    open_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MessageAttachment
+        fields = [
+            "id", "filename", "content_type", "size",
+            "download_url", "open_url", "uploaded_at",
+        ]
+
+    def get_filename(self, obj):
+        return obj.original_filename
+
+    def get_download_url(self, obj):
+        request = self.context.get("request")
+        path = reverse("message-attachment-download", kwargs={"attachment_id": obj.pk})
+        if request is not None:
+            return request.build_absolute_uri(path)
+        return path
+
+    def get_open_url(self, obj):
+        request = self.context.get("request")
+        path = f"{reverse('message-attachment-download', kwargs={'attachment_id': obj.pk})}?inline=1"
+        if request is not None:
+            return request.build_absolute_uri(path)
+        return path
+
+
 class MessageSerializer(serializers.ModelSerializer):
     sender_username = serializers.CharField(source="sender.username", read_only=True)
     sender_role = serializers.CharField(source="sender.role", read_only=True)
+    attachments = MessageAttachmentSerializer(many=True, read_only=True)
     is_mine = serializers.SerializerMethodField()
 
     class Meta:
@@ -217,6 +250,7 @@ class MessageSerializer(serializers.ModelSerializer):
         fields = [
             "id", "entreprise", "sender", "sender_username", "sender_role",
             "client_user", "content", "read_at", "created_at", "is_mine",
+            "attachments",
         ]
         read_only_fields = ["entreprise", "sender", "client_user", "created_at"]
 

@@ -1,4 +1,5 @@
 import logging
+from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
@@ -26,6 +27,7 @@ from .models import (
     Journal,
     LigneEcriture,
     Message,
+    MessageAttachment,
     SCFAccount,
 )
 from .bank_statements import (
@@ -85,6 +87,26 @@ def _accountant_entreprise(request, pk):
 
 
 MAX_BANK_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024
+
+_ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
+    ".pdf": {"application/pdf"},
+    ".png": {"image/png"},
+    ".jpg": {"image/jpeg"},
+    ".jpeg": {"image/jpeg"},
+    ".webp": {"image/webp"},
+    ".doc": {"application/msword"},
+    ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
+    ".xls": {"application/vnd.ms-excel"},
+    ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
+}
+
+_INLINE_ATTACHMENT_MIME_TYPES = {
+    "application/pdf",
+    "image/png",
+    "image/jpeg",
+    "image/webp",
+}
 
 
 def _client_entreprise(request, pk):
@@ -112,6 +134,46 @@ def _validate_bank_statement_upload(uploaded):
     )
     if not valid_file:
         raise ValueError("Format ou contenu invalide. Utilisez un PDF, JPG ou PNG valide.")
+
+    return filename[:255]
+
+
+def _validate_message_attachment(uploaded):
+    if not uploaded:
+        raise ValueError("Aucun fichier sélectionné.")
+    if uploaded.size > MAX_MESSAGE_ATTACHMENT_BYTES:
+        raise ValueError("Le fichier dépasse la taille maximale de 10 Mo.")
+
+    filename = (uploaded.name or "piece-jointe").replace("\\", "/").rsplit("/", 1)[-1]
+    if not filename:
+        filename = "piece-jointe"
+
+    ext = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "").strip()
+    normalized_ext = f".{ext}" if ext else ""
+    if ext == "jpeg":
+        normalized_ext = ".jpg"
+    if normalized_ext not in _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES:
+        raise ValueError(
+            "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX."
+        )
+
+    content_type = (uploaded.content_type or "").lower().strip()
+    allowed_types = _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES.get(normalized_ext, set())
+    if content_type not in allowed_types:
+        raise ValueError("Le type du fichier ne correspond pas au nom du fichier.")
+
+    file_bytes = uploaded.read(512)
+    uploaded.seek(0)
+    if normalized_ext == ".pdf" and not file_bytes.startswith(b"%PDF-"):
+        raise ValueError("Le fichier PDF semble être invalide.")
+    if normalized_ext == ".png" and not file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Le fichier image PNG semble être invalide.")
+    if normalized_ext == ".jpg" and not file_bytes.startswith((b"\xff\xd8\xff",)):
+        raise ValueError("Le fichier image JPG semble être invalide.")
+    if normalized_ext == ".webp" and not file_bytes.startswith(b"RIFF"):
+        raise ValueError("Le fichier image WEBP semble être invalide.")
+    if normalized_ext in {".doc", ".docx", ".xls", ".xlsx"} and not file_bytes.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")):
+        raise ValueError("Le document semble être invalide.")
 
     return filename[:255]
 
@@ -425,18 +487,24 @@ class ConversationListView(APIView):
         for access in accesses:
             last = Message.objects.filter(
                 entreprise=entreprise, client_user=access.client
-            ).order_by("-created_at").first()
+            ).select_related("sender").prefetch_related("attachments").order_by("-created_at").first()
             unread = Message.objects.filter(
                 entreprise=entreprise,
                 client_user=access.client,
                 sender=access.client,
                 read_at__isnull=True,
             ).count()
+            last_message = ""
+            if last:
+                last_message = (last.content or "").strip()
+                if not last_message and last.attachments.exists():
+                    attachment = last.attachments.order_by("-uploaded_at").first()
+                    last_message = f"Pièce jointe : {attachment.original_filename}"
             result.append({
                 "client_id": access.client_id,
                 "nom_client": access.nom_client,
                 "username": access.client.username,
-                "last_message": last.content if last else "",
+                "last_message": last_message,
                 "last_message_at": last.created_at.isoformat() if last else None,
                 "unread_count": unread,
             })
@@ -453,8 +521,7 @@ class MessageListCreateView(APIView):
             get_object_or_404(ClientAccess, entreprise=entreprise, client=client_user)
             qs = Message.objects.filter(
                 entreprise=entreprise, client_user=client_user
-            ).select_related("sender")
-            # Mark client messages as read when accountant opens conversation
+            ).select_related("sender").prefetch_related("attachments")
             Message.objects.filter(
                 entreprise=entreprise,
                 client_user=client_user,
@@ -471,7 +538,7 @@ class MessageListCreateView(APIView):
             client_user = request.user
             qs = Message.objects.filter(
                 entreprise=entreprise, client_user=client_user
-            ).select_related("sender")
+            ).select_related("sender").prefetch_related("attachments")
             Message.objects.filter(
                 entreprise=entreprise,
                 client_user=client_user,
@@ -486,7 +553,9 @@ class MessageListCreateView(APIView):
 
     def post(self, request, pk=None, client_id=None):
         content = (request.data.get("content") or "").strip()
-        if not content:
+        uploaded_file = request.FILES.get("file")
+        has_attachment = uploaded_file is not None
+        if not content and not has_attachment:
             return Response(
                 {"content": "Le message ne peut pas être vide."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -509,25 +578,90 @@ class MessageListCreateView(APIView):
         else:
             return Response(
                 {"error": "Accès refusé. Seuls les comptables et les clients peuvent envoyer des messages."},
-                status=status.HTTP_403_FORBIDDEN
+                status=status.HTTP_403_FORBIDDEN,
             )
 
         try:
-            msg = Message.objects.create(
-                entreprise=entreprise,
-                sender=request.user,
-                client_user=client_user,
-                content=content,
-            )
-        except Exception as e:
+            if has_attachment:
+                filename = _validate_message_attachment(uploaded_file)
+        except ValueError as exc:
+            return Response({"file": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            with transaction.atomic():
+                msg = Message.objects.create(
+                    entreprise=entreprise,
+                    sender=request.user,
+                    client_user=client_user,
+                    content=content,
+                )
+                if has_attachment:
+                    MessageAttachment.objects.create(
+                        message=msg,
+                        file=uploaded_file,
+                        original_filename=filename,
+                        content_type=uploaded_file.content_type or "",
+                        size=uploaded_file.size,
+                    )
+        except Exception as exc:
             return Response(
-                {"error": f"Erreur lors de la création du message: {str(e)}"},
+                {"error": f"Erreur lors de la création du message: {str(exc)}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
         return Response(
             MessageSerializer(msg, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class MessageAttachmentDownloadView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, attachment_id):
+        attachment = get_object_or_404(MessageAttachment, pk=attachment_id)
+        message = attachment.message
+        user = request.user
+        has_access = False
+        if user.role == "accountant":
+            has_access = message.entreprise.accountant_id == user.id
+        elif user.role == "client":
+            has_access = (
+                message.client_user_id == user.id and
+                ClientAccess.objects.filter(client=user, entreprise=message.entreprise).exists()
+            )
+        if not has_access:
+            return Response({"error": "Accès refusé."}, status=status.HTTP_403_FORBIDDEN)
+
+        inline = request.query_params.get("inline") == "1"
+        filename = attachment.original_filename or "piece-jointe"
+        extension = (filename.rsplit(".", 1)[-1].lower() if "." in filename else "").strip()
+        normalized_ext = f".{extension}" if extension else ""
+        if extension == "jpeg":
+            normalized_ext = ".jpg"
+        allowed_types = _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES.get(normalized_ext, set())
+        stored_type = (attachment.content_type or "").lower().strip()
+
+        if stored_type not in allowed_types or not allowed_types:
+            inline = False
+            content_type = "application/octet-stream"
+        else:
+            content_type = stored_type
+            if content_type not in _INLINE_ATTACHMENT_MIME_TYPES:
+                inline = False
+
+        file_obj = attachment.file.open("rb")
+        response = FileResponse(
+            file_obj,
+            as_attachment=not inline,
+            filename=filename,
+        )
+        response["Content-Type"] = content_type
+        disposition = "inline" if inline else "attachment"
+        safe_filename = filename.replace("\r", "").replace("\n", "")
+        response["Content-Disposition"] = (
+            f"{disposition}; filename*=UTF-8''{quote(safe_filename.encode('utf-8'))}"
+        )
+        return response
 
 
 # --------------------------------------------------------------------------- #

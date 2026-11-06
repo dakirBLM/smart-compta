@@ -91,6 +91,16 @@ export interface Conversation {
   unread_count: number;
 }
 
+export interface MessageAttachment {
+  id: number;
+  filename: string;
+  content_type: string;
+  size: number;
+  download_url: string;
+  open_url: string;
+  uploaded_at: string;
+}
+
 export interface ChatMessage {
   id: number;
   entreprise: number;
@@ -102,6 +112,7 @@ export interface ChatMessage {
   read_at: string | null;
   created_at: string;
   is_mine: boolean;
+  attachments: MessageAttachment[];
 }
 
 export type JournalType =
