@@ -346,6 +346,14 @@ export default function ClientMessagesPage() {
                 accept={ATTACHMENT_ACCEPT}
                 onChange={(event) => {
                   const file = event.target.files?.[0] ?? null;
+                  const validationError = validateAttachmentFile(file);
+                  if (validationError) {
+                    setError(validationError);
+                    setSelectedFile(null);
+                    event.target.value = "";
+                    return;
+                  }
+                  setError("");
                   setSelectedFile(file);
                   event.target.value = "";
                 }}
