@@ -302,15 +302,19 @@ export function EntrepriseForm({
             <Button
               type="button"
               variant="outline"
-              onClick={() => setBankAccounts((rows) => [
-                ...rows,
-                {
+              onClick={() => {
+                const formKey = `new-bank-${nextBankKey.current++}`;
+            
+                setBankAccounts((rows) => [
+                 ...rows,
+               {
                   bank_name: "",
                   account_number: "",
                   rib: "",
-                  formKey: `new-bank-${nextBankKey.current++}`,
+                  formKey,
                 },
-              ])}
+              ]);
+            }}
             >
               Ajouter une banque
             </Button>
