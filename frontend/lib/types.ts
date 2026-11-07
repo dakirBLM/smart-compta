@@ -19,6 +19,20 @@ export interface ExerciceAnnee {
   is_active: boolean;
 }
 
+export interface BankSCFAccount {
+  id: number;
+  numero_compte: string;
+  libelle: string;
+}
+
+export interface BankAccount {
+  id: number;
+  bank_name: string;
+  account_number: string;
+  rib: string;
+  scf_account: BankSCFAccount;
+}
+
 export interface Entreprise {
   id: number;
   nom: string;
@@ -36,6 +50,7 @@ export interface Entreprise {
   banque2: string;
   numero_compte2: string;
   rib2: string;
+  bank_accounts?: BankAccount[];
   regime_fiscale: string;
   activite: string;
   activite2: string;
