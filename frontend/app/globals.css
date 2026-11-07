@@ -116,6 +116,42 @@ table th {
     margin: 12mm;
   }
 
+  @page invoice-document {
+    size: portrait;
+    margin: 8mm;
+  }
+
+  body.invoice-print-mode {
+    margin: 0;
+    background: #fff;
+  }
+
+  body.invoice-print-mode * {
+    visibility: hidden !important;
+  }
+
+  body.invoice-print-mode .invoice-print-document,
+  body.invoice-print-mode .invoice-print-document * {
+    visibility: visible !important;
+  }
+
+  body.invoice-print-mode .invoice-print-document {
+    page: invoice-document;
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+
+  body.invoice-print-mode .invoice-print-image {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: calc(100vh - 16mm) !important;
+    object-fit: contain !important;
+    break-inside: avoid;
+  }
+
   body.report-print-mode {
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;

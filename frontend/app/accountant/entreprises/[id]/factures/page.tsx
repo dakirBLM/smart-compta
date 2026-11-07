@@ -5,6 +5,7 @@ import {
   CheckCircle,
   ExternalLink,
   Eye,
+  Printer,
   Receipt,
   ScanLine,
   Trash2,
@@ -298,6 +299,7 @@ export default function FacturesAccountantPage() {
 
   const [validatingId, setValidatingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [printErrorId, setPrintErrorId] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   /* Modal state */
@@ -346,6 +348,19 @@ export default function FacturesAccountantPage() {
     } finally {
       setDeletingId(null);
     }
+  };
+
+  const openInvoicePrint = (facture: Facture) => {
+    setPrintErrorId(null);
+    const printWindow = window.open(
+      `/accountant/entreprises/${id}/factures/print/${facture.id}`,
+      "_blank"
+    );
+    if (!printWindow) {
+      setPrintErrorId(facture.id);
+      return;
+    }
+    printWindow.opener = null;
   };
 
   const enAttente = factures.filter((f) => f.statut === "en_cours");
@@ -477,6 +492,16 @@ export default function FacturesAccountantPage() {
                             </Button>
                             <button
                               type="button"
+                              onClick={() => openInvoicePrint(f)}
+                              disabled={!f.image_url}
+                              aria-label={t("imprimerFacture")}
+                              title={f.image_url ? t("imprimerFacture") : t("documentFactureIndisponible")}
+                              className="flex items-center gap-1 rounded-lg border border-brand/30 px-3 text-xs font-semibold text-brand hover:bg-brand/5 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              <Printer size={14} /> {t("imprimerFacture")}
+                            </button>
+                            <button
+                              type="button"
                               disabled={deletingId === f.id}
                               onClick={() => handleDelete(f.id)}
                               className="flex items-center gap-1 rounded-lg border border-red-200 px-3 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
@@ -484,6 +509,16 @@ export default function FacturesAccountantPage() {
                               <Trash2 size={14} /> {t("supprimer")}
                             </button>
                           </div>
+                          {!f.image_url && (
+                            <p className="mt-2 text-xs text-red-700" role="status">
+                              {t("documentFactureIndisponible")}
+                            </p>
+                          )}
+                          {printErrorId === f.id && (
+                            <p className="mt-2 text-xs text-red-700" role="alert">
+                              {t("fenetreImpressionBloquee")}
+                            </p>
+                          )}
                         </div>
                       </Card>
                     ))}
@@ -573,6 +608,26 @@ export default function FacturesAccountantPage() {
                           >
                             <Eye size={13} /> Afficher
                           </button>
+                          <button
+                            type="button"
+                            onClick={() => openInvoicePrint(f)}
+                            disabled={!f.image_url}
+                            aria-label={t("imprimerFacture")}
+                            title={f.image_url ? t("imprimerFacture") : t("documentFactureIndisponible")}
+                            className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-brand/30 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand/5 disabled:cursor-not-allowed disabled:opacity-50"
+                          >
+                            <Printer size={13} /> {t("imprimerFacture")}
+                          </button>
+                          {!f.image_url && (
+                            <p className="mt-1 text-center text-[11px] text-red-700" role="status">
+                              {t("documentFactureIndisponible")}
+                            </p>
+                          )}
+                          {printErrorId === f.id && (
+                            <p className="mt-1 text-center text-[11px] text-red-700" role="alert">
+                              {t("fenetreImpressionBloquee")}
+                            </p>
+                          )}
                           <button
                             type="button"
                             disabled={deletingId === f.id}
