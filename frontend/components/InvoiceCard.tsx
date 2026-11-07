@@ -8,6 +8,18 @@ import { useI18n } from "@/lib/i18n-context";
 import { Facture } from "@/lib/types";
 import { formatDate, formatDZD } from "@/lib/utils";
 
+function canDisplayInvoiceImage(value?: string | null) {
+  if (!value) return false;
+  return [
+    "http://",
+    "https://",
+    "/",
+    "data:",
+    "blob:",
+    "file:",
+  ].some((prefix) => value.startsWith(prefix));
+}
+
 export function InvoiceCard({
   facture,
   onDelete,
@@ -21,7 +33,7 @@ export function InvoiceCard({
   return (
     <Card className="flex items-center justify-between p-4 hover:border-lime hover:shadow-card-hover transition-all">
       <div className="flex items-center gap-3.5 min-w-0">
-        {facture.image_url && facture.image_url.startsWith("http") ? (
+        {canDisplayInvoiceImage(facture.image_url) ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
             src={facture.image_url}
