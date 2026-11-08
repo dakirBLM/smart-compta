@@ -1,4 +1,5 @@
 import csv
+import os
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -10,15 +11,65 @@ from django.core.files.storage import Storage
 from rest_framework import status
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
-from rest_framework.test import APITestCase
+from rest_framework.test import APIRequestFactory, APITestCase
 from openpyxl import load_workbook
 
 from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
 from .account_helpers import apply_scf_subaccounts
 from .reports import build_balance, build_grand_livre
-from .scanner import persist_extraction
+from .scanner import persist_extraction, upload_invoice_image
 from .bank_statements import BankStatementError
+from .serializers import FactureSerializer
 from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES, MAX_MESSAGE_ATTACHMENT_BYTES
+
+
+class FactureImageUrlSerializerTests(APITestCase):
+    def test_relative_image_url_is_made_absolute(self):
+        User = get_user_model()
+        accountant = User.objects.create_user(
+            username="invoice-accountant",
+            email="invoice@example.com",
+            password="SecurePass123!",
+            role="accountant",
+        )
+        entreprise = Entreprise.objects.create(
+            nom="ACME Invoice",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=accountant,
+        )
+        facture = Facture.objects.create(
+            entreprise=entreprise,
+            client=accountant,
+            numero_facture="INV-001",
+            date_facture=date(2026, 1, 10),
+            montant_ttc=100,
+            image_url="/media/factures/inv-001.jpg",
+            statut=Facture.Statut.VALIDE,
+        )
+
+        request = APIRequestFactory().get("/api/factures/")
+        serializer = FactureSerializer(facture, context={"request": request})
+
+        self.assertEqual(
+            serializer.data["image_url"],
+            "http://testserver/media/factures/inv-001.jpg",
+        )
+
+    def test_local_upload_falls_back_to_media_storage(self):
+        with patch.dict(os.environ, {"CLOUDINARY_URL": ""}, clear=False):
+            url = upload_invoice_image(b"fake-image-bytes", "invoice.jpg")
+
+        self.assertTrue(url.startswith("/media/factures/"))
+        self.assertTrue(url.endswith("invoice.jpg"))
+
+    def test_cloudinary_failure_falls_back_to_local_media_storage(self):
+        with patch.dict(os.environ, {"CLOUDINARY_URL": "cloudinary://bad:credentials@cloud"}, clear=False):
+            with patch("core.scanner._upload_public_url", side_effect=Exception("bad creds")):
+                url = upload_invoice_image(b"fake-image-bytes", "invoice.jpg")
+
+        self.assertTrue(url.startswith("/media/factures/"))
+        self.assertTrue(url.endswith("invoice.jpg"))
 
 
 class PrivateDurableTestStorage(Storage):

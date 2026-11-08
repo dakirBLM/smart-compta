@@ -401,6 +401,7 @@ class EcritureInlineSerializer(serializers.ModelSerializer):
 class FactureSerializer(serializers.ModelSerializer):
     client_nom = serializers.CharField(source="client.username", read_only=True)
     ecriture_detail = serializers.SerializerMethodField()
+    image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Facture
@@ -414,6 +415,17 @@ class FactureSerializer(serializers.ModelSerializer):
         # entreprise is resolved server-side (from the client's ClientAccess),
         # so it must not be required in the request payload.
         read_only_fields = ["client", "entreprise", "created_at", "ecriture", "ecriture_detail"]
+
+    def get_image_url(self, obj):
+        if not obj.image_url:
+            return ""
+        url = obj.image_url
+        if url.startswith(("http://", "https://", "data:", "blob:", "file:")):
+            return url
+        if url.startswith("/"):
+            request = self.context.get("request")
+            return request.build_absolute_uri(url) if request is not None else url
+        return url
 
     def get_ecriture_detail(self, obj):
         if obj.ecriture_id:
