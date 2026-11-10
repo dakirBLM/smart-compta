@@ -135,6 +135,33 @@ table th {
     visibility: visible !important;
   }
 
+  body.invoice-print-mode .invoice-print-modal-overlay {
+    position: static !important;
+    display: block !important;
+    inset: auto !important;
+    padding: 0 !important;
+    background: transparent !important;
+  }
+
+  body.invoice-print-mode .invoice-print-modal-panel {
+    position: static !important;
+    display: block !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    overflow: visible !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+
+  body.invoice-print-mode .invoice-print-modal-preview {
+    display: block !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding: 0 !important;
+  }
+
   body.invoice-print-mode .invoice-print-document {
     page: invoice-document;
     position: absolute !important;
@@ -150,6 +177,13 @@ table th {
     max-height: calc(100vh - 16mm) !important;
     object-fit: contain !important;
     break-inside: avoid;
+  }
+
+  body.invoice-print-mode .invoice-print-pdf {
+    display: block !important;
+    width: 100% !important;
+    height: calc(100vh - 16mm) !important;
+    border: 0 !important;
   }
 
   body.report-print-mode {

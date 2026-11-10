@@ -3,6 +3,7 @@
 import { Printer } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
+import { InvoicePrintDocument } from "@/components/InvoicePrintDocument";
 import { InvoiceDocumentPreview } from "@/components/InvoiceDocumentPreview";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card } from "@/components/ui";
@@ -21,20 +22,11 @@ export function InvoiceCard({
   deleting?: boolean;
 }) {
   const { t } = useI18n();
-  const [printError, setPrintError] = useState(false);
+  const [printOpen, setPrintOpen] = useState(false);
   const documentUrl = resolveInvoiceFileUrl(facture.image_url);
 
   function openPrintView() {
-    setPrintError(false);
-    const printWindow = window.open(
-      `/client/factures/print/${facture.id}`,
-      "_blank"
-    );
-    if (!printWindow) {
-      setPrintError(true);
-      return;
-    }
-    printWindow.opener = null;
+    setPrintOpen(true);
   }
 
   return (
@@ -75,11 +67,6 @@ export function InvoiceCard({
             {t("documentFactureIndisponible")}
           </span>
         )}
-        {printError && (
-          <span className="max-w-36 text-right text-[11px] text-red-700" role="alert">
-            {t("fenetreImpressionBloquee")}
-          </span>
-        )}
         <Link
           href={`/client/factures?id=${facture.id}`}
           className="text-xs font-semibold text-brand hover:text-emerald-800 underline"
@@ -97,6 +84,12 @@ export function InvoiceCard({
           </button>
         )}
       </div>
+      {printOpen && (
+        <InvoicePrintDocument
+          invoiceId={String(facture.id)}
+          onClose={() => setPrintOpen(false)}
+        />
+      )}
     </Card>
   );
 }

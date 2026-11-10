@@ -14,6 +14,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { InvoiceDocumentPreview } from "@/components/InvoiceDocumentPreview";
+import { InvoicePrintDocument } from "@/components/InvoicePrintDocument";
 import { ScannerFlow } from "@/components/ScannerFlow";
 import { Button, Card, Spinner } from "@/components/ui";
 import { api, resolveInvoiceFileUrl } from "@/lib/api";
@@ -301,7 +302,7 @@ export default function FacturesAccountantPage() {
 
   const [validatingId, setValidatingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
-  const [printErrorId, setPrintErrorId] = useState<number | null>(null);
+  const [printInvoiceId, setPrintInvoiceId] = useState<number | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
   /* Modal state */
@@ -353,16 +354,7 @@ export default function FacturesAccountantPage() {
   };
 
   const openInvoicePrint = (facture: Facture) => {
-    setPrintErrorId(null);
-    const printWindow = window.open(
-      `/accountant/entreprises/${id}/factures/print/${facture.id}`,
-      "_blank"
-    );
-    if (!printWindow) {
-      setPrintErrorId(facture.id);
-      return;
-    }
-    printWindow.opener = null;
+    setPrintInvoiceId(facture.id);
   };
 
   const enAttente = factures.filter((f) => f.statut === "en_cours");
@@ -521,11 +513,6 @@ export default function FacturesAccountantPage() {
                               {t("documentFactureIndisponible")}
                             </p>
                           )}
-                          {printErrorId === f.id && (
-                            <p className="mt-2 text-xs text-red-700" role="alert">
-                              {t("fenetreImpressionBloquee")}
-                            </p>
-                          )}
                         </div>
                       </Card>
                     ))}
@@ -625,11 +612,6 @@ export default function FacturesAccountantPage() {
                               {t("documentFactureIndisponible")}
                             </p>
                           )}
-                          {printErrorId === f.id && (
-                            <p className="mt-1 text-center text-[11px] text-red-700" role="alert">
-                              {t("fenetreImpressionBloquee")}
-                            </p>
-                          )}
                           <button
                             type="button"
                             disabled={deletingId === f.id}
@@ -661,6 +643,12 @@ export default function FacturesAccountantPage() {
           onDelete={() => handleDelete(selectedFacture.id)}
           deleting={deletingId === selectedFacture.id}
           error={errorMsg}
+        />
+      )}
+      {printInvoiceId !== null && (
+        <InvoicePrintDocument
+          invoiceId={String(printInvoiceId)}
+          onClose={() => setPrintInvoiceId(null)}
         />
       )}
     </AppShell>
