@@ -20,6 +20,18 @@ import { EcritureDetail, Facture } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
 import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
 
+function canDisplayInvoiceImage(value?: string | null) {
+  if (!value) return false;
+  return [
+    "http://",
+    "https://",
+    "/",
+    "data:",
+    "blob:",
+    "file:",
+  ].some((prefix) => value.startsWith(prefix));
+}
+
 /* ─── Mode paiement display ──────────────────────────────────────────────── */
 const MODE_LABELS: Record<string, string> = {
   espèces: "💵 Espèces (Caisse)",
@@ -64,7 +76,7 @@ function FactureDetailModal({
     return () => window.removeEventListener("keydown", fn);
   }, [onClose]);
 
-  const hasImage = facture.image_url?.startsWith("http");
+  const hasImage = canDisplayInvoiceImage(facture.image_url);
 
   return (
     <div
@@ -428,7 +440,7 @@ export default function FacturesAccountantPage() {
                     {enAttente.map((f) => (
                       <Card key={f.id} className="flex flex-col justify-between overflow-hidden p-0 border-amber-200 bg-amber-50/20">
                         <div>
-                          {f.image_url && f.image_url.startsWith("http") ? (
+                          {canDisplayInvoiceImage(f.image_url) ? (
                             <a href={f.image_url} target="_blank" rel="noopener noreferrer" className="block">
                               {/* eslint-disable-next-line @next/next/no-img-element */}
                               <img
@@ -527,7 +539,7 @@ export default function FacturesAccountantPage() {
                               <Card key={f.id} className="group overflow-hidden p-0 transition-shadow hover:shadow-md">
                         {/* Image */}
                         <div className="relative overflow-hidden">
-                          {f.image_url && f.image_url.startsWith("http") ? (
+                          {canDisplayInvoiceImage(f.image_url) ? (
                             /* eslint-disable-next-line @next/next/no-img-element */
                             <img
                               src={f.image_url}

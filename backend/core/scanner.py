@@ -5,10 +5,13 @@ import json
 import mimetypes
 import os
 import re
+import uuid
 from datetime import datetime
 
 import requests
 from django.conf import settings
+from django.core.files.base import ContentFile
+from django.core.files.storage import FileSystemStorage, default_storage
 from django.db import transaction
 from django.core.exceptions import ValidationError
 
@@ -134,11 +137,27 @@ def _bytes_from(image_bytes, image_base64):
 
 
 def upload_invoice_image(image_bytes, filename="facture.jpg"):
-    """Store an uploaded invoice image and return its public URL (for archiving
-    factures). Returns "" if Cloudinary isn't configured rather than failing."""
-    if not os.getenv("CLOUDINARY_URL"):
+    """Store an uploaded invoice image and return a usable URL.
+
+    Prefer Cloudinary when configured, but fall back to the local Django media
+    storage anytime Cloudinary is unavailable or the upload fails. This keeps
+    invoice previews working in local/dev environments and on installs with an
+    invalid or incomplete Cloudinary configuration.
+    """
+    if image_bytes is None:
         return ""
-    return _upload_public_url(image_bytes, filename)
+
+    if os.getenv("CLOUDINARY_URL"):
+        try:
+            return _upload_public_url(image_bytes, filename)
+        except Exception:
+            pass
+
+    safe_name = filename or "facture.jpg"
+    unique_name = f"factures/{uuid.uuid4().hex}_{safe_name.replace('..', '_')}"
+    local_storage = FileSystemStorage(location=str(settings.MEDIA_ROOT))
+    saved_name = local_storage.save(unique_name, ContentFile(image_bytes))
+    return f"{settings.MEDIA_URL}{saved_name}"
 
 
 def _upload_public_url(image_bytes, filename):

@@ -28,6 +28,9 @@ type BankAccountFormRow = Omit<BankAccount, "id" | "scf_account"> & {
   scf_account?: BankAccount["scf_account"];
   formKey: string;
 };
+type LongTextField = "marchandise" | "matiere_premiere" | "matieres_consommables";
+
+const LONG_TEXT_LIMIT = 10000;
 
 const SCALAR_FIELDS = [
   "nom", "nif", "nis", "nin", "date_creation", "adresse", "ville", "code_postal",
@@ -57,6 +60,7 @@ export function EntrepriseForm({
   const [saving, setSaving] = useState(false);
   const nextBankKey = useRef(0);
   const [deletedBankIds, setDeletedBankIds] = useState<number[]>([]);
+  const [textLimitErrors, setTextLimitErrors] = useState<Partial<Record<LongTextField, boolean>>>({});
 
   const [form, setForm] = useState<Form>(() => {
     const base: Form = {};
@@ -104,6 +108,12 @@ export function EntrepriseForm({
     setBankAccounts((rows) => rows.filter((row) => row.formKey !== formKey));
   }
 
+  function setLongText(k: LongTextField, value: string) {
+    const characters = Array.from(value);
+    const exceeded = characters.length > LONG_TEXT_LIMIT;
+    set(k, exceeded ? characters.slice(0, LONG_TEXT_LIMIT).join("") : value);
+    setTextLimitErrors((errors) => ({ ...errors, [k]: exceeded }));
+  }
   const codes = useMemo(() => postalCodesFor(form.ville), [form.ville]);
   const isCommerciale = activites.includes("Commerciale");
   const isIndustrielle = activites.includes("Industrielle");
@@ -394,19 +404,34 @@ export function EntrepriseForm({
               <Label className={isCommerciale ? "text-danger" : ""}>
                 Marchandises {isCommerciale && "*"}
               </Label>
-              <Input value={form.marchandise} onChange={(e) => set("marchandise", e.target.value)} />
+              <Input value={form.marchandise} onChange={(e) => setLongText("marchandise", e.target.value)} />
+              {textLimitErrors.marchandise && (
+                <p role="alert" className="mt-1 text-xs text-danger">
+                  Maximum 10 000 caractères : le texte a été tronqué.
+                </p>
+              )}
             </div>
             <div>
               <Label className={isIndustrielle ? "text-danger" : ""}>
                 Matières premières {isIndustrielle && "*"}
               </Label>
-              <Input value={form.matiere_premiere} onChange={(e) => set("matiere_premiere", e.target.value)} />
+              <Input value={form.matiere_premiere} onChange={(e) => setLongText("matiere_premiere", e.target.value)} />
+              {textLimitErrors.matiere_premiere && (
+                <p role="alert" className="mt-1 text-xs text-danger">
+                  Maximum 10 000 caractères : le texte a été tronqué.
+                </p>
+              )}
             </div>
             <div>
               <Label className={isIndustrielle ? "text-danger" : ""}>
                 Matières consommables {isIndustrielle && "*"}
               </Label>
-              <Input value={form.matieres_consommables} onChange={(e) => set("matieres_consommables", e.target.value)} />
+              <Input value={form.matieres_consommables} onChange={(e) => setLongText("matieres_consommables", e.target.value)} />
+              {textLimitErrors.matieres_consommables && (
+                <p role="alert" className="mt-1 text-xs text-danger">
+                  Maximum 10 000 caractères : le texte a été tronqué.
+                </p>
+              )}
             </div>
             <div>
               <Label>Téléphone</Label>

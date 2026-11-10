@@ -28,9 +28,9 @@ class Entreprise(models.Model):
     # Up to two activities (e.g. "Commerciale", "Industrielle").
     activite = models.CharField(max_length=255, blank=True, default="")
     activite2 = models.CharField(max_length=255, blank=True, default="")
-    matiere_premiere = models.CharField(max_length=255, blank=True, default="")
-    marchandise = models.CharField(max_length=255, blank=True, default="")
-    matieres_consommables = models.CharField(max_length=255, blank=True, default="")
+    matiere_premiere = models.CharField(max_length=10000, blank=True, default="")
+    marchandise = models.CharField(max_length=10000, blank=True, default="")
+    matieres_consommables = models.CharField(max_length=10000, blank=True, default="")
     telephone = models.CharField(max_length=30, blank=True, default="")
     email = models.EmailField(blank=True, default="")
     accountant = models.ForeignKey(

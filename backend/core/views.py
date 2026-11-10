@@ -1233,7 +1233,7 @@ class FactureListCreateView(APIView):
                 qs = qs.filter(entreprise_id=ent)
         else:
             qs = Facture.objects.filter(client=request.user)
-        return Response(FactureSerializer(qs, many=True).data)
+        return Response(FactureSerializer(qs, many=True, context={"request": request}).data)
 
     @transaction.atomic
     def post(self, request):
@@ -1341,7 +1341,7 @@ class FactureListCreateView(APIView):
                 type_facture=type_facture,
                 mode_paiement=mode_paiement,
             )
-            return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
+            return Response(FactureSerializer(facture, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
         # Si l'utilisateur est un COMPTABLE, comptabilisation automatique directe
         accounting_data = extraction_data
@@ -1383,7 +1383,7 @@ class FactureListCreateView(APIView):
             facture = Facture.objects.create(**facture_fields)
 
         facture = reusable_facture or facture
-        return Response(FactureSerializer(facture).data, status=status.HTTP_201_CREATED)
+        return Response(FactureSerializer(facture, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
 
 class FactureDetailView(APIView):
@@ -1396,7 +1396,7 @@ class FactureDetailView(APIView):
             )
         else:
             facture = get_object_or_404(Facture, pk=pk, client=request.user)
-        return Response(FactureSerializer(facture).data)
+        return Response(FactureSerializer(facture, context={"request": request}).data)
 
     @transaction.atomic
     def delete(self, request, pk):
@@ -1539,7 +1539,7 @@ class FactureValidateView(APIView):
 
         return Response(
             {
-                "facture": FactureSerializer(facture).data,
+                "facture": FactureSerializer(facture, context={"request": request}).data,
                 "ecriture": EcritureSerializer(ecriture).data,
             },
             status=status.HTTP_201_CREATED,
