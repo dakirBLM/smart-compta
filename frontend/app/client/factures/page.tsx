@@ -12,6 +12,18 @@ import { useI18n } from "@/lib/i18n-context";
 import { Facture } from "@/lib/types";
 import { formatDate, formatDZD } from "@/lib/utils";
 
+function canDisplayInvoiceImage(value?: string | null) {
+  if (!value) return false;
+  return [
+    "http://",
+    "https://",
+    "/",
+    "data:",
+    "blob:",
+    "file:",
+  ].some((prefix) => value.startsWith(prefix));
+}
+
 export default function ClientFactures() {
   const { t } = useI18n();
   const search = useSearchParams();
@@ -64,9 +76,9 @@ export default function ClientFactures() {
             </h2>
             <StatusBadge statut={detail.statut} />
           </div>
-          {detail.image_url && (
+          {canDisplayInvoiceImage(detail.image_url) ? (
             <img src={detail.image_url} alt="facture" className="mb-4 rounded-lg" />
-          )}
+          ) : null}
           <dl className="space-y-2 text-sm">
             <Row label={t("date")} value={formatDate(detail.date_facture)} />
             <Row label="HT" value={formatDZD(detail.montant_ht)} />
