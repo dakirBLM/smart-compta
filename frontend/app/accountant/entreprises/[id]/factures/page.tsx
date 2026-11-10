@@ -13,25 +13,14 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { InvoiceDocumentPreview } from "@/components/InvoiceDocumentPreview";
 import { ScannerFlow } from "@/components/ScannerFlow";
 import { Button, Card, Spinner } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, resolveInvoiceFileUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { EcritureDetail, Facture } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
 import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
-
-function canDisplayInvoiceImage(value?: string | null) {
-  if (!value) return false;
-  return [
-    "http://",
-    "https://",
-    "/",
-    "data:",
-    "blob:",
-    "file:",
-  ].some((prefix) => value.startsWith(prefix));
-}
 
 /* ─── Mode paiement display ──────────────────────────────────────────────── */
 const MODE_LABELS: Record<string, string> = {
@@ -77,7 +66,8 @@ function FactureDetailModal({
     return () => window.removeEventListener("keydown", fn);
   }, [onClose]);
 
-  const hasImage = canDisplayInvoiceImage(facture.image_url);
+  const imageUrl = resolveInvoiceFileUrl(facture.image_url);
+  const hasImage = !!imageUrl;
 
   return (
     <div
@@ -123,15 +113,15 @@ function FactureDetailModal({
             </p>
             {hasImage ? (
               <>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={facture.image_url}
+                <InvoiceDocumentPreview
+                  value={facture.image_url}
                   alt={`Facture ${facture.numero_facture || facture.id}`}
-                  className="w-full rounded-xl border object-contain shadow-sm"
-                  style={{ maxHeight: 460 }}
+                  className="flex min-h-56 w-full items-center justify-center rounded-xl border bg-white"
+                  imageClassName="w-full rounded-xl object-contain shadow-sm"
+                  placeholderClassName="flex h-56 w-full items-center justify-center text-gray-300"
                 />
                 <a
-                  href={facture.image_url}
+                  href={imageUrl ?? undefined}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="mt-3 flex items-center gap-1.5 text-xs font-medium text-brand hover:underline"
@@ -455,19 +445,24 @@ export default function FacturesAccountantPage() {
                     {enAttente.map((f) => (
                       <Card key={f.id} className="flex flex-col justify-between overflow-hidden p-0 border-amber-200 bg-amber-50/20">
                         <div>
-                          {canDisplayInvoiceImage(f.image_url) ? (
-                            <a href={f.image_url} target="_blank" rel="noopener noreferrer" className="block">
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={f.image_url}
+                          {resolveInvoiceFileUrl(f.image_url) ? (
+                            <a href={resolveInvoiceFileUrl(f.image_url) ?? undefined} target="_blank" rel="noopener noreferrer" className="block">
+                              <InvoiceDocumentPreview
+                                value={f.image_url}
                                 alt={`Facture ${f.numero_facture || f.id}`}
-                                className="h-40 w-full object-cover"
+                                className="h-40 w-full"
+                                imageClassName="h-full w-full object-cover"
+                                placeholderClassName="flex h-full w-full items-center justify-center bg-gray-100 text-gray-400"
                               />
                             </a>
                           ) : (
-                            <div className="flex h-40 w-full items-center justify-center bg-gray-100 text-gray-400">
-                              <Receipt size={32} />
-                            </div>
+                            <InvoiceDocumentPreview
+                              value={f.image_url}
+                              alt={`Facture ${f.numero_facture || f.id}`}
+                              className="h-40 w-full"
+                              imageClassName="h-full w-full object-cover"
+                              placeholderClassName="flex h-full w-full items-center justify-center bg-gray-100 text-gray-400"
+                            />
                           )}
                           <div className="space-y-1 p-3">
                             <div className="flex items-center justify-between">
@@ -505,9 +500,9 @@ export default function FacturesAccountantPage() {
                             <button
                               type="button"
                               onClick={() => openInvoicePrint(f)}
-                              disabled={!f.image_url}
+                              disabled={!resolveInvoiceFileUrl(f.image_url)}
                               aria-label={t("imprimerFacture")}
-                              title={f.image_url ? t("imprimerFacture") : t("documentFactureIndisponible")}
+                              title={resolveInvoiceFileUrl(f.image_url) ? t("imprimerFacture") : t("documentFactureIndisponible")}
                               className="flex items-center gap-1 rounded-lg border border-brand/30 px-3 text-xs font-semibold text-brand hover:bg-brand/5 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               <Printer size={14} /> {t("imprimerFacture")}
@@ -521,7 +516,7 @@ export default function FacturesAccountantPage() {
                               <Trash2 size={14} /> {t("supprimer")}
                             </button>
                           </div>
-                          {!f.image_url && (
+                          {!resolveInvoiceFileUrl(f.image_url) && (
                             <p className="mt-2 text-xs text-red-700" role="status">
                               {t("documentFactureIndisponible")}
                             </p>
@@ -574,18 +569,13 @@ export default function FacturesAccountantPage() {
                               <Card key={f.id} className="group overflow-hidden p-0 transition-shadow hover:shadow-md">
                         {/* Image */}
                         <div className="relative overflow-hidden">
-                          {canDisplayInvoiceImage(f.image_url) ? (
-                            /* eslint-disable-next-line @next/next/no-img-element */
-                            <img
-                              src={f.image_url}
-                              alt={`Facture ${f.numero_facture || f.id}`}
-                              className="h-44 w-full object-cover transition-transform group-hover:scale-[1.03]"
-                            />
-                          ) : (
-                            <div className="flex h-44 w-full items-center justify-center bg-gray-100 text-gray-400">
-                              <Receipt size={32} />
-                            </div>
-                          )}
+                          <InvoiceDocumentPreview
+                            value={f.image_url}
+                            alt={`Facture ${f.numero_facture || f.id}`}
+                            className="h-44 w-full"
+                            imageClassName="h-full w-full object-cover transition-transform group-hover:scale-[1.03]"
+                            placeholderClassName="flex h-full w-full items-center justify-center bg-gray-100 text-gray-400"
+                          />
                           {/* Hover overlay with "Afficher" button */}
                           <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
                             <button
@@ -623,14 +613,14 @@ export default function FacturesAccountantPage() {
                           <button
                             type="button"
                             onClick={() => openInvoicePrint(f)}
-                            disabled={!f.image_url}
+                            disabled={!resolveInvoiceFileUrl(f.image_url)}
                             aria-label={t("imprimerFacture")}
-                            title={f.image_url ? t("imprimerFacture") : t("documentFactureIndisponible")}
+                            title={resolveInvoiceFileUrl(f.image_url) ? t("imprimerFacture") : t("documentFactureIndisponible")}
                             className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-brand/30 py-1.5 text-xs font-semibold text-brand transition hover:bg-brand/5 disabled:cursor-not-allowed disabled:opacity-50"
                           >
                             <Printer size={13} /> {t("imprimerFacture")}
                           </button>
-                          {!f.image_url && (
+                          {!resolveInvoiceFileUrl(f.image_url) && (
                             <p className="mt-1 text-center text-[11px] text-red-700" role="status">
                               {t("documentFactureIndisponible")}
                             </p>
