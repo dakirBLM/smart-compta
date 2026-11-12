@@ -9,6 +9,7 @@ from threading import Lock
 from pathlib import Path
 
 
+
 MAX_PREVIEW_PDF_BYTES = 25 * 1024 * 1024
 MAX_CACHED_PREVIEW_BYTES = 8 * 1024 * 1024
 MAX_PREVIEW_CACHE_BYTES = 128 * 1024 * 1024
@@ -16,7 +17,8 @@ PREVIEW_CACHE_MAX_AGE_SECONDS = 24 * 60 * 60
 OFFICE_PREVIEW_TIMEOUT_SECONDS = 45
 PREVIEW_CACHE_DIR = Path(tempfile.gettempdir()) / "smart-compta-office-preview-cache"
 _cache_lock = Lock()
-_conversion_lock = Lock()
+_conversion_locks = {}
+_conversion_locks_guard = Lock()
 logger = logging.getLogger(__name__)
 
 
@@ -117,32 +119,46 @@ def _write_cached_preview(cache_path, pdf_data):
         logger.warning("Could not write Office preview cache entry.", exc_info=True)
 
 
+def _get_conversion_lock(attachment_key, file_obj):
+    lock_key = (
+        ("attachment", attachment_key)
+        if attachment_key is not None
+        else ("file", id(file_obj))
+    )
+    with _conversion_locks_guard:
+        conversion_lock = _conversion_locks.get(lock_key)
+        if conversion_lock is None:
+            conversion_lock = Lock()
+            _conversion_locks[lock_key] = conversion_lock
+        return conversion_lock
+
+
 def convert_office_attachment_to_pdf(file_obj, extension, attachment_key=None):
-    cache_path = _cache_path(attachment_key) if attachment_key else None
-    if cache_path:
-        cached_preview = _read_cached_preview(cache_path)
-        if cached_preview is not None:
-            return cached_preview
+    with _get_conversion_lock(attachment_key, file_obj):
+        cache_path = _cache_path(attachment_key) if attachment_key else None
+        if cache_path:
+            cached_preview = _read_cached_preview(cache_path)
+            if cached_preview is not None:
+                return cached_preview
 
-    executable = _find_libreoffice()
-    if not executable:
-        raise OfficePreviewUnavailable("LibreOffice is not installed.")
+        executable = _find_libreoffice()
+        if not executable:
+            raise OfficePreviewUnavailable("LibreOffice is not installed.")
 
-    try:
-        with tempfile.TemporaryDirectory(prefix="smartcompta-preview-") as temp_dir:
-            temp_path = Path(temp_dir)
-            source_path = temp_path / f"attachment{extension}"
-            output_path = temp_path / "attachment.pdf"
-            profile_path = (
-                Path(tempfile.gettempdir())
-                / f"smart-compta-libreoffice-profile-{os.getpid()}"
-            )
-            profile_path.mkdir(parents=True, exist_ok=True)
+        try:
+            with tempfile.TemporaryDirectory(prefix="smartcompta-preview-") as temp_dir:
+                temp_path = Path(temp_dir)
+                source_path = temp_path / f"attachment{extension}"
+                output_path = temp_path / "attachment.pdf"
+                profile_path = (
+                    Path(tempfile.gettempdir())
+                    / f"smart-compta-libreoffice-profile-{os.getpid()}"
+                )
+                profile_path.mkdir(parents=True, exist_ok=True)
 
-            with source_path.open("wb") as source:
-                shutil.copyfileobj(file_obj, source)
+                with source_path.open("wb") as source:
+                    shutil.copyfileobj(file_obj, source)
 
-            with _conversion_lock:
                 result = subprocess.run(
                     [
                         executable,
@@ -158,19 +174,19 @@ def convert_office_attachment_to_pdf(file_obj, extension, attachment_key=None):
                     timeout=OFFICE_PREVIEW_TIMEOUT_SECONDS,
                     check=False,
                 )
-            if result.returncode != 0 or not output_path.is_file():
-                raise OfficePreviewError("LibreOffice could not convert the attachment.")
+                if result.returncode != 0 or not output_path.is_file():
+                    raise OfficePreviewError("LibreOffice could not convert the attachment.")
 
-            if output_path.stat().st_size > MAX_PREVIEW_PDF_BYTES:
-                raise OfficePreviewError("The converted preview exceeds the size limit.")
+                if output_path.stat().st_size > MAX_PREVIEW_PDF_BYTES:
+                    raise OfficePreviewError("The converted preview exceeds the size limit.")
 
-            pdf_data = output_path.read_bytes()
-            if not pdf_data.startswith(b"%PDF-"):
-                raise OfficePreviewError("LibreOffice returned an invalid PDF.")
-            if cache_path:
-                _write_cached_preview(cache_path, pdf_data)
-            return pdf_data
-    except subprocess.TimeoutExpired as exc:
-        raise OfficePreviewError("LibreOffice conversion timed out.") from exc
-    except OSError as exc:
-        raise OfficePreviewError("Could not read or convert the attachment.") from exc
+                pdf_data = output_path.read_bytes()
+                if not pdf_data.startswith(b"%PDF-"):
+                    raise OfficePreviewError("LibreOffice returned an invalid PDF.")
+                if cache_path:
+                    _write_cached_preview(cache_path, pdf_data)
+                return pdf_data
+        except subprocess.TimeoutExpired as exc:
+            raise OfficePreviewError("LibreOffice conversion timed out.") from exc
+        except OSError as exc:
+            raise OfficePreviewError("Could not read or convert the attachment.") from exc
