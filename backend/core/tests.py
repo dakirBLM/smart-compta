@@ -1656,11 +1656,14 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertTrue(inline["Content-Disposition"].startswith("inline;"))
 
         self.client.force_authenticate(self.client_user)
-        messages = self.client.get(
-            "/api/messages/",
-            HTTP_HOST="api.example.com",
-            HTTP_X_FORWARDED_PROTO="https",
-        )
+        with self.settings(
+            SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https")
+        ):
+            messages = self.client.get(
+                "/api/messages/",
+                HTTP_HOST="api.example.com",
+                HTTP_X_FORWARDED_PROTO="https",
+            )
         self.assertEqual(messages.status_code, status.HTTP_200_OK)
         open_url = messages.data[0]["attachments"][0]["open_url"]
         self.assertTrue(open_url.startswith("https://api.example.com/"))
@@ -1731,3 +1734,27 @@ class MessageAttachmentAPITests(APITestCase):
         self.client.force_authenticate(self.accountant)
         allowed = self.client.get(f"/api/messages/attachments/{attachment.id}/download/?inline=1")
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+
+    def test_unauthorized_client_cannot_trigger_office_preview_conversion(self):
+        self.client.force_authenticate(self.client_user)
+        document = SimpleUploadedFile(
+            "rapport.docx",
+            b"PK\x03\x04office document",
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        created = self.client.post(
+            "/api/messages/",
+            {"file": document},
+            format="multipart",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        attachment = MessageAttachment.objects.get()
+
+        self.client.force_authenticate(self.other_client)
+        with patch("core.views.convert_office_attachment_to_pdf") as convert:
+            response = self.client.get(
+                f"/api/messages/attachments/{attachment.id}/download/?inline=1"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        convert.assert_not_called()
