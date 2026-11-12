@@ -37,8 +37,8 @@ git push -u origin main
 4. Click **Apply**. The build runs `collectstatic`, `migrate`, and `seed`
    automatically against Neon (so the demo accounts exist in your Neon DB).
    Render installs LibreOffice Writer and Calc from the repository's `apt.txt`.
-   The build checks that LibreOffice is available before deploying; the
-   packages are required to preview Office message attachments.
+   The build logs a warning if LibreOffice is unavailable but continues
+   deploying; Office attachment previews require those packages.
 5. When live, note the URL, e.g. `https://smartcompta-api.onrender.com`.
 6. Back in **smartcompta-api → Environment**, set:
    - `CORS_ALLOWED_ORIGINS` = your Vercel URL (fill after step 3, e.g.
