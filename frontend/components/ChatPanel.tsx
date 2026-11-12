@@ -8,7 +8,7 @@ import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage, Conversation } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 
-const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp,.doc,.docx,.xls,.xlsx";
+const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp";
 const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 
@@ -21,11 +21,11 @@ function validateAttachmentFile(file: File | null): string | null {
   if (file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
     return "Le fichier dépasse la taille maximale de 10 Mo.";
   }
-  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".doc", ".docx", ".xls", ".xlsx"];
+  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp"];
   const fileName = file.name.toLowerCase();
   const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
   if (!isAllowed) {
-    return "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX.";
+    return "Format non supporté. Utilisez un PDF, PNG, JPG ou WEBP.";
   }
   return null;
 }
@@ -296,11 +296,6 @@ export function ChatPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-3.5 bg-[#F9FBF9]">
-              {error && (
-                <div className="sticky top-0 z-10 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 shadow-sm">
-                  {error}
-                </div>
-              )}
               {loading && messages.length === 0 ? (
                 <div className="flex justify-center py-10">
                   <Spinner className="h-6 w-6 text-brand" />
@@ -396,6 +391,11 @@ export function ChatPanel({
             </div>
 
             <div className="border-t border-gray-200 bg-white p-3.5">
+              {error && (
+                <div role="alert" className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700">
+                  {error}
+                </div>
+              )}
               {selectedFiles.length > 0 && (
                 <div className="mb-2 space-y-2">
                   {selectedFiles.map((file, index) => (
@@ -472,9 +472,19 @@ export function ChatPanel({
                   variant="outline"
                   size="sm"
                   onClick={() => fileInputRef.current?.click()}
+                  disabled={selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT}
                   aria-label="Ajouter un fichier"
-                  title="Ajouter un fichier"
-                  className="shrink-0 border-dashed border-gray-300 bg-white p-2.5 text-brand"
+                  title={
+                    selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT
+                      ? "Limite de 3 fichiers atteinte"
+                      : "Ajouter un fichier"
+                  }
+                  className={cn(
+                    "shrink-0 border-dashed p-2.5",
+                    selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT
+                      ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
+                      : "border-gray-300 bg-white text-brand"
+                  )}
                 >
                   <Paperclip size={15} />
                 </Button>
@@ -507,4 +517,3 @@ export function ChatPanel({
     </>
   );
 }
-

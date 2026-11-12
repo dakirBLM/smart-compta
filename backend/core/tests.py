@@ -1569,11 +1569,42 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertIn("attachment", download["Content-Disposition"])
         self.assertEqual(b"".join(download.streaming_content), b"%PDF-1.4 hello")
 
+        inline = self.client.get(
+            f"/api/messages/attachments/{attachment.id}/download/?inline=1"
+        )
+        self.assertEqual(inline.status_code, status.HTTP_200_OK)
+        self.assertEqual(inline["Content-Type"], "application/pdf")
+        self.assertTrue(inline["Content-Disposition"].startswith("inline;"))
+
+        self.client.force_authenticate(self.client_user)
+        with self.settings(
+            SECURE_PROXY_SSL_HEADER=("HTTP_X_FORWARDED_PROTO", "https")
+        ):
+            messages = self.client.get(
+                "/api/messages/",
+                HTTP_HOST="api.example.com",
+                HTTP_X_FORWARDED_PROTO="https",
+            )
+        self.assertEqual(messages.status_code, status.HTTP_200_OK)
+        open_url = messages.data[0]["attachments"][0]["open_url"]
+        self.assertTrue(open_url.startswith("https://api.example.com/"))
+
     def test_invalid_or_oversized_attachment_is_rejected(self):
         self.client.force_authenticate(self.client_user)
         invalid = self.client.post(
             "/api/messages/",
             {"file": SimpleUploadedFile("bad.txt", b"not allowed", content_type="text/plain")},
+            format="multipart",
+        )
+        office_document = self.client.post(
+            "/api/messages/",
+            {
+                "file": SimpleUploadedFile(
+                    "rapport.docx",
+                    b"PK\x03\x04office document",
+                    content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                )
+            },
             format="multipart",
         )
         oversized = self.client.post(
@@ -1583,7 +1614,30 @@ class MessageAttachmentAPITests(APITestCase):
         )
 
         self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(office_document.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(oversized.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(MessageAttachment.objects.count(), 0)
+
+    def test_more_than_three_attachments_are_rejected(self):
+        self.client.force_authenticate(self.client_user)
+        files = [
+            SimpleUploadedFile(
+                f"rapport-{index}.pdf",
+                b"%PDF-1.4 test",
+                content_type="application/pdf",
+            )
+            for index in range(4)
+        ]
+
+        response = self.client.post(
+            "/api/messages/",
+            {"file": files},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("3 fichiers maximum", str(response.data))
+        self.assertEqual(Message.objects.count(), 0)
         self.assertEqual(MessageAttachment.objects.count(), 0)
 
     def test_attachment_access_is_limited_to_company_conversation(self):

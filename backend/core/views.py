@@ -88,6 +88,7 @@ def _accountant_entreprise(request, pk):
 
 MAX_BANK_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_MESSAGE_ATTACHMENT_COUNT = 3
 
 _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
     ".pdf": {"application/pdf", "application/x-pdf"},
@@ -95,10 +96,6 @@ _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
     ".jpg": {"image/jpeg", "image/jpg", "image/pjpeg", "image/x-jpeg"},
     ".jpeg": {"image/jpeg", "image/jpg", "image/pjpeg", "image/x-jpeg"},
     ".webp": {"image/webp"},
-    ".doc": {"application/msword", "application/vnd.ms-word"},
-    ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-    ".xls": {"application/vnd.ms-excel"},
-    ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
 }
 
 _INLINE_ATTACHMENT_MIME_TYPES = {
@@ -154,7 +151,7 @@ def _validate_message_attachment(uploaded):
         normalized_ext = ".jpg"
     if normalized_ext not in _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES:
         raise ValueError(
-            "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX."
+            "Format non supporté. Utilisez un PDF, PNG, JPG ou WEBP."
         )
 
     content_type = (uploaded.content_type or "").lower().strip()
@@ -172,9 +169,6 @@ def _validate_message_attachment(uploaded):
         raise ValueError("Le fichier image JPG semble être invalide.")
     if normalized_ext == ".webp" and not file_bytes.startswith(b"RIFF"):
         raise ValueError("Le fichier image WEBP semble être invalide.")
-    if normalized_ext in {".doc", ".docx", ".xls", ".xlsx"} and not file_bytes.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")):
-        raise ValueError("Le document semble être invalide.")
-
     return filename[:255]
 
 
@@ -584,8 +578,10 @@ class MessageListCreateView(APIView):
         validated_files = []
         try:
             if has_attachment:
-                if len(uploaded_files) > 3:
-                    raise ValueError("Vous pouvez joindre jusqu'à 3 fichiers maximum.")
+                if len(uploaded_files) > MAX_MESSAGE_ATTACHMENT_COUNT:
+                    raise ValueError(
+                        f"Vous pouvez joindre jusqu'à {MAX_MESSAGE_ATTACHMENT_COUNT} fichiers maximum."
+                    )
                 total_size = sum(file.size for file in uploaded_files)
                 if total_size > MAX_MESSAGE_ATTACHMENT_BYTES:
                     raise ValueError("Le total des fichiers dépasse la taille maximale de 10 Mo.")
