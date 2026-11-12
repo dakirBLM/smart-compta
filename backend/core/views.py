@@ -14,11 +14,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
-from .attachment_preview import (
-    OfficePreviewError,
-    OfficePreviewUnavailable,
-    convert_office_attachment_to_pdf,
-)
 from .account_helpers import get_or_create_client_comptable
 from .models import (
     ClientAccess,
@@ -100,10 +95,6 @@ _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
     ".jpg": {"image/jpeg", "image/jpg", "image/pjpeg", "image/x-jpeg"},
     ".jpeg": {"image/jpeg", "image/jpg", "image/pjpeg", "image/x-jpeg"},
     ".webp": {"image/webp"},
-    ".doc": {"application/msword", "application/vnd.ms-word"},
-    ".docx": {"application/vnd.openxmlformats-officedocument.wordprocessingml.document"},
-    ".xls": {"application/vnd.ms-excel"},
-    ".xlsx": {"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"},
 }
 
 _INLINE_ATTACHMENT_MIME_TYPES = {
@@ -159,7 +150,7 @@ def _validate_message_attachment(uploaded):
         normalized_ext = ".jpg"
     if normalized_ext not in _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES:
         raise ValueError(
-            "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX."
+            "Format non supporté. Utilisez un PDF, PNG, JPG ou WEBP."
         )
 
     content_type = (uploaded.content_type or "").lower().strip()
@@ -177,9 +168,6 @@ def _validate_message_attachment(uploaded):
         raise ValueError("Le fichier image JPG semble être invalide.")
     if normalized_ext == ".webp" and not file_bytes.startswith(b"RIFF"):
         raise ValueError("Le fichier image WEBP semble être invalide.")
-    if normalized_ext in {".doc", ".docx", ".xls", ".xlsx"} and not file_bytes.startswith((b"PK\x03\x04", b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1")):
-        raise ValueError("Le document semble être invalide.")
-
     return filename[:255]
 
 
@@ -656,54 +644,6 @@ class MessageAttachmentDownloadView(APIView):
             normalized_ext = ".jpg"
         allowed_types = _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES.get(normalized_ext, set())
         stored_type = (attachment.content_type or "").lower().strip()
-
-        if inline and normalized_ext in {".doc", ".docx", ".xls", ".xlsx"}:
-            if stored_type not in allowed_types:
-                return Response(
-                    {"error": "Le type du fichier ne correspond pas à son extension."},
-                    status=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
-                )
-            try:
-                with attachment.file.open("rb") as file_obj:
-                    pdf_data = convert_office_attachment_to_pdf(
-                        file_obj,
-                        normalized_ext,
-                        attachment_key=(
-                            f"{attachment.pk}:{attachment.file.name}:"
-                            f"{attachment.size}:{attachment.uploaded_at.isoformat()}"
-                        ),
-                    )
-            except OfficePreviewUnavailable:
-                logger.error("LibreOffice is unavailable for attachment preview.")
-                return Response(
-                    {
-                        "error": (
-                            "Le moteur d'aperçu LibreOffice n'est pas installé "
-                            "ou configuré sur le serveur."
-                        )
-                    },
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-            except OfficePreviewError:
-                logger.exception("Office attachment preview conversion failed for %s", attachment.pk)
-                return Response(
-                    {"error": "Impossible de convertir ce fichier pour l'aperçu."},
-                    status=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                )
-            except OSError:
-                logger.exception("Office attachment storage read failed for %s", attachment.pk)
-                return Response(
-                    {"error": "Le fichier est momentanément inaccessible."},
-                    status=status.HTTP_503_SERVICE_UNAVAILABLE,
-                )
-
-            preview_name = f"{filename.rsplit('.', 1)[0]}.pdf"
-            response = HttpResponse(pdf_data, content_type="application/pdf")
-            safe_preview_name = preview_name.replace("\r", "").replace("\n", "")
-            response["Content-Disposition"] = (
-                f"inline; filename*=UTF-8''{quote(safe_preview_name.encode('utf-8'))}"
-            )
-            return response
 
         if stored_type not in allowed_types or not allowed_types:
             inline = False

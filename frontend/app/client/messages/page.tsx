@@ -9,7 +9,7 @@ import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 
-const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp,.doc,.docx,.xls,.xlsx";
+const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp";
 const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 
@@ -18,11 +18,11 @@ function validateAttachmentFile(file: File | null): string | null {
   if (file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
     return "Le fichier dépasse la taille maximale de 10 Mo.";
   }
-  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".doc", ".docx", ".xls", ".xlsx"];
+  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp"];
   const fileName = file.name.toLowerCase();
   const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
   if (!isAllowed) {
-    return "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX.";
+    return "Format non supporté. Utilisez un PDF, PNG, JPG ou WEBP.";
   }
   return null;
 }
@@ -40,10 +40,6 @@ function getAttachmentSelectionError(files: File[]): string | null {
 
 function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
-}
-
-function isOfficeAttachment(filename: string) {
-  return /\.(docx?|xlsx?)$/i.test(filename);
 }
 
 function formatFileSize(size: number) {
@@ -72,7 +68,6 @@ export default function ClientMessagesPage() {
   >(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -82,29 +77,19 @@ export default function ClientMessagesPage() {
     setPreviewAttachment(attachment);
     setPreviewLoading(true);
     setPreviewUrl(null);
-    setPreviewError("");
     const token = getToken();
     try {
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        const message =
-          body && typeof body.error === "string"
-            ? body.error
-            : "Impossible d'ouvrir la pièce jointe.";
-        throw new Error(message);
+        throw new Error("Impossible d'ouvrir la pièce jointe.");
       }
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
       setPreviewUrl(objectUrl);
-    } catch (error) {
-      setPreviewError(
-        error instanceof Error
-          ? error.message
-          : "Impossible d'ouvrir la pièce jointe. Veuillez réessayer."
-      );
+    } catch {
+      setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
     } finally {
       setPreviewLoading(false);
     }
@@ -214,7 +199,6 @@ export default function ClientMessagesPage() {
                   setPreviewAttachment(null);
                   setPreviewUrl(null);
                   setPreviewLoading(false);
-                  setPreviewError("");
                 }}
                 className="rounded-lg border border-gray-200 px-2 py-1 text-xs font-semibold text-gray-600 hover:text-gray-900"
               >
@@ -224,14 +208,10 @@ export default function ClientMessagesPage() {
             <div className="flex min-h-[420px] items-center justify-center bg-gray-50 p-4">
               {previewLoading ? (
                 <div className="flex items-center gap-2 text-sm text-gray-500"><Spinner className="h-5 w-5 text-brand" /> Chargement...</div>
-              ) : previewError ? (
-                <div role="alert" className="max-w-lg rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-700">
-                  {previewError}
-                </div>
               ) : previewUrl ? (
                 isImageAttachment(previewAttachment.filename, previewAttachment.content_type) ? (
                   <img src={previewUrl} alt={previewAttachment.filename} className="max-h-[75vh] max-w-full rounded-xl object-contain" />
-                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) || isOfficeAttachment(previewAttachment.filename) ? (
+                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) ? (
                   <iframe src={previewUrl} title={previewAttachment.filename} className="h-[75vh] w-full rounded-xl border-0" />
                 ) : (
                   <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-10 text-center text-sm text-gray-600">
@@ -250,11 +230,6 @@ export default function ClientMessagesPage() {
         <h1 className="mb-4 text-xl font-semibold tracking-tight text-[#17221f]">{t("messages")}</h1>
         <div className="flex h-[calc(100vh-12rem)] min-h-[400px] flex-col overflow-hidden rounded-2xl border border-[#e5e9e6] bg-white shadow-[0_4px_18px_rgba(27,55,46,0.025)]">
           <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50/50">
-            {error && (
-              <div className="sticky top-0 z-10 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 shadow-sm">
-                {error}
-              </div>
-            )}
             {loading ? (
               <div className="flex justify-center py-8">
                 <Spinner className="h-6 w-6 text-brand" />
@@ -347,6 +322,11 @@ export default function ClientMessagesPage() {
             <div ref={bottomRef} />
           </div>
           <div className="border-t bg-white p-3">
+            {error && (
+              <div role="alert" className="mb-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                {error}
+              </div>
+            )}
             {selectedFiles.length > 0 && (
               <div className="mb-2 space-y-2">
                 {selectedFiles.map((file, index) => (

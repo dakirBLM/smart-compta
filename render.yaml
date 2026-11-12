@@ -7,13 +7,8 @@ services:
     runtime: python
     plan: free
     rootDir: backend
-    # Check for LibreOffice without blocking deployment if the package is absent.
+    # Build: install, gather static, migrate, and seed demo data.
     buildCommand: >-
-      if command -v libreoffice >/dev/null 2>&1; then
-        libreoffice --headless --version;
-      else
-        echo "WARNING: LibreOffice is unavailable; Office attachment previews will not work.";
-      fi &&
       pip install -r requirements.txt &&
       python manage.py collectstatic --noinput &&
       python manage.py migrate &&

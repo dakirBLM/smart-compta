@@ -8,7 +8,7 @@ import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage, Conversation } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
 
-const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp,.doc,.docx,.xls,.xlsx";
+const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp";
 const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 
@@ -16,20 +16,16 @@ function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
 }
 
-function isOfficeAttachment(filename: string) {
-  return /\.(docx?|xlsx?)$/i.test(filename);
-}
-
 function validateAttachmentFile(file: File | null): string | null {
   if (!file) return null;
   if (file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
     return "Le fichier dépasse la taille maximale de 10 Mo.";
   }
-  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp", ".doc", ".docx", ".xls", ".xlsx"];
+  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp"];
   const fileName = file.name.toLowerCase();
   const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
   if (!isAllowed) {
-    return "Format non supporté. Utilisez un PDF, PNG, JPG, WEBP, DOC, DOCX, XLS ou XLSX.";
+    return "Format non supporté. Utilisez un PDF, PNG, JPG ou WEBP.";
   }
   return null;
 }
@@ -81,7 +77,6 @@ export function ChatPanel({
   >(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
-  const [previewError, setPreviewError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -91,29 +86,19 @@ export function ChatPanel({
     setPreviewAttachment(attachment);
     setPreviewLoading(true);
     setPreviewUrl(null);
-    setPreviewError("");
     const token = getToken();
     try {
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        const message =
-          body && typeof body.error === "string"
-            ? body.error
-            : "Impossible d'ouvrir la pièce jointe.";
-        throw new Error(message);
+        throw new Error("Impossible d'ouvrir la pièce jointe.");
       }
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
       setPreviewUrl(objectUrl);
-    } catch (error) {
-      setPreviewError(
-        error instanceof Error
-          ? error.message
-          : "Impossible d'ouvrir la pièce jointe. Veuillez réessayer."
-      );
+    } catch {
+      setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
     } finally {
       setPreviewLoading(false);
     }
@@ -232,7 +217,6 @@ export function ChatPanel({
                   setPreviewAttachment(null);
                   setPreviewUrl(null);
                   setPreviewLoading(false);
-                  setPreviewError("");
                 }}
                 className="rounded-lg border border-gray-200 px-2 py-1 text-xs font-semibold text-gray-600 hover:text-gray-900"
               >
@@ -242,14 +226,10 @@ export function ChatPanel({
             <div className="flex min-h-[420px] items-center justify-center bg-gray-50 p-4">
               {previewLoading ? (
                 <div className="flex items-center gap-2 text-sm text-gray-500"><Spinner className="h-5 w-5 text-brand" /> Chargement...</div>
-              ) : previewError ? (
-                <div role="alert" className="max-w-lg rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-700">
-                  {previewError}
-                </div>
               ) : previewUrl ? (
                 isImageAttachment(previewAttachment.filename, previewAttachment.content_type) ? (
                   <img src={previewUrl} alt={previewAttachment.filename} className="max-h-[75vh] max-w-full rounded-xl object-contain" />
-                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) || isOfficeAttachment(previewAttachment.filename) ? (
+                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) ? (
                   <iframe src={previewUrl} title={previewAttachment.filename} className="h-[75vh] w-full rounded-xl border-0" />
                 ) : (
                   <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-10 text-center text-sm text-gray-600">
@@ -316,11 +296,6 @@ export function ChatPanel({
             </div>
 
             <div className="flex-1 overflow-y-auto p-5 space-y-3.5 bg-[#F9FBF9]">
-              {error && (
-                <div className="sticky top-0 z-10 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700 shadow-sm">
-                  {error}
-                </div>
-              )}
               {loading && messages.length === 0 ? (
                 <div className="flex justify-center py-10">
                   <Spinner className="h-6 w-6 text-brand" />
@@ -416,6 +391,11 @@ export function ChatPanel({
             </div>
 
             <div className="border-t border-gray-200 bg-white p-3.5">
+              {error && (
+                <div role="alert" className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700">
+                  {error}
+                </div>
+              )}
               {selectedFiles.length > 0 && (
                 <div className="mb-2 space-y-2">
                   {selectedFiles.map((file, index) => (
