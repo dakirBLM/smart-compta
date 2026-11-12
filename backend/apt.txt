@@ -1,0 +1,2 @@
+libreoffice-writer
+libreoffice-calc

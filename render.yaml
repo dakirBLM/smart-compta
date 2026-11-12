@@ -9,6 +9,8 @@ services:
     rootDir: backend
     # Build: install, gather static, migrate, and seed demo data.
     buildCommand: >-
+      command -v libreoffice &&
+      libreoffice --headless --version >/dev/null &&
       pip install -r requirements.txt &&
       python manage.py collectstatic --noinput &&
       python manage.py migrate &&

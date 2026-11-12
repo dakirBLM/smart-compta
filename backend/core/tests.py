@@ -1,5 +1,7 @@
 import csv
 import os
+import subprocess
+import tempfile
 from datetime import date
 from io import BytesIO
 from pathlib import Path
@@ -10,7 +12,7 @@ from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
 from rest_framework import status
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, APITestCase
 from openpyxl import load_workbook
 
@@ -21,6 +23,11 @@ from .scanner import persist_extraction, upload_invoice_image
 from .bank_statements import BankStatementError
 from .serializers import FactureSerializer
 from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES, MAX_MESSAGE_ATTACHMENT_BYTES
+from .attachment_preview import (
+    OfficePreviewUnavailable,
+    _find_libreoffice,
+    convert_office_attachment_to_pdf,
+)
 
 
 class FactureImageUrlSerializerTests(APITestCase):
@@ -1525,6 +1532,78 @@ class InvoiceReuseAfterEntryDeletionTests(APITestCase):
         )
 
 
+class OfficeAttachmentPreviewTests(TestCase):
+    def test_converter_reuses_cached_pdf_without_relaunching_libreoffice(self):
+        pdf_data = b"%PDF-1.4 converted"
+
+        def fake_convert(command, **kwargs):
+            output_dir = Path(command[command.index("--outdir") + 1])
+            (output_dir / "attachment.pdf").write_bytes(pdf_data)
+            return subprocess.CompletedProcess(command, 0)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "core.attachment_preview.PREVIEW_CACHE_DIR",
+                Path(temp_dir) / "cache",
+            ):
+                with patch(
+                    "core.attachment_preview.shutil.which",
+                    return_value="libreoffice",
+                ):
+                    with patch(
+                        "core.attachment_preview.subprocess.run",
+                        side_effect=fake_convert,
+                    ) as run:
+                        first = convert_office_attachment_to_pdf(
+                            BytesIO(b"office source"),
+                            ".xlsx",
+                            attachment_key="attachment-1",
+                        )
+                        second = convert_office_attachment_to_pdf(
+                            BytesIO(b"office source"),
+                            ".xlsx",
+                            attachment_key="attachment-1",
+                        )
+
+        self.assertEqual(first, pdf_data)
+        self.assertEqual(second, pdf_data)
+        run.assert_called_once()
+
+    def test_converter_uses_configured_libreoffice_path(self):
+        executable = r"C:\LibreOffice\program\soffice.exe"
+        with patch.dict(os.environ, {"LIBREOFFICE_PATH": executable}):
+            with patch("core.attachment_preview.shutil.which", return_value=None):
+                with patch("core.attachment_preview.Path.is_file", return_value=True):
+                    self.assertEqual(_find_libreoffice(), executable)
+
+    def test_converter_reports_missing_libreoffice(self):
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("core.attachment_preview.shutil.which", return_value=None):
+                with patch("core.attachment_preview.Path.is_file", return_value=False):
+                    with self.assertRaises(OfficePreviewUnavailable):
+                        convert_office_attachment_to_pdf(BytesIO(b"document"), ".docx")
+
+    def test_converter_runs_libreoffice_and_returns_generated_pdf(self):
+        pdf_data = b"%PDF-1.4 converted"
+
+        def fake_convert(command, **kwargs):
+            output_dir = Path(command[command.index("--outdir") + 1])
+            (output_dir / "attachment.pdf").write_bytes(pdf_data)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch("core.attachment_preview.shutil.which", return_value="libreoffice"):
+            with patch("core.attachment_preview.subprocess.run", side_effect=fake_convert) as run:
+                result = convert_office_attachment_to_pdf(
+                    BytesIO(b"PK\x03\x04office document"),
+                    ".docx",
+                )
+
+        self.assertEqual(result, pdf_data)
+        command = run.call_args.args[0]
+        self.assertIn("--headless", command)
+        self.assertEqual(command[command.index("--convert-to") + 1], "pdf")
+
+
 @override_settings(STORAGES=TEST_STORAGES)
 class MessageAttachmentAPITests(APITestCase):
     def setUp(self):
@@ -1569,6 +1648,23 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertIn("attachment", download["Content-Disposition"])
         self.assertEqual(b"".join(download.streaming_content), b"%PDF-1.4 hello")
 
+        inline = self.client.get(
+            f"/api/messages/attachments/{attachment.id}/download/?inline=1"
+        )
+        self.assertEqual(inline.status_code, status.HTTP_200_OK)
+        self.assertEqual(inline["Content-Type"], "application/pdf")
+        self.assertTrue(inline["Content-Disposition"].startswith("inline;"))
+
+        self.client.force_authenticate(self.client_user)
+        messages = self.client.get(
+            "/api/messages/",
+            HTTP_HOST="api.example.com",
+            HTTP_X_FORWARDED_PROTO="https",
+        )
+        self.assertEqual(messages.status_code, status.HTTP_200_OK)
+        open_url = messages.data[0]["attachments"][0]["open_url"]
+        self.assertTrue(open_url.startswith("https://api.example.com/"))
+
     def test_invalid_or_oversized_attachment_is_rejected(self):
         self.client.force_authenticate(self.client_user)
         invalid = self.client.post(
@@ -1585,6 +1681,42 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertEqual(invalid.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(oversized.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(MessageAttachment.objects.count(), 0)
+
+    def test_office_attachment_preview_is_pdf_but_download_remains_original(self):
+        self.client.force_authenticate(self.client_user)
+        original_data = b"PK\x03\x04office document"
+        uploaded = SimpleUploadedFile(
+            "rapport.docx",
+            original_data,
+            content_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        )
+        created = self.client.post(
+            "/api/messages/",
+            {"file": uploaded},
+            format="multipart",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        attachment = MessageAttachment.objects.get()
+
+        self.client.force_authenticate(self.accountant)
+        pdf_data = b"%PDF-1.4 converted preview"
+        with patch("core.views.convert_office_attachment_to_pdf", return_value=pdf_data) as convert:
+            preview = self.client.get(
+                f"/api/messages/attachments/{attachment.id}/download/?inline=1"
+            )
+
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview["Content-Type"], "application/pdf")
+        self.assertTrue(preview["Content-Disposition"].startswith("inline;"))
+        self.assertEqual(preview.content, pdf_data)
+        convert.assert_called_once()
+
+        download = self.client.get(
+            f"/api/messages/attachments/{attachment.id}/download/"
+        )
+        self.assertEqual(download.status_code, status.HTTP_200_OK)
+        self.assertIn("attachment", download["Content-Disposition"])
+        self.assertEqual(b"".join(download.streaming_content), original_data)
 
     def test_attachment_access_is_limited_to_company_conversation(self):
         self.client.force_authenticate(self.client_user)

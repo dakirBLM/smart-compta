@@ -42,6 +42,10 @@ function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
 }
 
+function isOfficeAttachment(filename: string) {
+  return /\.(docx?|xlsx?)$/i.test(filename);
+}
+
 function formatFileSize(size: number) {
   if (!size) return "0 KB";
   const units = ["B", "KB", "MB"];
@@ -68,6 +72,7 @@ export default function ClientMessagesPage() {
   >(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -77,19 +82,29 @@ export default function ClientMessagesPage() {
     setPreviewAttachment(attachment);
     setPreviewLoading(true);
     setPreviewUrl(null);
+    setPreviewError("");
     const token = getToken();
     try {
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!response.ok) {
-        throw new Error("Impossible d'ouvrir la pièce jointe.");
+        const body = await response.json().catch(() => null);
+        const message =
+          body && typeof body.error === "string"
+            ? body.error
+            : "Impossible d'ouvrir la pièce jointe.";
+        throw new Error(message);
       }
       const blob = await response.blob();
       const objectUrl = URL.createObjectURL(blob);
       setPreviewUrl(objectUrl);
-    } catch {
-      setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
+    } catch (error) {
+      setPreviewError(
+        error instanceof Error
+          ? error.message
+          : "Impossible d'ouvrir la pièce jointe. Veuillez réessayer."
+      );
     } finally {
       setPreviewLoading(false);
     }
@@ -199,6 +214,7 @@ export default function ClientMessagesPage() {
                   setPreviewAttachment(null);
                   setPreviewUrl(null);
                   setPreviewLoading(false);
+                  setPreviewError("");
                 }}
                 className="rounded-lg border border-gray-200 px-2 py-1 text-xs font-semibold text-gray-600 hover:text-gray-900"
               >
@@ -208,10 +224,14 @@ export default function ClientMessagesPage() {
             <div className="flex min-h-[420px] items-center justify-center bg-gray-50 p-4">
               {previewLoading ? (
                 <div className="flex items-center gap-2 text-sm text-gray-500"><Spinner className="h-5 w-5 text-brand" /> Chargement...</div>
+              ) : previewError ? (
+                <div role="alert" className="max-w-lg rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-center text-sm text-red-700">
+                  {previewError}
+                </div>
               ) : previewUrl ? (
                 isImageAttachment(previewAttachment.filename, previewAttachment.content_type) ? (
                   <img src={previewUrl} alt={previewAttachment.filename} className="max-h-[75vh] max-w-full rounded-xl object-contain" />
-                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) ? (
+                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) || isOfficeAttachment(previewAttachment.filename) ? (
                   <iframe src={previewUrl} title={previewAttachment.filename} className="h-[75vh] w-full rounded-xl border-0" />
                 ) : (
                   <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-10 text-center text-sm text-gray-600">
@@ -399,9 +419,19 @@ export default function ClientMessagesPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => fileInputRef.current?.click()}
+                disabled={selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT}
                 aria-label="Ajouter un fichier"
-                title="Ajouter un fichier"
-                className="shrink-0 border-dashed border-[#dfe5e1] bg-white p-2.5 text-brand"
+                title={
+                  selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT
+                    ? "Limite de 3 fichiers atteinte"
+                    : "Ajouter un fichier"
+                }
+                className={cn(
+                  "shrink-0 border-dashed p-2.5",
+                  selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT
+                    ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
+                    : "border-[#dfe5e1] bg-white text-brand"
+                )}
               >
                 <Paperclip size={15} />
               </Button>

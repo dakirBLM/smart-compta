@@ -36,6 +36,9 @@ git push -u origin main
    (you can fill `CORS_ALLOWED_ORIGINS` after the frontend is up.)
 4. Click **Apply**. The build runs `collectstatic`, `migrate`, and `seed`
    automatically against Neon (so the demo accounts exist in your Neon DB).
+   Render installs LibreOffice Writer and Calc from the repository's `apt.txt`.
+   The build checks that LibreOffice is available before deploying; the
+   packages are required to preview Office message attachments.
 5. When live, note the URL, e.g. `https://smartcompta-api.onrender.com`.
 6. Back in **smartcompta-api → Environment**, set:
    - `CORS_ALLOWED_ORIGINS` = your Vercel URL (fill after step 3, e.g.
@@ -45,6 +48,21 @@ git push -u origin main
 
 > Free Render services **sleep after ~15 min idle**; the first request then
 > takes ~30–60s to wake. Normal for the free tier.
+
+### Local Office attachment previews
+
+Office attachment previews use LibreOffice to create a temporary PDF. Install
+LibreOffice locally before starting Django:
+
+- Windows: `winget install --id TheDocumentFoundation.LibreOffice --exact`
+- Debian/Ubuntu: `sudo apt-get install libreoffice-writer libreoffice-calc`
+
+The backend checks `PATH` and the standard Windows installation folders. If
+LibreOffice is installed elsewhere, set `LIBREOFFICE_PATH` to its executable
+(`soffice.exe` on Windows or `libreoffice` on Linux), then restart Django.
+Converted previews are cached on the local machine for up to 24 hours (up to
+128 MB) and the LibreOffice profile is reused per backend worker. The first
+conversion on a newly started worker still has LibreOffice startup cost.
 
 ## 3. Frontend → Vercel
 1. Vercel → **Add New… → Project** → import the same GitHub repo.
