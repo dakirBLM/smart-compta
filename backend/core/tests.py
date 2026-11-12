@@ -1618,6 +1618,28 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertEqual(oversized.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(MessageAttachment.objects.count(), 0)
 
+    def test_more_than_three_attachments_are_rejected(self):
+        self.client.force_authenticate(self.client_user)
+        files = [
+            SimpleUploadedFile(
+                f"rapport-{index}.pdf",
+                b"%PDF-1.4 test",
+                content_type="application/pdf",
+            )
+            for index in range(4)
+        ]
+
+        response = self.client.post(
+            "/api/messages/",
+            {"file": files},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("3 fichiers maximum", str(response.data))
+        self.assertEqual(Message.objects.count(), 0)
+        self.assertEqual(MessageAttachment.objects.count(), 0)
+
     def test_attachment_access_is_limited_to_company_conversation(self):
         self.client.force_authenticate(self.client_user)
         pdf = SimpleUploadedFile("rapport.pdf", b"%PDF-1.4 hello", content_type="application/pdf")

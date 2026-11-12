@@ -88,6 +88,7 @@ def _accountant_entreprise(request, pk):
 
 MAX_BANK_STATEMENT_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_MESSAGE_ATTACHMENT_COUNT = 3
 
 _ALLOWED_MESSAGE_ATTACHMENT_MIME_TYPES = {
     ".pdf": {"application/pdf", "application/x-pdf"},
@@ -577,8 +578,10 @@ class MessageListCreateView(APIView):
         validated_files = []
         try:
             if has_attachment:
-                if len(uploaded_files) > 3:
-                    raise ValueError("Vous pouvez joindre jusqu'à 3 fichiers maximum.")
+                if len(uploaded_files) > MAX_MESSAGE_ATTACHMENT_COUNT:
+                    raise ValueError(
+                        f"Vous pouvez joindre jusqu'à {MAX_MESSAGE_ATTACHMENT_COUNT} fichiers maximum."
+                    )
                 total_size = sum(file.size for file in uploaded_files)
                 if total_size > MAX_MESSAGE_ATTACHMENT_BYTES:
                     raise ValueError("Le total des fichiers dépasse la taille maximale de 10 Mo.")
