@@ -16,10 +16,6 @@ function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
 }
 
-function isPdfAttachment(filename: string, contentType: string) {
-  return contentType === "application/pdf" || contentType === "application/x-pdf" || /\.pdf$/i.test(filename);
-}
-
 function validateAttachmentFile(file: File | null): string | null {
   if (!file) return null;
   if (file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
@@ -91,17 +87,6 @@ export function ChatPanel({
     setPreviewLoading(true);
     setPreviewUrl(null);
     const token = getToken();
-    if (isPdfAttachment(attachment.filename, attachment.content_type)) {
-      if (!token) {
-        setPreviewLoading(false);
-        setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
-        return;
-      }
-      const params = new URLSearchParams({ id: String(attachment.id), token });
-      setPreviewUrl(`/api/message-attachment?${params.toString()}`);
-      setPreviewLoading(false);
-      return;
-    }
     try {
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
