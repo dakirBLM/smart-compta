@@ -3,7 +3,7 @@
 import { FileText, Paperclip, Send, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Spinner } from "@/components/ui";
-import { api, getToken } from "@/lib/api";
+import { api, getToken, setToken } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage, Conversation } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -14,6 +14,10 @@ const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 
 function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
+}
+
+function isPdfAttachment(filename: string, contentType: string) {
+  return contentType === "application/pdf" || contentType === "application/x-pdf" || /\.pdf$/i.test(filename);
 }
 
 function validateAttachmentFile(file: File | null): string | null {
@@ -87,6 +91,17 @@ export function ChatPanel({
     setPreviewLoading(true);
     setPreviewUrl(null);
     const token = getToken();
+    if (isPdfAttachment(attachment.filename, attachment.content_type)) {
+      if (!token) {
+        setPreviewLoading(false);
+        setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
+        return;
+      }
+      setToken(token);
+      setPreviewUrl(`/api/message-attachment?id=${attachment.id}`);
+      setPreviewLoading(false);
+      return;
+    }
     try {
       const response = await fetch(url, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
