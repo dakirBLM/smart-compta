@@ -3,15 +3,17 @@ import os
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
 from django.core.exceptions import ValidationError
+from django.core.management import call_command, CommandError
 from rest_framework import status
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, APITestCase
 from openpyxl import load_workbook
 
@@ -100,6 +102,55 @@ TEST_STORAGES = {
     "default": {"BACKEND": "core.tests.PrivateDurableTestStorage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
+
+
+class ImportScfCommandTests(TestCase):
+    def test_import_succeeds_when_csv_contains_global_512_and_updates_existing_account(self):
+        SCFAccount.objects.create(
+            numero_compte="512", libelle="Old label", classe=4
+        )
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "scf.csv"
+            csv_path.write_text(
+                "classe,numero_compte,libelle\n"
+                '5,512,"Banques comptes courants"\n'
+                '4,401,"Fournisseurs"\n',
+                encoding="utf-8",
+            )
+
+            call_command("import_scf", str(csv_path), verbosity=0)
+
+        global_bank = SCFAccount.objects.get(
+            entreprise__isnull=True, numero_compte="512"
+        )
+        self.assertEqual(global_bank.libelle, "Banques comptes courants")
+        self.assertEqual(global_bank.classe, 5)
+        self.assertTrue(SCFAccount.objects.filter(
+            entreprise__isnull=True, numero_compte="401"
+        ).exists())
+
+    def test_import_fails_when_csv_file_is_missing(self):
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "missing.csv"
+
+            with self.assertRaisesRegex(CommandError, "CSV file not found"):
+                call_command("import_scf", str(csv_path), verbosity=0)
+
+    def test_import_fails_and_rolls_back_when_csv_does_not_contain_global_512(self):
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "scf.csv"
+            csv_path.write_text(
+                "classe,numero_compte,libelle\n"
+                '4,401,"Fournisseurs"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                CommandError, "SCF account 512.*CSV contains account 512"
+            ):
+                call_command("import_scf", str(csv_path), verbosity=0)
+
+        self.assertFalse(SCFAccount.objects.exists())
 
 
 class CompanyBankAccountAPITests(APITestCase):
