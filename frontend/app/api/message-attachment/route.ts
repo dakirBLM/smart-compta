@@ -9,7 +9,7 @@ export async function GET(request: NextRequest) {
   if (!/^\d+$/.test(id)) {
     return NextResponse.json({ error: "Lien invalide." }, { status: 400 });
   }
-  const token = request.nextUrl.searchParams.get("token") || "";
+  const token = request.cookies.get("sc_token")?.value || "";
   if (!token) {
     return NextResponse.json({ error: "Connexion requise." }, { status: 401 });
   }
@@ -20,8 +20,8 @@ export async function GET(request: NextRequest) {
       `${API_URL.replace(/\/$/, "")}/api/messages/attachments/${id}/download/?inline=1`,
       {
         headers: { Authorization: `Bearer ${token}` },
+        redirect: "error",
         cache: "no-store",
-        redirect: "follow",
       },
     );
   } catch {
@@ -43,7 +43,6 @@ export async function GET(request: NextRequest) {
       "Content-Type": "application/pdf",
       "Content-Disposition": "inline",
       "Cache-Control": "private, no-store",
-      "Referrer-Policy": "no-referrer",
       "X-Content-Type-Options": "nosniff",
     },
   });
