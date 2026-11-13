@@ -5,6 +5,32 @@ import { AIExtraction, BankStatementExtraction, BankStatementImportResult, BankS
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const TOKEN_KEY = "sc_token";
 
+export function resolveInvoiceFileUrl(value?: string | null): string | null {
+  const rawUrl = value?.trim();
+  if (!rawUrl) return null;
+
+  if (rawUrl.startsWith("data:image/")) return rawUrl;
+
+  try {
+    const url = new URL(rawUrl, API_URL);
+    if (url.protocol === "http:" || url.protocol === "https:") {
+      return url.href;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
+export function isPdfInvoiceUrl(value: string): boolean {
+  try {
+    return new URL(value).pathname.toLowerCase().endsWith(".pdf");
+  } catch {
+    return false;
+  }
+}
+
 export function getToken(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(TOKEN_KEY);
