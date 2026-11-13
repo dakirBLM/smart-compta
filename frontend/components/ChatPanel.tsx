@@ -3,7 +3,7 @@
 import { FileText, Paperclip, Send, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Spinner } from "@/components/ui";
-import { api, getToken, setToken } from "@/lib/api";
+import { api, getToken } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage, Conversation } from "@/lib/types";
 import { cn, formatDateTime } from "@/lib/utils";
@@ -97,8 +97,8 @@ export function ChatPanel({
         setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
         return;
       }
-      setToken(token);
-      setPreviewUrl(`/api/message-attachment?id=${attachment.id}`);
+      const params = new URLSearchParams({ id: String(attachment.id), token });
+      setPreviewUrl(`/api/message-attachment?${params.toString()}`);
       setPreviewLoading(false);
       return;
     }
