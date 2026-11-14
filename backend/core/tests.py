@@ -3,18 +3,21 @@ import os
 from datetime import date
 from io import BytesIO
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
+from django.core.exceptions import ValidationError
+from django.core.management import call_command, CommandError
 from rest_framework import status
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import override_settings
+from django.test import TestCase, override_settings
 from rest_framework.test import APIRequestFactory, APITestCase
 from openpyxl import load_workbook
 
-from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
+from .models import BankAccount, BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
 from .account_helpers import apply_scf_subaccounts
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction, upload_invoice_image
@@ -99,6 +102,311 @@ TEST_STORAGES = {
     "default": {"BACKEND": "core.tests.PrivateDurableTestStorage"},
     "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
 }
+
+
+class ImportScfCommandTests(TestCase):
+    def test_import_succeeds_when_csv_contains_global_512_and_updates_existing_account(self):
+        SCFAccount.objects.create(
+            numero_compte="512", libelle="Old label", classe=4
+        )
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "scf.csv"
+            csv_path.write_text(
+                "classe,numero_compte,libelle\n"
+                '5,512,"Banques comptes courants"\n'
+                '4,401,"Fournisseurs"\n',
+                encoding="utf-8",
+            )
+
+            call_command("import_scf", str(csv_path), verbosity=0)
+
+        global_bank = SCFAccount.objects.get(
+            entreprise__isnull=True, numero_compte="512"
+        )
+        self.assertEqual(global_bank.libelle, "Banques comptes courants")
+        self.assertEqual(global_bank.classe, 5)
+        self.assertTrue(SCFAccount.objects.filter(
+            entreprise__isnull=True, numero_compte="401"
+        ).exists())
+
+    def test_import_fails_when_csv_file_is_missing(self):
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "missing.csv"
+
+            with self.assertRaisesRegex(CommandError, "CSV file not found"):
+                call_command("import_scf", str(csv_path), verbosity=0)
+
+    def test_import_fails_and_rolls_back_when_csv_does_not_contain_global_512(self):
+        with TemporaryDirectory() as temp_dir:
+            csv_path = Path(temp_dir) / "scf.csv"
+            csv_path.write_text(
+                "classe,numero_compte,libelle\n"
+                '4,401,"Fournisseurs"\n',
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                CommandError, "SCF account 512.*CSV contains account 512"
+            ):
+                call_command("import_scf", str(csv_path), verbosity=0)
+
+        self.assertFalse(SCFAccount.objects.exists())
+
+
+class CompanyBankAccountAPITests(APITestCase):
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="bank-api-accountant", password="test-pass", role="accountant"
+        )
+        self.other_accountant = get_user_model().objects.create_user(
+            username="bank-api-other-accountant", password="test-pass", role="accountant"
+        )
+        SCFAccount.objects.create(numero_compte="512", libelle="Banques", classe=5)
+        self.client.force_authenticate(self.accountant)
+        self.list_url = "/api/entreprises/"
+
+    def company_payload(self, name, **extra):
+        return {
+            "nom": name,
+            "date_creation": "2026-01-01",
+            "exercice_comptable": "2026",
+            **extra,
+        }
+
+    def test_company_api_returns_empty_bank_list_when_company_has_no_banks(self):
+        response = self.client.post(
+            self.list_url, self.company_payload("No bank company"), format="json"
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["bank_accounts"], [])
+        self.assertEqual(BankAccount.objects.count(), 0)
+
+    def test_company_api_supports_one_three_and_more_bank_accounts(self):
+        for count in (1, 3, 5):
+            payload = self.company_payload(
+                f"Company with {count} banks",
+                bank_accounts=[
+                    {"bank_name": f"Bank {index}", "account_number": str(index)}
+                    for index in range(1, count + 1)
+                ],
+            )
+            response = self.client.post(self.list_url, payload, format="json")
+
+            self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+            self.assertEqual(len(response.data["bank_accounts"]), count)
+            self.assertEqual(
+                [item["scf_account"]["numero_compte"] for item in response.data["bank_accounts"]],
+                [f"512{index:03d}" for index in range(1, count + 1)],
+            )
+            company = Entreprise.objects.get(pk=response.data["id"])
+            self.assertEqual(company.bank_accounts.count(), count)
+            self.assertTrue(all(
+                item.scf_account.entreprise_id == company.id
+                for item in company.bank_accounts.select_related("scf_account")
+            ))
+            detail = self.client.get(f"{self.list_url}{company.id}/")
+            self.assertEqual(detail.status_code, status.HTTP_200_OK)
+            self.assertEqual(len(detail.data["bank_accounts"]), count)
+
+    def test_company_api_creates_updates_and_rejects_bank_deletion(self):
+        created = self.client.post(
+            self.list_url, self.company_payload("Bank CRUD"), format="json"
+        )
+        company_id = created.data["id"]
+        detail_url = f"{self.list_url}{company_id}/"
+
+        added = self.client.put(
+            detail_url,
+            {"bank_accounts": [{"bank_name": "BNA", "account_number": "123"}]},
+            format="json",
+        )
+        self.assertEqual(added.status_code, status.HTTP_200_OK)
+        bank = added.data["bank_accounts"][0]
+        self.assertEqual(bank["bank_name"], "BNA")
+        bank_id = bank["id"]
+
+        updated = self.client.put(
+            detail_url,
+            {"bank_accounts": [{"id": bank_id, "rib": "123456"}]},
+            format="json",
+        )
+        self.assertEqual(updated.status_code, status.HTTP_200_OK)
+        self.assertEqual(updated.data["bank_accounts"][0]["rib"], "123456")
+        self.assertEqual(updated.data["bank_accounts"][0]["bank_name"], "BNA")
+
+        company = Entreprise.objects.get(pk=company_id)
+        bank_account = company.bank_accounts.get(pk=bank_id)
+        scf_account = bank_account.scf_account
+        exercise = company.exercices.get(annee=2026)
+        journal = Journal.objects.create(
+            entreprise=company,
+            annee=exercise,
+            type_journal=Journal.Type.BANQUE,
+        )
+        entry = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date(2026, 1, 1),
+            numero_piece="BANK-HISTORY",
+        )
+        bank_line = LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=scf_account.numero_compte,
+            libelle="BNA transaction",
+            montant_debit=10,
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte="581000",
+            libelle="BNA transaction",
+            montant_credit=10,
+        )
+
+        rejected_delete = self.client.put(
+            detail_url,
+            {"bank_accounts": [{"id": bank_id, "delete": True}]},
+            format="json",
+        )
+        self.assertEqual(rejected_delete.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
+        self.assertEqual(
+            BankAccount.objects.get(pk=bank_id).scf_account_id,
+            scf_account.pk,
+        )
+        self.assertEqual(
+            SCFAccount.objects.get(pk=scf_account.pk).libelle,
+            scf_account.libelle,
+        )
+        self.assertTrue(Ecriture.objects.filter(pk=entry.pk).exists())
+        bank_line.refresh_from_db()
+        self.assertEqual(bank_line.numero_compte, scf_account.numero_compte)
+        self.assertEqual(bank_line.montant_debit, 10)
+        self.assertEqual(bank_line.montant_credit, 0)
+        self.assertEqual(entry.lignes.count(), 2)
+        counterpart_line = entry.lignes.exclude(pk=bank_line.pk).get()
+        self.assertEqual(
+            (
+                counterpart_line.numero_compte,
+                counterpart_line.montant_debit,
+                counterpart_line.montant_credit,
+            ),
+            ("581000", 0, 10),
+        )
+
+    def test_entreprise_updates_preserve_bank_accounts_when_omitted(self):
+        created = self.client.post(
+            self.list_url, self.company_payload("Preserve bank"), format="json"
+        )
+        company_id = created.data["id"]
+        detail_url = f"{self.list_url}{company_id}/"
+        added = self.client.put(
+            detail_url,
+            {"bank_accounts": [{"bank_name": "BNA", "account_number": "123"}]},
+            format="json",
+        )
+        self.assertEqual(added.status_code, status.HTTP_200_OK)
+        bank_id = added.data["bank_accounts"][0]["id"]
+
+        omitted = self.client.put(detail_url, {"nom": "Updated company"}, format="json")
+        self.assertEqual(omitted.status_code, status.HTTP_200_OK)
+        self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
+
+        empty_list = self.client.put(detail_url, {"bank_accounts": []}, format="json")
+        self.assertEqual(empty_list.status_code, status.HTTP_200_OK)
+        self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
+
+    def test_company_api_preserves_legacy_first_and_second_bank_accounts(self):
+        response = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Legacy bank mapping",
+                banque="BNA",
+                numero_compte="123",
+                rib="111",
+                banque2="CPA",
+                numero_compte2="456",
+                rib2="222",
+                bank_accounts=[
+                    {"bank_name": "BNA", "account_number": "123", "rib": "111"},
+                    {"bank_name": "CPA", "account_number": "456", "rib": "222"},
+                ],
+            ),
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            [item["scf_account"]["numero_compte"] for item in response.data["bank_accounts"]],
+            ["512001", "512002"],
+        )
+        self.assertEqual(
+            SCFAccount.objects.filter(
+                entreprise_id=response.data["id"],
+                numero_compte__in=["512001", "512002"],
+            ).count(),
+            2,
+        )
+
+    def test_bank_records_cannot_be_accessed_through_another_company(self):
+        own_company = self.client.post(
+            self.list_url, self.company_payload("Own company"), format="json"
+        ).data
+        other_company = Entreprise.objects.create(
+            nom="Other accountant company",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.other_accountant,
+        )
+        other_scf = SCFAccount.objects.create(
+            entreprise=other_company,
+            numero_compte="512001",
+            libelle="BANQUE Other",
+            classe=5,
+        )
+        other_bank = BankAccount.objects.create(
+            entreprise=other_company,
+            bank_name="Other",
+            scf_account=other_scf,
+        )
+        own_detail_url = f"{self.list_url}{own_company['id']}/"
+
+        foreign_record = self.client.put(
+            own_detail_url,
+            {"bank_accounts": [{"id": other_bank.id, "delete": True}]},
+            format="json",
+        )
+        foreign_company = self.client.get(f"{self.list_url}{other_company.id}/")
+
+        self.assertEqual(foreign_record.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(foreign_company.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertTrue(BankAccount.objects.filter(pk=other_bank.pk).exists())
+
+    def test_bank_model_rejects_scf_account_from_another_company(self):
+        own_company = Entreprise.objects.create(
+            nom="Model guard owner",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        other_company = Entreprise.objects.create(
+            nom="Model guard other",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.other_accountant,
+        )
+        foreign_scf = SCFAccount.objects.create(
+            entreprise=other_company,
+            numero_compte="512001",
+            libelle="BANQUE Other",
+            classe=5,
+        )
+
+        with self.assertRaises(ValidationError):
+            BankAccount.objects.create(
+                entreprise=own_company,
+                bank_name="BNA",
+                scf_account=foreign_scf,
+            )
 
 
 @override_settings(STORAGES=TEST_STORAGES)
