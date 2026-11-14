@@ -28,6 +28,8 @@ services:
         generateValue: true        # Render generates a strong secret
       - key: DJANGO_DEBUG
         value: "False"
+      - key: DJANGO_TRUST_PROXY_SSL_HEADER
+        value: "true"
       # Set these in the Render dashboard after the frontend is deployed:
       - key: WEBHOOK_URL
         sync: false                # your PUBLIC Make/Integromat webhook URL

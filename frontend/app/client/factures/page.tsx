@@ -4,25 +4,14 @@ import { useSearchParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { ClientScanner } from "@/components/ClientScanner";
 import { ClientShell } from "@/components/ClientShell";
+import { InvoiceDocumentPreview } from "@/components/InvoiceDocumentPreview";
 import { InvoiceCard } from "@/components/InvoiceCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card } from "@/components/ui";
-import { api } from "@/lib/api";
+import { api, resolveInvoiceFileUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { Facture } from "@/lib/types";
 import { formatDate, formatDZD } from "@/lib/utils";
-
-function canDisplayInvoiceImage(value?: string | null) {
-  if (!value) return false;
-  return [
-    "http://",
-    "https://",
-    "/",
-    "data:",
-    "blob:",
-    "file:",
-  ].some((prefix) => value.startsWith(prefix));
-}
 
 export default function ClientFactures() {
   const { t } = useI18n();
@@ -76,9 +65,15 @@ export default function ClientFactures() {
             </h2>
             <StatusBadge statut={detail.statut} />
           </div>
-          {canDisplayInvoiceImage(detail.image_url) ? (
-            <img src={detail.image_url} alt="facture" className="mb-4 rounded-lg" />
-          ) : null}
+          {resolveInvoiceFileUrl(detail.image_url) && (
+            <InvoiceDocumentPreview
+              value={detail.image_url}
+              alt="facture"
+              className="mb-4 flex min-h-56 w-full items-center justify-center overflow-hidden rounded-lg"
+              imageClassName="max-h-[32rem] w-full object-contain"
+              placeholderClassName="flex min-h-56 w-full items-center justify-center bg-gray-100 text-gray-400"
+            />
+          )}
           <dl className="space-y-2 text-sm">
             <Row label={t("date")} value={formatDate(detail.date_facture)} />
             <Row label="HT" value={formatDZD(detail.montant_ht)} />
