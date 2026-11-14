@@ -21,7 +21,6 @@ type BankAccountPayload = {
   bank_name?: string;
   account_number?: string;
   rib?: string;
-  delete?: boolean;
 };
 type BankAccountFormRow = Omit<BankAccount, "id" | "scf_account"> & {
   id?: number;
@@ -59,7 +58,6 @@ export function EntrepriseForm({
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const nextBankKey = useRef(0);
-  const [deletedBankIds, setDeletedBankIds] = useState<number[]>([]);
   const [textLimitErrors, setTextLimitErrors] = useState<Partial<Record<LongTextField, boolean>>>({});
 
   const [form, setForm] = useState<Form>(() => {
@@ -99,14 +97,6 @@ export function EntrepriseForm({
   const [client, setClient] = useState({ nom_client: "", username: "", password: "", email: "" });
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
-  function removeBankAccount(formKey: string) {
-    const bank = bankAccounts.find((row) => row.formKey === formKey);
-    const bankId = bank?.id;
-    if (bankId !== undefined) {
-      setDeletedBankIds((ids) => ids.includes(bankId) ? ids : [...ids, bankId]);
-    }
-    setBankAccounts((rows) => rows.filter((row) => row.formKey !== formKey));
-  }
 
   function setLongText(k: LongTextField, value: string) {
     const characters = Array.from(value);
@@ -180,7 +170,6 @@ export function EntrepriseForm({
           account_number,
           rib,
         }));
-      deletedBankIds.forEach((id) => bankPayload.push({ id, delete: true }));
 
       const payload = {
         ...form,
@@ -354,25 +343,15 @@ export function EntrepriseForm({
               </div>
               <div>
                 <Label>RIB (22 chiffres)</Label>
-                <div className="flex gap-2">
-                  <Input
-                    inputMode="numeric"
-                    value={bank.rib}
-                    onChange={(e) => setBankAccounts((rows) => rows.map((row) =>
-                      row.formKey === bank.formKey
-                        ? { ...row, rib: onlyDigits(e.target.value, 22) }
-                        : row
-                    ))}
-                  />
-                  <Button
-                    type="button"
-                    variant="outline"
-                    aria-label={`Supprimer la banque ${index + 1}`}
-                    onClick={() => removeBankAccount(bank.formKey)}
-                  >
-                    Retirer
-                  </Button>
-                </div>
+                <Input
+                  inputMode="numeric"
+                  value={bank.rib}
+                  onChange={(e) => setBankAccounts((rows) => rows.map((row) =>
+                    row.formKey === bank.formKey
+                      ? { ...row, rib: onlyDigits(e.target.value, 22) }
+                      : row
+                  ))}
+                />
               </div>
             </div>
           ))}

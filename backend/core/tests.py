@@ -209,7 +209,7 @@ class CompanyBankAccountAPITests(APITestCase):
             self.assertEqual(detail.status_code, status.HTTP_200_OK)
             self.assertEqual(len(detail.data["bank_accounts"]), count)
 
-    def test_company_api_creates_updates_and_deletes_bank_records(self):
+    def test_company_api_creates_updates_and_rejects_bank_deletion(self):
         created = self.client.post(
             self.list_url, self.company_payload("Bank CRUD"), format="json"
         )
@@ -235,16 +235,85 @@ class CompanyBankAccountAPITests(APITestCase):
         self.assertEqual(updated.data["bank_accounts"][0]["rib"], "123456")
         self.assertEqual(updated.data["bank_accounts"][0]["bank_name"], "BNA")
 
-        deleted = self.client.put(
+        company = Entreprise.objects.get(pk=company_id)
+        bank_account = company.bank_accounts.get(pk=bank_id)
+        scf_account = bank_account.scf_account
+        exercise = company.exercices.get(annee=2026)
+        journal = Journal.objects.create(
+            entreprise=company,
+            annee=exercise,
+            type_journal=Journal.Type.BANQUE,
+        )
+        entry = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date(2026, 1, 1),
+            numero_piece="BANK-HISTORY",
+        )
+        bank_line = LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=scf_account.numero_compte,
+            libelle="BNA transaction",
+            montant_debit=10,
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte="581000",
+            libelle="BNA transaction",
+            montant_credit=10,
+        )
+
+        rejected_delete = self.client.put(
             detail_url,
             {"bank_accounts": [{"id": bank_id, "delete": True}]},
             format="json",
         )
-        self.assertEqual(deleted.status_code, status.HTTP_200_OK)
-        self.assertEqual(deleted.data["bank_accounts"], [])
-        self.assertTrue(SCFAccount.objects.filter(
-            entreprise_id=company_id, numero_compte="512001"
-        ).exists())
+        self.assertEqual(rejected_delete.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
+        self.assertEqual(
+            BankAccount.objects.get(pk=bank_id).scf_account_id,
+            scf_account.pk,
+        )
+        self.assertEqual(
+            SCFAccount.objects.get(pk=scf_account.pk).libelle,
+            scf_account.libelle,
+        )
+        self.assertTrue(Ecriture.objects.filter(pk=entry.pk).exists())
+        bank_line.refresh_from_db()
+        self.assertEqual(bank_line.numero_compte, scf_account.numero_compte)
+        self.assertEqual(bank_line.montant_debit, 10)
+        self.assertEqual(bank_line.montant_credit, 0)
+        self.assertEqual(entry.lignes.count(), 2)
+        counterpart_line = entry.lignes.exclude(pk=bank_line.pk).get()
+        self.assertEqual(
+            (
+                counterpart_line.numero_compte,
+                counterpart_line.montant_debit,
+                counterpart_line.montant_credit,
+            ),
+            ("581000", 0, 10),
+        )
+
+    def test_entreprise_updates_preserve_bank_accounts_when_omitted(self):
+        created = self.client.post(
+            self.list_url, self.company_payload("Preserve bank"), format="json"
+        )
+        company_id = created.data["id"]
+        detail_url = f"{self.list_url}{company_id}/"
+        added = self.client.put(
+            detail_url,
+            {"bank_accounts": [{"bank_name": "BNA", "account_number": "123"}]},
+            format="json",
+        )
+        self.assertEqual(added.status_code, status.HTTP_200_OK)
+        bank_id = added.data["bank_accounts"][0]["id"]
+
+        omitted = self.client.put(detail_url, {"nom": "Updated company"}, format="json")
+        self.assertEqual(omitted.status_code, status.HTTP_200_OK)
+        self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
+
+        empty_list = self.client.put(detail_url, {"bank_accounts": []}, format="json")
+        self.assertEqual(empty_list.status_code, status.HTTP_200_OK)
+        self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
 
     def test_company_api_preserves_legacy_first_and_second_bank_accounts(self):
         response = self.client.post(

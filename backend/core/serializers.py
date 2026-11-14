@@ -51,18 +51,11 @@ class BankAccountSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
-        delete = attrs.get("delete", False)
+        if attrs.get("delete", False):
+            raise serializers.ValidationError(
+                "La suppression des comptes bancaires n'est pas autorisée."
+            )
         bank_id = attrs.get("id")
-        supplied_fields = set(attrs) - {"id", "delete"}
-
-        if delete and (not bank_id or supplied_fields):
-            raise serializers.ValidationError(
-                "La suppression nécessite uniquement l'identifiant du compte bancaire."
-            )
-        if not bank_id and delete:
-            raise serializers.ValidationError(
-                "Un identifiant est obligatoire pour supprimer un compte bancaire."
-            )
         if not bank_id and not attrs.get("bank_name", "").strip():
             raise serializers.ValidationError(
                 {"bank_name": "Le nom de la banque est obligatoire."}
@@ -290,16 +283,11 @@ class EntrepriseSerializer(serializers.ModelSerializer):
         for bank_data in bank_accounts:
             data = dict(bank_data)
             bank_id = data.pop("id", None)
-            should_delete = data.pop("delete", False)
             if bank_id is None:
                 self._create_bank_account(entreprise, data)
                 continue
 
             bank_account = entreprise.bank_accounts.get(pk=bank_id)
-            if should_delete:
-                bank_account.delete()
-                continue
-
             for field in ("bank_name", "account_number", "rib"):
                 if field in data:
                     value = data[field]
