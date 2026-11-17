@@ -1,9 +1,10 @@
 """Génération et résolution des comptes tiers et sous-comptes SCF."""
 import re
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from .models import ClientComptable, Fournisseur, SCFAccount
+from .models import ClientComptable, EntrepriseProduct, Fournisseur, SCFAccount, Entreprise
 
 
 def _normalize_name(name: str) -> str:
@@ -36,6 +37,148 @@ def next_account_number(entreprise, prefix: str) -> str:
     if next_suffix > 999:
         raise ValueError(f"Limite de comptes {prefix} atteinte pour cette entreprise.")
     return f"{prefix}{next_suffix:03d}"
+
+
+PRODUCT_CATEGORIES = (
+    ("marchandise", EntrepriseProduct.Category.MARCHANDISE, "380"),
+    ("matiere_premiere", EntrepriseProduct.Category.MATIERE_PREMIERE, "381"),
+    ("matieres_consommables", EntrepriseProduct.Category.MATIERES_CONSOMMABLES, "382"),
+)
+
+
+def _product_names(value: str) -> list[str]:
+    return [name.strip() for name in (value or "").splitlines() if name.strip()]
+
+
+def _renumber_product_category(entreprise, category: str, prefix: str) -> None:
+    products = list(
+        EntrepriseProduct.objects.select_for_update()
+        .filter(entreprise=entreprise, category=category, is_active=True)
+        .order_by("created_at", "id")
+    )
+    if not products:
+        return
+
+    general_number = f"{prefix}000"
+    if len(products) == 1:
+        products[0].numero_compte = general_number
+        products[0].save(update_fields=["numero_compte"])
+    else:
+        reserved = set()
+        historical_numbers = list(
+            EntrepriseProduct.objects.filter(
+                entreprise=entreprise, category=category
+            ).values_list("numero_compte", flat=True)
+        )
+        existing_numbers = SCFAccount.objects.filter(
+            entreprise=entreprise, numero_compte__startswith=prefix
+        ).values_list("numero_compte", flat=True)
+        for number in list(historical_numbers) + list(existing_numbers):
+            match = re.fullmatch(rf"{re.escape(prefix)}(\d{{3}})", str(number))
+            if match and int(match.group(1)) > 0:
+                reserved.add(int(match.group(1)))
+
+        used = set()
+        for product in products:
+            match = re.fullmatch(
+                rf"{re.escape(prefix)}(\d{{3}})", product.numero_compte or ""
+            )
+            if match and int(match.group(1)) > 0:
+                used.add(int(match.group(1)))
+
+        for product in products:
+            if product.numero_compte != general_number and product.numero_compte:
+                continue
+            next_suffix = max(reserved | used, default=0) + 1
+            if next_suffix > 999:
+                raise ValueError(f"Limite de comptes {prefix} atteinte pour cette entreprise.")
+            product.numero_compte = f"{prefix}{next_suffix:03d}"
+            product.save(update_fields=["numero_compte"])
+            used.add(next_suffix)
+            reserved.add(next_suffix)
+
+    for product in products:
+        SCFAccount.objects.update_or_create(
+            entreprise=entreprise,
+            numero_compte=product.numero_compte,
+            defaults={
+                "libelle": product.nom[:255],
+                "classe": 3,
+            },
+        )
+
+
+@transaction.atomic
+def synchronize_entreprise_products(entreprise) -> None:
+    """Synchronize the three legacy text fields with durable product records."""
+    entreprise = Entreprise.objects.select_for_update().get(pk=entreprise.pk)
+    for field, category, prefix in PRODUCT_CATEGORIES:
+        names = _product_names(getattr(entreprise, field))
+        normalized_names = [_normalize_name(name) for name in names]
+        if len(set(normalized_names)) != len(normalized_names):
+            raise ValidationError(
+                {field: "Chaque produit doit avoir un nom unique dans sa catégorie."}
+            )
+
+        existing = list(
+            EntrepriseProduct.objects.select_for_update().filter(
+                entreprise=entreprise, category=category, is_active=True
+            )
+        )
+        existing_by_name = {_normalize_name(product.nom): product for product in existing}
+        wanted = set(normalized_names)
+        for product in existing:
+            if _normalize_name(product.nom) not in wanted:
+                product.is_active = False
+                product.save(update_fields=["is_active"])
+
+        for name, normalized_name in zip(names, normalized_names):
+            if normalized_name not in existing_by_name:
+                EntrepriseProduct.objects.create(
+                    entreprise=entreprise,
+                    category=category,
+                    nom=name,
+                )
+
+        _renumber_product_category(entreprise, category, prefix)
+
+
+@transaction.atomic
+def apply_product_accounts(entreprise, lignes: list) -> list:
+    """Apply explicitly selected company products to purchase accounting lines."""
+    Entreprise.objects.select_for_update().get(pk=entreprise.pk)
+    out = []
+    for raw_line in lignes:
+        line = dict(raw_line)
+        product_id = line.get("product_id")
+        if product_id in (None, ""):
+            out.append(line)
+            continue
+        if isinstance(product_id, bool) or not re.fullmatch(r"\d+", str(product_id)):
+            raise ValidationError("Le produit sélectionné est invalide.")
+        try:
+            product_id = int(product_id)
+        except (TypeError, ValueError):
+            raise ValidationError("Le produit sélectionné est invalide.")
+        product = EntrepriseProduct.objects.select_for_update().filter(
+            pk=product_id, entreprise=entreprise, is_active=True
+        ).first()
+        if not product:
+            raise ValidationError("Le produit sélectionné n'appartient pas à cette entreprise.")
+        if not product.numero_compte:
+            raise ValidationError("Le produit sélectionné n'a pas de compte SCF attribué.")
+        try:
+            debit = Decimal(str(line.get("debit") or 0))
+            credit = Decimal(str(line.get("credit") or 0))
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValidationError("Le montant de la ligne produit est invalide.") from exc
+        if debit <= 0 or credit != 0:
+            raise ValidationError(
+                "Un produit doit être associé à une ligne d'achat au débit."
+            )
+        line["compte"] = product.numero_compte
+        out.append(line)
+    return out
 
 
 def _validate_not_self(entreprise, nom: str, type_tiers: str):

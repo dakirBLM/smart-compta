@@ -44,9 +44,22 @@ export interface Entreprise {
   matieres_consommables: string;
   telephone: string;
   email: string;
+  produits: EntrepriseProduct[];
   created_at: string;
   exercices: ExerciceAnnee[];
   clients_count: number;
+}
+
+export type EntrepriseProductCategory =
+  | "marchandise"
+  | "matiere_premiere"
+  | "matieres_consommables";
+
+export interface EntrepriseProduct {
+  id: number;
+  category: EntrepriseProductCategory;
+  nom: string;
+  numero_compte: string;
 }
 
 export interface ClientAccess {
@@ -184,6 +197,7 @@ export interface Facture {
   mode_paiement: string;
   fournisseur_client?: string;
   type_facture?: string;
+  lignes: AILigne[];
   created_at: string;
 }
 
@@ -193,6 +207,7 @@ export interface AILigne {
   libelle: string;
   debit: number;
   credit: number;
+  product_id?: number;
 }
 
 export interface AIExtraction {

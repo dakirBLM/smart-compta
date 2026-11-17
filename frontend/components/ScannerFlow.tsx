@@ -17,7 +17,7 @@ import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Label, Spinner } from "@/components/ui";
 import { api, scannerUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { AIExtraction } from "@/lib/types";
+import { AIExtraction, EntrepriseProduct } from "@/lib/types";
 import { formatDate, formatDZD, sumLignes } from "@/lib/utils";
 
 type Phase = "capture" | "loading" | "review" | "edit" | "success";
@@ -33,11 +33,13 @@ export function ScannerFlow({
   entrepriseId,
   annee,
   successPath,
+  produits,
 }: {
   entrepriseId: number;
   annee?: number;
   /** Route après succès (défaut : Mes factures). */
   successPath?: string;
+  produits: EntrepriseProduct[];
 }) {
   const { t } = useI18n();
   const router = useRouter();
@@ -288,6 +290,15 @@ export function ScannerFlow({
     hintStr.includes("relev");
 
   const lignes = Array.isArray(extraction.lignes) ? extraction.lignes : [];
+  const isPurchase =
+    !isBankStmt &&
+    !String(extraction.journal || "").toLowerCase().includes("vente") &&
+    !String(extraction.journal || "").toLowerCase().includes("banque") &&
+    !String(extraction.journal || "").toLowerCase().includes("relev");
+  const isProductLine = (line: AIExtraction["lignes"][number]) =>
+    /^(380|381|382)/.test(line.compte || "") ||
+    /^6/.test(line.compte || "") ||
+    /(marchand|mati[eè]re|produit|stock)/i.test(line.libelle || "");
   const level = confidenceLevel(extraction.confiance);
   const totals = sumLignes(lignes);
   const hasAmounts = isBankStmt
@@ -424,6 +435,7 @@ export function ScannerFlow({
           <thead className="bg-brand text-left text-white">
             <tr>
               <th className="p-2">{t("compte")}</th>
+              {phase === "edit" && isPurchase && <th className="p-2">Produit</th>}
               <th className="p-2">{t("libelle")}</th>
               <th className="p-2 text-right">{t("montantDebit")}</th>
               <th className="p-2 text-right">{t("montantCredit")}</th>
@@ -440,6 +452,34 @@ export function ScannerFlow({
                     l.compte
                   )}
                 </td>
+                {phase === "edit" && isPurchase && (
+                  <td className="p-2">
+                    {Number(l.debit || 0) > 0 &&
+                    Number(l.credit || 0) === 0 &&
+                    isProductLine(l) ? (
+                      <select
+                        value={l.product_id ?? ""}
+                        onChange={(e) => {
+                          const product = produits.find(
+                            (item) => item.id === Number(e.target.value)
+                          );
+                          updateLigne(i, {
+                            product_id: product?.id,
+                            compte: product?.numero_compte ?? l.compte,
+                          });
+                        }}
+                        className="w-full rounded-lg border border-gray-300 bg-white px-2 py-1 text-xs"
+                      >
+                        <option value="">Aucun produit</option>
+                        {produits.map((product) => (
+                          <option key={product.id} value={product.id}>
+                            {product.nom} ({product.numero_compte})
+                          </option>
+                        ))}
+                      </select>
+                    ) : null}
+                  </td>
+                )}
                 <td className="p-2">
                   {phase === "edit" ? (
                     <Input value={l.libelle} onChange={(e) => updateLigne(i, { libelle: e.target.value })} />
