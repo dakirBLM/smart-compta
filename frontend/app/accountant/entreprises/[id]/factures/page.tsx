@@ -19,7 +19,7 @@ import { ScannerFlow } from "@/components/ScannerFlow";
 import { Button, Card, Spinner } from "@/components/ui";
 import { api, resolveInvoiceFileUrl } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { EcritureDetail, Facture } from "@/lib/types";
+import { EcritureDetail, EntrepriseProduct, Facture } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
 import { cn, formatDate, formatDateTime, formatDZD } from "@/lib/utils";
 
@@ -326,13 +326,37 @@ export default function FacturesAccountantPage() {
     setValidatingId(factureId);
     setErrorMsg(null);
     try {
-      await api.post(`/api/factures/${factureId}/validate/`, {});
+      const facture = factures.find((item) => item.id === factureId);
+      await api.post(`/api/factures/${factureId}/validate/`, {
+        lignes: facture?.lignes ?? [],
+      });
       fetchFactures();
     } catch (err: any) {
       setErrorMsg(err?.response?.data?.error || err.message || "Erreur lors de la validation");
     } finally {
       setValidatingId(null);
     }
+  };
+
+  const assignProduct = (
+    factureId: number,
+    lineIndex: number,
+    productId: string,
+    produits: EntrepriseProduct[]
+  ) => {
+    const product = produits.find((item) => item.id === Number(productId));
+    setFactures((current) =>
+      current.map((facture) => {
+        if (facture.id !== factureId) return facture;
+        const lignes = [...(facture.lignes ?? [])];
+        lignes[lineIndex] = {
+          ...lignes[lineIndex],
+          product_id: product?.id,
+          compte: product?.numero_compte ?? lignes[lineIndex].compte,
+        };
+        return { ...facture, lignes };
+      })
+    );
   };
 
   const handleDelete = async (factureId: number) => {
@@ -398,7 +422,11 @@ export default function FacturesAccountantPage() {
       </div>
 
       {tab === "scanner" && id && (
-        <ScannerFlow entrepriseId={id} annee={annee} />
+        <ScannerFlow
+          entrepriseId={id}
+          annee={annee}
+          produits={entreprise?.produits ?? []}
+        />
       )}
 
       {tab === "clients" && (
@@ -473,6 +501,42 @@ export default function FacturesAccountantPage() {
                               <span className="font-medium">Mode:</span> {f.mode_paiement || "Non spécifié"}
                             </div>
                             <div className="text-xs text-gray-500">{formatDate(f.date_facture)}</div>
+                            {f.type_facture !== "vente" &&
+                              f.lignes?.map((line, lineIndex) => {
+                                const isProductLine =
+                                  /^(380|381|382)/.test(line.compte || "") ||
+                                  /^6/.test(line.compte || "") ||
+                                  /(marchand|mati[eè]re|produit|stock)/i.test(line.libelle || "");
+                                if (
+                                  !isProductLine ||
+                                  Number(line.debit || 0) <= 0 ||
+                                  Number(line.credit || 0) !== 0
+                                ) return null;
+                                return (
+                                  <label key={lineIndex} className="mt-2 block text-xs text-gray-600">
+                                    Produit pour « {line.libelle || "Ligne d'achat"} »
+                                    <select
+                                      value={line.product_id ?? ""}
+                                      onChange={(event) =>
+                                        assignProduct(
+                                          f.id,
+                                          lineIndex,
+                                          event.target.value,
+                                          entreprise?.produits ?? []
+                                        )
+                                      }
+                                      className="mt-1 w-full rounded-lg border border-gray-300 bg-white px-2 py-1.5"
+                                    >
+                                      <option value="">Aucun produit</option>
+                                      {(entreprise?.produits ?? []).map((product) => (
+                                        <option key={product.id} value={product.id}>
+                                          {product.nom} ({product.numero_compte})
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                );
+                              })}
                           </div>
                         </div>
                         <div className="border-t p-3 bg-white">

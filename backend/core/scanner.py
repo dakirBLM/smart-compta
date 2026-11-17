@@ -16,6 +16,7 @@ from django.db import transaction
 from django.core.exceptions import ValidationError
 
 from .account_helpers import (
+    apply_product_accounts,
     apply_tiers_account,
     auto_balance_lines,
     get_or_create_client_comptable,
@@ -834,6 +835,7 @@ def persist_extraction(entreprise, data, source="scanner"):
     if base_type == Journal.Type.ACHAT:
         # C'est un achat → on crée un fournisseur (401)
         try:
+            lignes_data = apply_product_accounts(entreprise, lignes_data)
             tiers = get_or_create_fournisseur(entreprise, tiers_nom)
             tiers_compte = tiers.numero_compte
             lignes_data = apply_tiers_account(lignes_data, tiers_compte, "401")
@@ -841,6 +843,8 @@ def persist_extraction(entreprise, data, source="scanner"):
         except ValidationError as e:
             raise WebhookError(str(e))
     elif base_type == Journal.Type.VENTE:
+        if any(line.get("product_id") not in (None, "") for line in lignes_data):
+            raise WebhookError("Les produits SCF ne peuvent être affectés qu'à une ligne d'achat.")
         # C'est une vente → on crée un client (411)
         try:
             tiers = get_or_create_client_comptable(entreprise, tiers_nom)
