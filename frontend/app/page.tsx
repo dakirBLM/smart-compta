@@ -4,13 +4,11 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import {
-  BarChart3,
   FileText,
   Landmark,
   LayoutDashboard,
   LineChart,
   ScanLine,
-  TrendingUp,
   Search,
   Settings,
   ShieldCheck,
@@ -38,9 +36,7 @@ const RAIL: { icon: LucideIcon; label: TranslationKey }[] = [
   { icon: FileText, label: "railInvoices" },
   { icon: Landmark, label: "railBank" },
   { icon: Wallet, label: "railCash" },
-  { icon: BarChart3, label: "railStatements" },
   { icon: LineChart, label: "railReports" },
-  { icon: TrendingUp, label: "railEvolution" },
   { icon: Settings, label: "railSettings" },
   { icon: Search, label: "railSearch" },
   { icon: ScanLine, label: "featOcr" },
