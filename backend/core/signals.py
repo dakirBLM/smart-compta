@@ -1,7 +1,9 @@
-from django.db.models.signals import post_save
+from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
-from .models import Fournisseur, ClientComptable, LigneEcriture, SCFAccount
+from .models import (
+    BankAccount, ClientComptable, Entreprise, Fournisseur, LigneEcriture, SCFAccount,
+)
 
 
 @receiver(post_save, sender=Fournisseur)
@@ -60,17 +62,8 @@ def add_ligne_compte_to_scf(sender, instance: LigneEcriture, created, **kwargs):
         return
 
     if instance.numero_compte.startswith("512"):
-        banque = {
-            "512001": ent.banque,
-            "512002": ent.banque2,
-        }.get(instance.numero_compte)
-        if not banque:
-            return
-        SCFAccount.objects.update_or_create(
-            entreprise=ent,
-            numero_compte=instance.numero_compte,
-            defaults={"libelle": f"BANQUE {banque}"},
-        )
+        # Bank accounts are created (and labelled) from BankAccount rows, never
+        # inferred from a ledger line.
         return
 
     inherited = get_inherited_label(instance.numero_compte) or instance.libelle
@@ -81,16 +74,33 @@ def add_ligne_compte_to_scf(sender, instance: LigneEcriture, created, **kwargs):
             defaults={"libelle": inherited},
         )
 
-from .models import Entreprise
+LEGACY_BANK_FIELDS = (
+    ("banque", "numero_compte", "rib"),
+    ("banque2", "numero_compte2", "rib2"),
+)
 
-@receiver(post_save, sender=Entreprise)
-def update_entreprise_bank_scf(sender, instance: Entreprise, created, **kwargs):
-    for numero_compte, banque in (("512001", instance.banque), ("512002", instance.banque2)):
-        if banque and SCFAccount.objects.filter(
-            entreprise__isnull=True, numero_compte="512"
-        ).exists():
-            SCFAccount.objects.update_or_create(
-                entreprise=instance,
-                numero_compte=numero_compte,
-                defaults={"libelle": f"BANQUE {banque}"},
-            )
+
+def sync_legacy_bank_fields(entreprise_id):
+    """Mirror the first two BankAccount rows into the legacy Entreprise columns.
+
+    BankAccount is the source of truth. The old banque/banque2 columns are kept
+    read-only so older readers still see consistent values.
+    """
+    banks = list(BankAccount.objects.filter(entreprise_id=entreprise_id).order_by("id")[:2])
+    values = {}
+    for index, (name_field, number_field, rib_field) in enumerate(LEGACY_BANK_FIELDS):
+        bank = banks[index] if index < len(banks) else None
+        values[name_field] = bank.bank_name if bank else ""
+        values[number_field] = bank.account_number if bank else ""
+        values[rib_field] = bank.rib if bank else ""
+    Entreprise.objects.filter(pk=entreprise_id).update(**values)
+
+
+@receiver(post_save, sender=BankAccount)
+def mirror_bank_account_saved(sender, instance: BankAccount, **kwargs):
+    sync_legacy_bank_fields(instance.entreprise_id)
+
+
+@receiver(post_delete, sender=BankAccount)
+def mirror_bank_account_deleted(sender, instance: BankAccount, **kwargs):
+    sync_legacy_bank_fields(instance.entreprise_id)

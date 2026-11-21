@@ -19,6 +19,7 @@ from openpyxl import load_workbook
 
 from .models import BankAccount, BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
 from .account_helpers import apply_scf_subaccounts
+from .bank_test_utils import make_bank
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction, upload_invoice_image
 from .bank_statements import BankStatementError
@@ -166,21 +167,97 @@ class CompanyBankAccountAPITests(APITestCase):
         self.list_url = "/api/entreprises/"
 
     def company_payload(self, name, **extra):
-        return {
+        payload = {
             "nom": name,
             "date_creation": "2026-01-01",
             "exercice_comptable": "2026",
-            **extra,
+            "bank_accounts": [{"bank_name": "First bank"}],
         }
+        payload.update(extra)
+        return payload
 
-    def test_company_api_returns_empty_bank_list_when_company_has_no_banks(self):
-        response = self.client.post(
-            self.list_url, self.company_payload("No bank company"), format="json"
+    def test_new_company_requires_at_least_one_bank(self):
+        for bank_accounts in ([], [{"bank_name": "   "}], [{"account_number": "123"}]):
+            response = self.client.post(
+                self.list_url,
+                self.company_payload("No bank company", bank_accounts=bank_accounts),
+                format="json",
+            )
+            self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, bank_accounts)
+            self.assertIn("bank_accounts", response.data)
+
+        omitted = self.company_payload("No bank company")
+        del omitted["bank_accounts"]
+        response = self.client.post(self.list_url, omitted, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertFalse(Entreprise.objects.filter(nom="No bank company").exists())
+        self.assertEqual(BankAccount.objects.count(), 0)
+
+    def test_bank_account_numbers_keep_the_company_digit_rules(self):
+        too_long = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Digits", bank_accounts=[{"bank_name": "BNA", "account_number": "12345678901"}]
+            ),
+            format="json",
+        )
+        letters = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Digits", bank_accounts=[{"bank_name": "BNA", "rib": "12AB"}]
+            ),
+            format="json",
+        )
+        self.assertEqual(too_long.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(letters.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_renaming_a_bank_updates_its_ledger_account_label(self):
+        created = self.client.post(
+            self.list_url, self.company_payload("Rename bank"), format="json"
+        )
+        bank = created.data["bank_accounts"][0]
+        self.assertEqual(bank["scf_account"]["libelle"], "BANQUE First bank")
+
+        renamed = self.client.put(
+            f"{self.list_url}{created.data['id']}/",
+            {"bank_accounts": [{"id": bank["id"], "bank_name": "Renamed bank"}]},
+            format="json",
+        )
+        self.assertEqual(renamed.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            SCFAccount.objects.get(pk=bank["scf_account"]["id"]).libelle,
+            "BANQUE Renamed bank",
+        )
+        # A later company save must not write the old label back.
+        self.client.put(
+            f"{self.list_url}{created.data['id']}/", {"nom": "Rename bank 2"}, format="json"
+        )
+        self.assertEqual(
+            SCFAccount.objects.get(pk=bank["scf_account"]["id"]).libelle,
+            "BANQUE Renamed bank",
         )
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertEqual(response.data["bank_accounts"], [])
-        self.assertEqual(BankAccount.objects.count(), 0)
+    def test_legacy_bank_columns_are_read_only_mirrors_of_the_first_two_banks(self):
+        created = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Mirror",
+                banque="IGNORED",
+                bank_accounts=[
+                    {"bank_name": "BNA", "account_number": "123", "rib": "111"},
+                    {"bank_name": "CPA", "account_number": "456", "rib": "222"},
+                    {"bank_name": "BEA"},
+                ],
+            ),
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        company = Entreprise.objects.get(pk=created.data["id"])
+        self.assertEqual(
+            (company.banque, company.numero_compte, company.rib,
+             company.banque2, company.numero_compte2, company.rib2),
+            ("BNA", "123", "111", "CPA", "456", "222"),
+        )
 
     def test_company_api_supports_one_three_and_more_bank_accounts(self):
         for count in (1, 3, 5):
@@ -222,7 +299,7 @@ class CompanyBankAccountAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(added.status_code, status.HTTP_200_OK)
-        bank = added.data["bank_accounts"][0]
+        bank = added.data["bank_accounts"][-1]
         self.assertEqual(bank["bank_name"], "BNA")
         bank_id = bank["id"]
 
@@ -232,8 +309,9 @@ class CompanyBankAccountAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(updated.status_code, status.HTTP_200_OK)
-        self.assertEqual(updated.data["bank_accounts"][0]["rib"], "123456")
-        self.assertEqual(updated.data["bank_accounts"][0]["bank_name"], "BNA")
+        updated_bank = next(b for b in updated.data["bank_accounts"] if b["id"] == bank_id)
+        self.assertEqual(updated_bank["rib"], "123456")
+        self.assertEqual(updated_bank["bank_name"], "BNA")
 
         company = Entreprise.objects.get(pk=company_id)
         bank_account = company.bank_accounts.get(pk=bank_id)
@@ -305,7 +383,7 @@ class CompanyBankAccountAPITests(APITestCase):
             format="json",
         )
         self.assertEqual(added.status_code, status.HTTP_200_OK)
-        bank_id = added.data["bank_accounts"][0]["id"]
+        bank_id = added.data["bank_accounts"][-1]["id"]
 
         omitted = self.client.put(detail_url, {"nom": "Updated company"}, format="json")
         self.assertEqual(omitted.status_code, status.HTTP_200_OK)
@@ -315,7 +393,7 @@ class CompanyBankAccountAPITests(APITestCase):
         self.assertEqual(empty_list.status_code, status.HTTP_200_OK)
         self.assertTrue(BankAccount.objects.filter(pk=bank_id).exists())
 
-    def test_company_api_preserves_legacy_first_and_second_bank_accounts(self):
+    def test_company_api_numbers_banks_in_order_even_when_legacy_fields_are_sent(self):
         response = self.client.post(
             self.list_url,
             self.company_payload(
@@ -928,8 +1006,9 @@ class BankStatementImportTests(APITestCase):
         )
         self.enterprise = Entreprise.objects.create(
             nom="ACME", nif="1", nis="2", date_creation=date(2026, 1, 1),
-            exercice_comptable="2026", banque="BNA", numero_compte="001 234-56", accountant=user,
+            exercice_comptable="2026", accountant=user,
         )
+        self.bank = make_bank(self.enterprise, "BNA", "00123456")
         ExerciceAnnee.objects.create(entreprise=self.enterprise, annee=2026, is_active=True)
         self.client.force_authenticate(user)
         self.url = f"/api/entreprises/{self.enterprise.id}/releves-bancaires/import/"
@@ -967,7 +1046,7 @@ class BankStatementImportTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(Ecriture.objects.count(), 0)
 
-    def test_import_without_legacy_identity_fields_uses_enterprise_profile(self):
+    def test_import_without_identity_fields_is_rejected_not_filled_from_the_profile(self):
         response = self.client.post(self.url, {
             "lignes": [{
                 "date": "04/02/2026",
@@ -978,10 +1057,10 @@ class BankStatementImportTests(APITestCase):
             }],
         }, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
-        statement = BankStatement.objects.get(entreprise=self.enterprise)
-        self.assertEqual(statement.nom_banque, self.enterprise.banque)
-        self.assertEqual(statement.nom_entreprise, self.enterprise.nom)
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("nom de la banque n'a pas pu être extrait", response.data["error"])
+        self.assertEqual(BankStatement.objects.count(), 0)
+        self.assertEqual(Ecriture.objects.count(), 0)
 
     def test_import_resolves_named_tiers_to_their_own_dedicated_account(self):
         response = self.client.post(self.url, {
@@ -1030,8 +1109,9 @@ class EcritureScfValidationTests(APITestCase):
         SCFAccount.objects.create(numero_compte="53", libelle="Caisse", classe=5)
         self.enterprise = Entreprise.objects.create(
             nom="SCF TEST", nif="11", nis="22", date_creation=date(2026, 1, 1),
-            exercice_comptable="2026", banque="BNA", accountant=user,
+            exercice_comptable="2026", accountant=user,
         )
+        make_bank(self.enterprise, "BNA")
         year = ExerciceAnnee.objects.create(
             entreprise=self.enterprise, annee=2026, is_active=True
         )
@@ -1139,8 +1219,7 @@ class EcritureScfValidationTests(APITestCase):
         )
 
     def test_second_bank_gets_its_own_named_subaccount(self):
-        self.enterprise.banque2 = "CPA"
-        self.enterprise.save(update_fields=["banque2"])
+        make_bank(self.enterprise, "CPA")
         SCFAccount.objects.create(numero_compte="512", libelle="Banques", classe=5)
 
         first = apply_scf_subaccounts(
@@ -1157,6 +1236,18 @@ class EcritureScfValidationTests(APITestCase):
                 entreprise=self.enterprise, numero_compte="512002"
             ).libelle,
             "BANQUE CPA",
+        )
+
+    def test_generic_512_line_with_several_banks_must_name_one(self):
+        make_bank(self.enterprise, "CPA")
+
+        with self.assertRaises(ValidationError):
+            apply_scf_subaccounts(self.enterprise, [{"compte": "512", "libelle": "Paiement"}])
+        self.assertEqual(
+            SCFAccount.objects.filter(
+                entreprise=self.enterprise, numero_compte__startswith="512"
+            ).count(),
+            2,
         )
 
     @patch("core.views.call_webhook")

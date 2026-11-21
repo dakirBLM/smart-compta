@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.core.management.base import BaseCommand
 
 from core.models import (
+    BankAccount,
     ClientAccess,
     Ecriture,
     Entreprise,
@@ -16,6 +17,7 @@ from core.models import (
     Facture,
     Journal,
     LigneEcriture,
+    SCFAccount,
 )
 
 User = get_user_model()
@@ -40,9 +42,21 @@ class Command(BaseCommand):
             defaults=dict(
                 nom="SARL ABC", nis="000987654321098", date_creation=date(2020, 1, 1),
                 adresse="12 Rue Didouche Mourad", ville="Alger", code_postal="16000",
-                exercice_comptable="2024", banque="BNA", numero_compte="00100123456789",
-                rib="00100123456789012345", regime_fiscale="Réel", activite="Commerce",
+                exercice_comptable="2024",
+                regime_fiscale="Réel", activite="Commerce",
                 telephone="021000000", email="contact@sarlabc.dz", accountant=accountant,
+            ),
+        )
+        # The demo company's bank, with its own 512 ledger account.
+        bank_scf, _ = SCFAccount.objects.get_or_create(
+            entreprise=ent, numero_compte="512001",
+            defaults={"libelle": "BANQUE BNA", "classe": 5},
+        )
+        BankAccount.objects.get_or_create(
+            scf_account=bank_scf,
+            defaults=dict(
+                entreprise=ent, bank_name="BNA",
+                account_number="0010012345", rib="00100123456789012345",
             ),
         )
 

@@ -70,6 +70,14 @@ class BankStatement(models.Model):
     )
     nom_banque = models.CharField(max_length=255)
     nom_entreprise = models.CharField(max_length=255)
+    # The company bank this statement was matched to (and posted against).
+    bank_account = models.ForeignKey(
+        "BankAccount",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="statements",
+    )
     date = models.DateField()
     statut = models.CharField(
         max_length=20, choices=Statut.choices, default=Statut.EN_ATTENTE
@@ -330,6 +338,12 @@ class BankAccount(models.Model):
                 {"scf_account": "The SCF account must belong to the same company."}
             )
         super().save(*args, **kwargs)
+        # Renaming a bank must rename its ledger account too.
+        label = f"BANQUE {self.bank_name}".strip()
+        scf_account = self.scf_account
+        if scf_account.libelle != label:
+            scf_account.libelle = label
+            scf_account.save(update_fields=["libelle"])
 
     def __str__(self) -> str:
         return f"{self.bank_name or 'Bank'} ({self.scf_account.numero_compte})"

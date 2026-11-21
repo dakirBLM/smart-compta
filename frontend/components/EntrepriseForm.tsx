@@ -130,7 +130,11 @@ export function EntrepriseForm({
       const bank = bankAccounts[index];
       if (bank.rib && bank.rib.length > 22)
         return `RIB de la banque ${index + 1} : 22 chiffres maximum.`;
+      if (bank.id === undefined && !bank.bank_name.trim() && (bank.account_number || bank.rib))
+        return `Banque ${index + 1} : le nom de la banque est obligatoire.`;
     }
+    if (mode === "create" && !bankAccounts.some((bank) => bank.bank_name.trim()))
+      return "Au moins une banque est obligatoire.";
     return "";
   }
 
