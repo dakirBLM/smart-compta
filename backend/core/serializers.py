@@ -1,3 +1,5 @@
+import re
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
@@ -26,6 +28,20 @@ User = get_user_model()
 
 # Fields that can never be modified once the entreprise is created.
 LOCKED_ENTREPRISE_FIELDS = ("nif", "nis", "exercice_comptable")
+LEGACY_BANK_SLOTS = {
+    "512001": ("banque", "numero_compte", "rib"),
+    "512002": ("banque2", "numero_compte2", "rib2"),
+}
+LEGACY_BANK_IDENTIFIER_LIMITS = {
+    "numero_compte": (10, "numéro de compte"),
+    "numero_compte2": (10, "numéro de compte"),
+    "rib": (22, "RIB"),
+    "rib2": (22, "RIB"),
+}
+
+
+def _normalize_bank_identifier(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
 class BankSCFAccountSerializer(serializers.ModelSerializer):
@@ -253,6 +269,179 @@ class EntrepriseSerializer(serializers.ModelSerializer):
             scf_account=scf_account,
         )
 
+    def _raise_bank_identifier_mismatch(self, legacy_field, scf_number):
+        label = LEGACY_BANK_IDENTIFIER_LIMITS[legacy_field][1]
+        raise serializers.ValidationError({
+            "bank_accounts": (
+                f"Le {label} historique ne correspond pas au compte bancaire "
+                f"lié au compte SCF {scf_number}."
+            )
+        })
+
+    def _validate_legacy_bank_value(self, legacy_field, value, scf_number):
+        limits = LEGACY_BANK_IDENTIFIER_LIMITS.get(legacy_field)
+        if not limits:
+            return
+        max_length, label = limits
+        value = str(value or "")
+        if value and (not value.isdigit() or len(value) > max_length):
+            raise serializers.ValidationError({
+                "bank_accounts": (
+                    f"Le {label} associé au compte SCF {scf_number} ne peut pas "
+                    f"être synchronisé dans le champ historique "
+                    f"(maximum {max_length} chiffres)."
+                )
+            })
+
+    def _prepare_bank_account_updates(
+        self, entreprise, validated_data, bank_accounts
+    ):
+        has_bank_accounts = bank_accounts is not None
+        bank_updates = (
+            [dict(bank_data) for bank_data in bank_accounts]
+            if has_bank_accounts
+            else []
+        )
+        updates_by_id = {
+            bank_data["id"]: bank_data
+            for bank_data in bank_updates
+            if bank_data.get("id") is not None
+        }
+        linked_banks = {
+            bank_account.scf_account.numero_compte: bank_account
+            for bank_account in entreprise.bank_accounts.select_for_update()
+            .select_related("scf_account")
+            .filter(scf_account__numero_compte__in=LEGACY_BANK_SLOTS)
+        }
+
+        for scf_number, legacy_fields in LEGACY_BANK_SLOTS.items():
+            bank_account = linked_banks.get(scf_number)
+            if not bank_account:
+                continue
+
+            bank_data = updates_by_id.get(bank_account.pk)
+            field_updates = {}
+            for relation_field, legacy_field in zip(
+                ("bank_name", "account_number", "rib"), legacy_fields
+            ):
+                original_relation_value = str(
+                    getattr(bank_account, relation_field) or ""
+                )
+                original_legacy_value = str(
+                    getattr(entreprise, legacy_field) or ""
+                )
+                relation_supplied = (
+                    bank_data is not None and relation_field in bank_data
+                )
+                relation_value = (
+                    bank_data.get(relation_field)
+                    if relation_supplied
+                    else original_relation_value
+                )
+                if relation_field == "bank_name":
+                    relation_value = str(relation_value or "").strip()
+                else:
+                    relation_value = str(relation_value or "")
+                legacy_supplied = legacy_field in validated_data
+                legacy_value = (
+                    str(validated_data[legacy_field] or "")
+                    if legacy_supplied
+                    else original_legacy_value
+                )
+
+                relation_changed = (
+                    relation_supplied
+                    and relation_value != original_relation_value
+                )
+                legacy_changed = (
+                    legacy_supplied
+                    and legacy_value != original_legacy_value
+                )
+                if not relation_changed and not legacy_changed:
+                    continue
+                if (
+                    relation_changed
+                    and legacy_changed
+                    and relation_value != legacy_value
+                ):
+                    raise serializers.ValidationError({
+                        "bank_accounts": (
+                            f"Les valeurs de « {legacy_field} » et "
+                            f"« {relation_field} » sont contradictoires pour "
+                            f"le compte SCF {scf_number}."
+                        )
+                    })
+
+                synchronized_value = (
+                    relation_value if relation_changed else legacy_value
+                )
+                if relation_field in {"account_number", "rib"}:
+                    original_relation_id = _normalize_bank_identifier(
+                        original_relation_value
+                    )
+                    original_legacy_id = _normalize_bank_identifier(
+                        original_legacy_value
+                    )
+                    if (
+                        original_relation_id
+                        and original_legacy_id
+                        and original_relation_id != original_legacy_id
+                    ):
+                        both_updated_same = (
+                            relation_changed
+                            and legacy_changed
+                            and relation_value == legacy_value
+                        )
+                        if (
+                            synchronized_value
+                            not in {original_relation_value, original_legacy_value}
+                            and not both_updated_same
+                        ):
+                            self._raise_bank_identifier_mismatch(
+                                legacy_field, scf_number
+                            )
+                    self._validate_legacy_bank_value(
+                        legacy_field, synchronized_value, scf_number
+                    )
+                field_updates[relation_field] = synchronized_value
+
+            bank_name_changed = "bank_name" in field_updates
+            if bank_name_changed:
+                for relation_field, legacy_field in zip(
+                    ("account_number", "rib"), legacy_fields[1:]
+                ):
+                    relation_value = field_updates.get(
+                        relation_field, getattr(bank_account, relation_field) or ""
+                    )
+                    legacy_value = field_updates.get(
+                        relation_field,
+                        getattr(entreprise, legacy_field) or "",
+                    )
+                    if (
+                        _normalize_bank_identifier(relation_value)
+                        and _normalize_bank_identifier(legacy_value)
+                        and _normalize_bank_identifier(relation_value)
+                        != _normalize_bank_identifier(legacy_value)
+                    ):
+                        self._raise_bank_identifier_mismatch(
+                            legacy_field, scf_number
+                        )
+
+            if not field_updates:
+                continue
+            if bank_data is None:
+                bank_data = {"id": bank_account.pk}
+                bank_updates.append(bank_data)
+                updates_by_id[bank_account.pk] = bank_data
+            for relation_field, value in field_updates.items():
+                bank_data[relation_field] = value
+                legacy_field = legacy_fields[
+                    ("bank_name", "account_number", "rib").index(relation_field)
+                ]
+                validated_data[legacy_field] = value
+
+        return bank_updates if has_bank_accounts or bank_updates else None
+
     def _save_bank_accounts(self, entreprise, bank_accounts):
         for bank_data in bank_accounts:
             data = dict(bank_data)
@@ -261,12 +450,25 @@ class EntrepriseSerializer(serializers.ModelSerializer):
                 self._create_bank_account(entreprise, data)
                 continue
 
-            bank_account = entreprise.bank_accounts.get(pk=bank_id)
+            bank_account = entreprise.bank_accounts.select_related(
+                "scf_account"
+            ).get(pk=bank_id)
+            previous_bank_name = bank_account.bank_name
             for field in ("bank_name", "account_number", "rib"):
                 if field in data:
                     value = data[field]
                     setattr(bank_account, field, value.strip() if field == "bank_name" else value)
+            legacy_slot = LEGACY_BANK_SLOTS.get(
+                bank_account.scf_account.numero_compte
+            )
             bank_account.save()
+            if bank_account.bank_name != previous_bank_name:
+                bank_account.scf_account.libelle = f"BANQUE {bank_account.bank_name}"
+                bank_account.scf_account.save(update_fields=["libelle"])
+                if legacy_slot:
+                    legacy_name_field = legacy_slot[0]
+                    setattr(entreprise, legacy_name_field, bank_account.bank_name)
+                    entreprise.save(update_fields=[legacy_name_field])
 
     @transaction.atomic
     def create(self, validated_data):
@@ -283,9 +485,16 @@ class EntrepriseSerializer(serializers.ModelSerializer):
         for field in LOCKED_ENTREPRISE_FIELDS:
             validated_data.pop(field, None)
         bank_accounts = validated_data.pop("bank_accounts", None)
+        legacy_bank_fields = {
+            field for slot in LEGACY_BANK_SLOTS.values() for field in slot
+        }
+        if bank_accounts is not None or legacy_bank_fields.intersection(validated_data):
+            instance = Entreprise.objects.select_for_update().get(pk=instance.pk)
+            bank_accounts = self._prepare_bank_account_updates(
+                instance, validated_data, bank_accounts
+            )
         entreprise = super().update(instance, validated_data)
         if bank_accounts is not None:
-            Entreprise.objects.select_for_update().get(pk=entreprise.pk)
             self._save_bank_accounts(entreprise, bank_accounts)
         return entreprise
 

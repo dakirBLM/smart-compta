@@ -303,7 +303,7 @@ def _extract_json(text):
     return None
 
 
-def blocking_errors(data, entreprise=None):
+def blocking_errors(data, entreprise=None, check_bank_identity=True):
     """Hard accounting/structure problems that must prevent saving — does NOT
     include the AI's `erreurs` notes (those are often just explanations, e.g.
     'timbre fiscal ajouté', and must not block a balanced entry)."""
@@ -333,18 +333,23 @@ def blocking_errors(data, entreprise=None):
         valid_ops = any(float(l.get("debit", 0) or 0) > 0 or float(l.get("credit", 0) or 0) > 0 for l in normalized_lignes)
         if not valid_ops:
             errors.append("Le relevé bancaire ne contient aucune opération avec un montant valide.")
-        try:
-            check_bank_account_match(entreprise, data)
-        except WebhookError as exc:
-            errors.append(str(exc))
+        if check_bank_identity:
+            try:
+                check_bank_account_match(entreprise, data)
+            except WebhookError as exc:
+                errors.append(str(exc))
     return errors
 
 
-def validate_extraction(data, entreprise=None):
+def validate_extraction(data, entreprise=None, check_bank_identity=True):
     """Errors for DISPLAY in the review screen: the AI's own notes/errors plus
     the structural checks. Shown to the user but not all blocking."""
     data = sanitize_bank_statement_data(data, entreprise=entreprise)
-    return list(data.get("erreurs") or []) + blocking_errors(data, entreprise=entreprise)
+    return list(data.get("erreurs") or []) + blocking_errors(
+        data,
+        entreprise=entreprise,
+        check_bank_identity=check_bank_identity,
+    )
 
 
 def _parse_date(value):
@@ -455,15 +460,13 @@ CAISSE_COMPTE = "530000"
 
 
 def check_bank_account_match(entreprise, data):
-    """Return the company's BankAccount this statement belongs to, or reject it.
+    """Return the validated bank identity and its company-specific SCF account.
 
-    Same rules as the bank statement page: the AI must name the bank, the name
-    must be one of the company's banks, and the account number must fit. A
-    statement scanned as an invoice has no such identity, so it is sent to the
-    bank statement page instead of guessing a bank.
+    A statement scanned as an invoice has no bank identity, so it is sent to
+    the bank statement page instead of guessing a bank.
     """
     try:
-        return validate_statement(entreprise, data)[2]
+        return validate_statement(entreprise, data)
     except BankStatementError as exc:
         raise WebhookError(
             f"{exc} Utilisez la page « Relevés bancaires » pour importer un relevé."
@@ -643,8 +646,8 @@ def sanitize_bank_statement_data(data, entreprise=None):
 def persist_bank_statement(entreprise, data, source="scanner"):
     """Comptabilise un relevé bancaire ligne par ligne dans le journal Banque (512)."""
     data = sanitize_bank_statement_data(data, entreprise=entreprise)
-    bank_account = check_bank_account_match(entreprise, data)
-    bank_number = bank_account.scf_account.numero_compte
+    statement = check_bank_account_match(entreprise, data)
+    bank_number = statement.scf_account.numero_compte
 
     lignes = _sort_bank_lines(data.get("lignes") or [])
     if not lignes:
