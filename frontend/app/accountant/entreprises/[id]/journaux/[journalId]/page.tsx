@@ -234,7 +234,9 @@ export default function JournalPage() {
         // If the route used a symbolic type (e.g. /journaux/caisse), navigate
         // to the concrete journal id so the UI consistently displays the
         // populated journal and subsequent operations target the correct id.
-        if (!isNumeric || j.id !== Number(type)) {
+        // Skip it when the "Nouveau journal" modal was requested: the redirect
+        // remounts the page, which closes the modal and drops what was typed.
+        if ((!isNumeric || j.id !== Number(type)) && searchParams.get("newjournal") !== "1") {
           const journalYear = entreprise.exercices.find((x) => x.id === j?.annee)?.annee;
           const journalYearQuery = journalYear ? `?annee=${journalYear}` : qsAnnee;
           try {
@@ -246,7 +248,7 @@ export default function JournalPage() {
       }
       // If multiple same-type journals exist across years, offer a chooser
       // so the accountant can pick the populated one manually.
-      if (!isNumeric) {
+      if (!isNumeric && searchParams.get("newjournal") !== "1") {
         const allAny = await api.get<Journal[]>(`/api/entreprises/${id}/journaux/`);
         const matchingAny = allAny.filter((x) => x.type_journal === type);
         if (matchingAny.length > 1) {
@@ -333,9 +335,12 @@ export default function JournalPage() {
   const title = isNumeric
     ? journal?.type_label ?? "Journal"
     : TYPE_LABELS[type] ?? type;
-  const gradient = TYPE_COLORS[type] || "from-brand to-brand/80";
-  const description = TYPE_DESCRIPTIONS[type];
-  const icon = TYPE_ICONS[type];
+  // The URL segment is a type name ("achat") only until the page redirects to
+  // the concrete journal id; from then on the journal itself tells its type.
+  const kind = isNumeric ? journal?.type_journal ?? "" : type;
+  const gradient = TYPE_COLORS[kind] || "from-brand to-brand/80";
+  const description = TYPE_DESCRIPTIONS[kind];
+  const icon = TYPE_ICONS[kind];
 
   return (
     <AppShell
@@ -436,7 +441,7 @@ export default function JournalPage() {
           )}
 
           {/* OD info panel */}
-          {type === "od" && ecritures.length === 0 && tab === "voir" && (
+          {kind === "od" && ecritures.length === 0 && tab === "voir" && (
             <div className="mb-4 flex items-start gap-3 rounded-xl bg-purple-50 border border-purple-200 p-4 text-sm text-purple-800">
               <Info size={18} className="mt-0.5 shrink-0 text-purple-500" />
               <div>
@@ -450,7 +455,7 @@ export default function JournalPage() {
             </div>
           )}
 
-          {type === "caisse" && ecritures.length === 0 && tab === "voir" && (
+          {kind === "caisse" && ecritures.length === 0 && tab === "voir" && (
             <div className="mb-4 flex items-start gap-3 rounded-xl bg-amber-50 border border-amber-200 p-4 text-sm text-amber-800">
               <Info size={18} className="mt-0.5 shrink-0 text-amber-500" />
               <div>
@@ -463,7 +468,7 @@ export default function JournalPage() {
             </div>
           )}
 
-          {type === "banque" && ecritures.length === 0 && tab === "voir" && (
+          {kind === "banque" && ecritures.length === 0 && tab === "voir" && (
             <div className="mb-4 flex items-start gap-3 rounded-xl bg-blue-50 border border-blue-200 p-4 text-sm text-blue-800">
               <Info size={18} className="mt-0.5 shrink-0 text-blue-500" />
               <div>
