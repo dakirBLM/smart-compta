@@ -34,8 +34,9 @@ git push -u origin main
    - `DATABASE_URL` = your **Neon** connection string (from step 1a)
    - `WEBHOOK_URL` = your **public** webhook URL
    (you can fill `CORS_ALLOWED_ORIGINS` after the frontend is up.)
-4. Click **Apply**. The build runs `collectstatic`, `migrate`, and `seed`
-   automatically against Neon (so the demo accounts exist in your Neon DB).
+4. Click **Apply**. The build runs `collectstatic`, `migrate`, `seed`, and
+   `import_scf` automatically against Neon. `import_scf` loads the canonical
+   global SCF chart from `backend/data/LA_TABLE_SCF.csv`, including account 512.
 5. When live, note the URL, e.g. `https://smartcompta-api.onrender.com`.
 6. Back in **smartcompta-api → Environment**, set:
    - `CORS_ALLOWED_ORIGINS` = your Vercel URL (fill after step 3, e.g.
@@ -96,5 +97,9 @@ Push to `main` → both Render and Vercel auto-redeploy.
   app shows the error — by design).
 - `seed` runs on every Render build, so demo accounts always exist. It is
   idempotent (uses `get_or_create`), so it won't duplicate data.
+- Run `python manage.py import_scf` after migrations in every environment that
+  initializes a database. It imports the global SCF accounts from
+  `backend/data/LA_TABLE_SCF.csv` and fails if the CSV is missing or does not
+  contain the required global account 512.
 - To stop the public demo accounts being created in prod, remove `&& python
   manage.py seed` from `buildCommand` in `render.yaml`.

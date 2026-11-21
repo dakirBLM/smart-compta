@@ -1,10 +1,12 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.db import transaction
 from django.db.models import Q
 from django.urls import reverse
 from rest_framework import serializers
 
 from .models import (
+    BankAccount,
     ClientAccess,
     ClientComptable,
     BankStatementSubmission,
@@ -26,6 +28,55 @@ User = get_user_model()
 LOCKED_ENTREPRISE_FIELDS = ("nif", "nis", "exercice_comptable")
 
 
+class BankSCFAccountSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SCFAccount
+        fields = ["id", "numero_compte", "libelle"]
+
+
+class BankAccountSerializer(serializers.ModelSerializer):
+    id = serializers.IntegerField(required=False)
+    scf_account = BankSCFAccountSerializer(read_only=True)
+    delete = serializers.BooleanField(write_only=True, required=False, default=False)
+
+    class Meta:
+        model = BankAccount
+        fields = [
+            "id", "bank_name", "account_number", "rib", "scf_account", "delete",
+        ]
+        extra_kwargs = {
+            "bank_name": {"required": False},
+            "account_number": {"required": False},
+            "rib": {"required": False},
+        }
+
+    def validate_account_number(self, value):
+        if value and (not str(value).isdigit() or len(str(value)) > 10):
+            raise serializers.ValidationError(
+                "Le numéro de compte doit contenir uniquement des chiffres (max 10)."
+            )
+        return value
+
+    def validate_rib(self, value):
+        if value and (not str(value).isdigit() or len(str(value)) > 22):
+            raise serializers.ValidationError(
+                "Le RIB doit contenir uniquement des chiffres (max 22)."
+            )
+        return value
+
+    def validate(self, attrs):
+        if attrs.get("delete", False):
+            raise serializers.ValidationError(
+                "La suppression des comptes bancaires n'est pas autorisée."
+            )
+        bank_id = attrs.get("id")
+        if not bank_id and not attrs.get("bank_name", "").strip():
+            raise serializers.ValidationError(
+                {"bank_name": "Le nom de la banque est obligatoire."}
+            )
+        return attrs
+
+
 class ExerciceAnneeSerializer(serializers.ModelSerializer):
     class Meta:
         model = ExerciceAnnee
@@ -36,6 +87,7 @@ class ExerciceAnneeSerializer(serializers.ModelSerializer):
 class EntrepriseSerializer(serializers.ModelSerializer):
     exercices = ExerciceAnneeSerializer(many=True, read_only=True)
     clients_count = serializers.SerializerMethodField()
+    bank_accounts = BankAccountSerializer(many=True, required=False)
 
     class Meta:
         model = Entreprise
@@ -44,11 +96,18 @@ class EntrepriseSerializer(serializers.ModelSerializer):
             "code_postal", "exercice_comptable",
             "banque", "numero_compte", "rib",
             "banque2", "numero_compte2", "rib2",
+            "bank_accounts",
             "regime_fiscale", "activite", "activite2", "matiere_premiere",
             "marchandise", "matieres_consommables", "telephone", "email",
             "accountant", "created_at", "exercices", "clients_count",
         ]
-        read_only_fields = ["accountant", "created_at"]
+        # banque/banque2 and their numbers mirror the first two bank_accounts;
+        # banks are edited only through bank_accounts.
+        read_only_fields = [
+            "accountant", "created_at",
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ]
 
     def get_clients_count(self, obj):
         return obj.client_accesses.count()
@@ -69,18 +128,6 @@ class EntrepriseSerializer(serializers.ModelSerializer):
 
     def validate_nin(self, v):
         return self._digit_limit(v, 18, "Le NIN")
-
-    def validate_numero_compte(self, v):
-        return self._digit_limit(v, 10, "Le numéro de compte")
-
-    def validate_numero_compte2(self, v):
-        return self._digit_limit(v, 10, "Le numéro de compte")
-
-    def validate_rib(self, v):
-        return self._digit_limit(v, 22, "Le RIB")
-
-    def validate_rib2(self, v):
-        return self._digit_limit(v, 22, "Le RIB")
 
     def validate_exercice_comptable(self, v):
         if not v or not str(v).strip():
@@ -132,13 +179,115 @@ class EntrepriseSerializer(serializers.ModelSerializer):
                 errors["matieres_consommables"] = "Obligatoire pour une activité industrielle."
         if errors:
             raise serializers.ValidationError(errors)
+
+        bank_accounts = attrs.get("bank_accounts")
+        if bank_accounts is not None:
+            seen_ids = set()
+            for index, bank_data in enumerate(bank_accounts):
+                bank_id = bank_data.get("id")
+                if bank_id is None:
+                    if self.instance and bank_data.get("delete"):
+                        raise serializers.ValidationError({
+                            "bank_accounts": {
+                                index: "Un identifiant de compte bancaire est obligatoire."
+                            }
+                        })
+                    continue
+                if bank_id in seen_ids:
+                    raise serializers.ValidationError({
+                        "bank_accounts": {index: "Identifiant de compte bancaire dupliqué."}
+                    })
+                seen_ids.add(bank_id)
+                if not self.instance or not self.instance.bank_accounts.filter(pk=bank_id).exists():
+                    raise serializers.ValidationError({
+                        "bank_accounts": {
+                            index: "Ce compte bancaire n'appartient pas à cette entreprise."
+                        }
+                    })
+
+        if not self.instance:
+            named_banks = [
+                bank for bank in (bank_accounts or [])
+                if str(bank.get("bank_name", "")).strip()
+            ]
+            if not named_banks:
+                raise serializers.ValidationError({
+                    "bank_accounts": "Au moins une banque est obligatoire pour créer une entreprise."
+                })
         return attrs
 
+    def _create_bank_account(self, entreprise, bank_data):
+        bank_name = bank_data["bank_name"].strip()
+        account_number = bank_data.get("account_number", "")
+        rib = bank_data.get("rib", "")
+
+        if not SCFAccount.objects.filter(
+            entreprise__isnull=True, numero_compte="512"
+        ).exists():
+            raise serializers.ValidationError({
+                "bank_accounts": (
+                    "Le compte principal SCF 512 est absent du plan comptable."
+                )
+            })
+
+        existing_numbers = SCFAccount.objects.filter(
+            entreprise=entreprise, numero_compte__startswith="512"
+        ).values_list("numero_compte", flat=True)
+        suffixes = [
+            int(number[3:])
+            for number in existing_numbers
+            if number[3:].isdigit() and int(number[3:]) > 0
+        ]
+        next_suffix = max(suffixes, default=0) + 1
+        scf_account = SCFAccount.objects.create(
+            entreprise=entreprise,
+            numero_compte=f"512{next_suffix:03d}",
+            libelle=f"BANQUE {bank_name}",
+            classe=5,
+        )
+        return BankAccount.objects.create(
+            entreprise=entreprise,
+            bank_name=bank_name,
+            account_number=account_number,
+            rib=rib,
+            scf_account=scf_account,
+        )
+
+    def _save_bank_accounts(self, entreprise, bank_accounts):
+        for bank_data in bank_accounts:
+            data = dict(bank_data)
+            bank_id = data.pop("id", None)
+            if bank_id is None:
+                self._create_bank_account(entreprise, data)
+                continue
+
+            bank_account = entreprise.bank_accounts.get(pk=bank_id)
+            for field in ("bank_name", "account_number", "rib"):
+                if field in data:
+                    value = data[field]
+                    setattr(bank_account, field, value.strip() if field == "bank_name" else value)
+            bank_account.save()
+
+    @transaction.atomic
+    def create(self, validated_data):
+        bank_accounts = validated_data.pop("bank_accounts", [])
+        entreprise = super().create(validated_data)
+        if bank_accounts:
+            Entreprise.objects.select_for_update().get(pk=entreprise.pk)
+            self._save_bank_accounts(entreprise, bank_accounts)
+        return entreprise
+
+    @transaction.atomic
     def update(self, instance, validated_data):
         # Enforce locked fields: silently ignore any attempt to change them.
         for field in LOCKED_ENTREPRISE_FIELDS:
             validated_data.pop(field, None)
-        return super().update(instance, validated_data)
+        bank_accounts = validated_data.pop("bank_accounts", None)
+        entreprise = super().update(instance, validated_data)
+        if bank_accounts is not None:
+            Entreprise.objects.select_for_update().get(pk=entreprise.pk)
+            self._save_bank_accounts(entreprise, bank_accounts)
+        return entreprise
 
 
 class ClientAccessSerializer(serializers.ModelSerializer):

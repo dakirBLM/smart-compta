@@ -19,6 +19,20 @@ export interface ExerciceAnnee {
   is_active: boolean;
 }
 
+export interface BankSCFAccount {
+  id: number;
+  numero_compte: string;
+  libelle: string;
+}
+
+export interface BankAccount {
+  id: number;
+  bank_name: string;
+  account_number: string;
+  rib: string;
+  scf_account: BankSCFAccount;
+}
+
 export interface Entreprise {
   id: number;
   nom: string;
@@ -36,6 +50,7 @@ export interface Entreprise {
   banque2: string;
   numero_compte2: string;
   rib2: string;
+  bank_accounts?: BankAccount[];
   regime_fiscale: string;
   activite: string;
   activite2: string;
@@ -227,13 +242,26 @@ export interface BankStatementLigne {
 }
 
 export interface BankStatementExtraction {
+  /** The AI's verdict: "ok", or "rejete" with a "motif" (the import is refused). */
+  statut?: string;
+  motif?: string;
   nom_banque: string;
   nom_entreprise: string;
+  /** Account number read on the statement, without the key after the dash. */
+  numero_compte?: string;
+  cle_rib?: string;
   date?: string;
   confiance?: number;
   erreurs?: string[];
   lignes: BankStatementLigne[];
   image_url?: string;
+}
+
+/** The company bank a statement was matched to (and will be posted against). */
+export interface BankStatementMatchedBank {
+  id: number;
+  bank_name: string;
+  numero_compte: string;
 }
 
 export interface BankStatementImportResult {

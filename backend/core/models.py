@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import get_valid_filename
 from uuid import uuid4
@@ -69,6 +70,14 @@ class BankStatement(models.Model):
     )
     nom_banque = models.CharField(max_length=255)
     nom_entreprise = models.CharField(max_length=255)
+    # The company bank this statement was matched to (and posted against).
+    bank_account = models.ForeignKey(
+        "BankAccount",
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="statements",
+    )
     date = models.DateField()
     statut = models.CharField(
         max_length=20, choices=Statut.choices, default=Statut.EN_ATTENTE
@@ -305,6 +314,39 @@ class SCFAccount(models.Model):
     def __str__(self) -> str:
         ent = f" ({self.entreprise.nom})" if self.entreprise else ""
         return f"{self.numero_compte} - {self.libelle}{ent}"
+
+
+class BankAccount(models.Model):
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="bank_accounts"
+    )
+    bank_name = models.CharField(max_length=120, blank=True, default="")
+    account_number = models.CharField(max_length=60, blank=True, default="")
+    rib = models.CharField(max_length=60, blank=True, default="")
+    scf_account = models.OneToOneField(
+        SCFAccount, on_delete=models.PROTECT, related_name="bank_account"
+    )
+
+    class Meta:
+        ordering = ["id"]
+
+    def save(self, *args, **kwargs):
+        if self.scf_account_id and not SCFAccount.objects.filter(
+            pk=self.scf_account_id, entreprise_id=self.entreprise_id
+        ).exists():
+            raise ValidationError(
+                {"scf_account": "The SCF account must belong to the same company."}
+            )
+        super().save(*args, **kwargs)
+        # Renaming a bank must rename its ledger account too.
+        label = f"BANQUE {self.bank_name}".strip()
+        scf_account = self.scf_account
+        if scf_account.libelle != label:
+            scf_account.libelle = label
+            scf_account.save(update_fields=["libelle"])
+
+    def __str__(self) -> str:
+        return f"{self.bank_name or 'Bank'} ({self.scf_account.numero_compte})"
 
 
 class Message(models.Model):
