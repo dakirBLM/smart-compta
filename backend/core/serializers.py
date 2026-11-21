@@ -50,6 +50,20 @@ class BankAccountSerializer(serializers.ModelSerializer):
             "rib": {"required": False},
         }
 
+    def validate_account_number(self, value):
+        if value and (not str(value).isdigit() or len(str(value)) > 10):
+            raise serializers.ValidationError(
+                "Le numéro de compte doit contenir uniquement des chiffres (max 10)."
+            )
+        return value
+
+    def validate_rib(self, value):
+        if value and (not str(value).isdigit() or len(str(value)) > 22):
+            raise serializers.ValidationError(
+                "Le RIB doit contenir uniquement des chiffres (max 22)."
+            )
+        return value
+
     def validate(self, attrs):
         if attrs.get("delete", False):
             raise serializers.ValidationError(
@@ -87,7 +101,13 @@ class EntrepriseSerializer(serializers.ModelSerializer):
             "marchandise", "matieres_consommables", "telephone", "email",
             "accountant", "created_at", "exercices", "clients_count",
         ]
-        read_only_fields = ["accountant", "created_at"]
+        # banque/banque2 and their numbers mirror the first two bank_accounts;
+        # banks are edited only through bank_accounts.
+        read_only_fields = [
+            "accountant", "created_at",
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ]
 
     def get_clients_count(self, obj):
         return obj.client_accesses.count()
@@ -108,18 +128,6 @@ class EntrepriseSerializer(serializers.ModelSerializer):
 
     def validate_nin(self, v):
         return self._digit_limit(v, 18, "Le NIN")
-
-    def validate_numero_compte(self, v):
-        return self._digit_limit(v, 10, "Le numéro de compte")
-
-    def validate_numero_compte2(self, v):
-        return self._digit_limit(v, 10, "Le numéro de compte")
-
-    def validate_rib(self, v):
-        return self._digit_limit(v, 22, "Le RIB")
-
-    def validate_rib2(self, v):
-        return self._digit_limit(v, 22, "Le RIB")
 
     def validate_exercice_comptable(self, v):
         if not v or not str(v).strip():
@@ -196,81 +204,47 @@ class EntrepriseSerializer(serializers.ModelSerializer):
                             index: "Ce compte bancaire n'appartient pas à cette entreprise."
                         }
                     })
+
+        if not self.instance:
+            named_banks = [
+                bank for bank in (bank_accounts or [])
+                if str(bank.get("bank_name", "")).strip()
+            ]
+            if not named_banks:
+                raise serializers.ValidationError({
+                    "bank_accounts": "Au moins une banque est obligatoire pour créer une entreprise."
+                })
         return attrs
 
     def _create_bank_account(self, entreprise, bank_data):
         bank_name = bank_data["bank_name"].strip()
         account_number = bank_data.get("account_number", "")
         rib = bank_data.get("rib", "")
-        expected_label = f"BANQUE {bank_name}"
 
-        legacy_slots = (
-            (entreprise.banque, entreprise.numero_compte, entreprise.rib, "512001"),
-            (entreprise.banque2, entreprise.numero_compte2, entreprise.rib2, "512002"),
-        )
-        scf_account = None
-        for legacy_name, legacy_number, legacy_rib, scf_number in legacy_slots:
-            if (bank_name, account_number, rib) == (
-                legacy_name, legacy_number, legacy_rib
-            ) and any((legacy_name, legacy_number, legacy_rib)):
-                scf_account, _ = SCFAccount.objects.get_or_create(
-                    entreprise=entreprise,
-                    numero_compte=scf_number,
-                    defaults={"libelle": expected_label, "classe": 5},
-                )
-                if scf_account.libelle.strip().casefold() != expected_label.casefold():
-                    raise serializers.ValidationError({
-                        "bank_accounts": (
-                            f"Le libellé du compte SCF {scf_number} "
-                            "ne correspond pas à cette banque."
-                        )
-                    })
-                break
-
-        if scf_account is None:
-            if not SCFAccount.objects.filter(
-                entreprise__isnull=True, numero_compte="512"
-            ).exists():
-                raise serializers.ValidationError({
-                    "bank_accounts": (
-                        "Le compte principal SCF 512 est absent du plan comptable."
-                    )
-                })
-
-            existing_numbers = SCFAccount.objects.filter(
-                entreprise=entreprise, numero_compte__startswith="512"
-            ).values_list("numero_compte", flat=True)
-            suffixes = [
-                int(number[3:])
-                for number in existing_numbers
-                if number[3:].isdigit() and int(number[3:]) > 0
-            ]
-            next_suffix = max(suffixes, default=0) + 1
-            scf_account = SCFAccount.objects.create(
-                entreprise=entreprise,
-                numero_compte=f"512{next_suffix:03d}",
-                libelle=expected_label,
-                classe=5,
-            )
-
-        existing_bank = BankAccount.objects.filter(
-            scf_account=scf_account
-        ).first()
-        if existing_bank:
-            if (
-                existing_bank.entreprise_id == entreprise.pk
-                and existing_bank.bank_name == bank_name
-                and existing_bank.account_number == account_number
-                and existing_bank.rib == rib
-            ):
-                return existing_bank
+        if not SCFAccount.objects.filter(
+            entreprise__isnull=True, numero_compte="512"
+        ).exists():
             raise serializers.ValidationError({
                 "bank_accounts": (
-                    f"Le compte SCF {scf_account.numero_compte} est déjà associé "
-                    "à un autre compte bancaire."
+                    "Le compte principal SCF 512 est absent du plan comptable."
                 )
             })
 
+        existing_numbers = SCFAccount.objects.filter(
+            entreprise=entreprise, numero_compte__startswith="512"
+        ).values_list("numero_compte", flat=True)
+        suffixes = [
+            int(number[3:])
+            for number in existing_numbers
+            if number[3:].isdigit() and int(number[3:]) > 0
+        ]
+        next_suffix = max(suffixes, default=0) + 1
+        scf_account = SCFAccount.objects.create(
+            entreprise=entreprise,
+            numero_compte=f"512{next_suffix:03d}",
+            libelle=f"BANQUE {bank_name}",
+            classe=5,
+        )
         return BankAccount.objects.create(
             entreprise=entreprise,
             bank_name=bank_name,

@@ -78,14 +78,14 @@ def copy_legacy_bank_accounts(apps, schema_editor):
 
 def prevent_reverse(apps, schema_editor):
     raise IrreversibleError(
-        "Migration 0020_bankaccount cannot be reversed because BankAccount "
+        "Migration 0021_bankaccount cannot be reversed because BankAccount "
         "records may contain bank information not present in legacy fields."
     )
 
 
 class Migration(migrations.Migration):
     dependencies = [
-        ("core", "0019_alter_message_content_messageattachment"),
+        ("core", "0020_alter_entreprise_marchandise_and_more"),
     ]
 
     operations = [

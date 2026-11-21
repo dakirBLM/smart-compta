@@ -32,10 +32,10 @@ from .models import (
 )
 from .bank_statements import (
     BankStatementError,
-    fill_missing_statement_identity,
+    BankStatementRejected,
     import_bank_statement,
     preview_entries,
-    validate_statement_identity,
+    validate_statement,
 )
 from .permissions import IsAccountant, IsClient
 from .reports import (
@@ -1090,6 +1090,17 @@ class BankStatementDownloadView(APIView):
         return response
 
 
+def _bank_context_line(bank_account):
+    """One bank for the AI: its name and the account numbers saved for it."""
+    details = []
+    if bank_account.account_number:
+        details.append(f"compte {bank_account.account_number}")
+    if bank_account.rib:
+        details.append(f"RIB {bank_account.rib}")
+    suffix = f" ({', '.join(details)})" if details else ""
+    return f"{bank_account.bank_name}{suffix}"
+
+
 class BankStatementUploadView(APIView):
     permission_classes = [IsAccountant]
 
@@ -1109,13 +1120,24 @@ class BankStatementUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        banks = list(entreprise.bank_accounts.all())
+        if not banks:
+            return Response(
+                {"error": "Aucune banque n'est enregistrée pour cette entreprise. "
+                          "Ajoutez une banque avant d'importer un relevé."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Every registered bank goes to the AI so it can tell whether the
+        # statement belongs to one of them (or answer statut "rejete").
         context = {
             "entreprise_nom": entreprise.nom,
-            "banque": entreprise.banque,
-            "banque2": entreprise.banque2,
+            "banques": " | ".join(b.bank_name for b in banks if b.bank_name),
+            "comptes_bancaires": " | ".join(_bank_context_line(b) for b in banks),
+            "nombre_banques": str(len(banks)),
             "document_type": "releve_bancaire",
             "journal_hint": "Banque",
-            "required_fields": "nom_banque,nom_entreprise",
+            "required_fields": "statut,nom_banque,nom_entreprise,numero_compte",
         }
         try:
             if is_pdf:
@@ -1129,18 +1151,28 @@ class BankStatementUploadView(APIView):
                 raise BankStatementError(
                     "Les données d'identité du relevé sont absentes. Import rejeté."
                 )
-            fill_missing_statement_identity(entreprise, data)
-            nom_banque, nom_entreprise = validate_statement_identity(entreprise, data)
+            nom_banque, nom_entreprise, bank_account = validate_statement(entreprise, data)
             data["nom_banque"] = nom_banque
             data["nom_entreprise"] = nom_entreprise
+        except BankStatementRejected as exc:
+            return Response(
+                {"error": str(exc), "statut": "rejete", "motif": exc.motif},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except (WebhookError, BankStatementError) as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+        bank_number = bank_account.scf_account.numero_compte
         return Response({
             "data": data,
             "nom_banque_valide": True,
             "nom_entreprise_valide": True,
-            "ecritures_preview": preview_entries(data),
+            "compte_bancaire": {
+                "id": bank_account.id,
+                "bank_name": bank_account.bank_name,
+                "numero_compte": bank_number,
+            },
+            "ecritures_preview": preview_entries(data, bank_number),
             "confiance": data.get("confiance"),
         })
 
@@ -1167,9 +1199,13 @@ class BankStatementImportView(APIView):
         data = request.data.get("data") or request.data
         if not isinstance(data, dict):
             return Response({"error": "Données de relevé invalides."}, status=status.HTTP_400_BAD_REQUEST)
-        fill_missing_statement_identity(entreprise, data)
         try:
             entries = import_bank_statement(entreprise, data)
+        except BankStatementRejected as exc:
+            return Response(
+                {"error": str(exc), "statut": "rejete", "motif": exc.motif},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         except BankStatementError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1676,7 +1712,13 @@ class MockWebhookView(APIView):
             return Response({
                 "journal": "Banque",
                 "type_facture": "banque",
-                "nom_banque": request.data.get("banque") or "BNA",
+                "statut": "ok",
+                "motif": "",
+                "nom_banque": (
+                    str(request.data.get("banques") or request.data.get("banque") or "")
+                    .split("|")[0].split("(")[0].strip()
+                    or "BNA"
+                ),
                 "nom_entreprise": request.data.get("entreprise_nom") or "Entreprise test",
                 "fournisseur": "Banque CPA",
                 "date_facture": "28/02/2026",

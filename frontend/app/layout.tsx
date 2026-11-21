@@ -5,7 +5,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Comptia DZ — Votre comptabilité devient intelligente",
-  description: "Plateforme de gestion comptable bilingue (FR/AR) propulsée par l'intelligence artificielle.",
+  description:
+    "Une plateforme innovante basée sur l'intelligence artificielle, pour automatiser, simplifier et optimiser la gestion comptable de votre entreprise en Algérie.",
   icons: {
     icon: "/logo_web.png",
   },

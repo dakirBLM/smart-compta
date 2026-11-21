@@ -176,13 +176,28 @@ def _is_generic_scf_account(numero: str, prefix: str) -> bool:
     return numero in (prefix, f"{prefix}000", f"{prefix}1")
 
 
-def _bank_for_line(entreprise, label: str):
-    """Choose the configured bank named by the line, otherwise the first one."""
+def _bank_account_for_label(entreprise, label: str):
+    """Return the company's BankAccount named by the label.
+
+    With a single registered bank there is nothing to choose. With several, the
+    label must name exactly one of them: there is no default bank.
+    """
+    banks = list(entreprise.bank_accounts.select_related("scf_account"))
+    if not banks:
+        raise ValidationError("Aucune banque n'est enregistrée pour cette entreprise.")
     clean_label = _normalize_name(label)
-    for banque in (entreprise.banque, entreprise.banque2):
-        if banque and _normalize_name(banque) in clean_label:
-            return banque
-    return entreprise.banque or entreprise.banque2
+    named = [
+        bank for bank in banks
+        if bank.bank_name and _normalize_name(bank.bank_name) in clean_label
+    ]
+    if len(named) == 1:
+        return named[0]
+    if not named and len(banks) == 1:
+        return banks[0]
+    raise ValidationError(
+        "Plusieurs banques sont enregistrées pour cette entreprise : "
+        "précisez la banque concernée."
+    )
 
 
 def enterprise_bank_subaccount(entreprise, label: str = "") -> str:
@@ -207,10 +222,8 @@ def get_or_create_scf_subaccount(entreprise, prefix: str, libelle: str) -> str:
 
     label = (libelle or "").strip()
     if prefix == "512":
-        banque = _bank_for_line(entreprise, label)
-        if not banque:
-            raise ValidationError("Aucune banque n'est enregistrée pour cette entreprise.")
-        label = f"BANQUE {banque}"
+        # Bank subaccounts belong to BankAccount rows; never allocate a new one here.
+        return _bank_account_for_label(entreprise, label).scf_account.numero_compte
 
     normalized_label = _normalize_name(label)
     existing = SCFAccount.objects.filter(entreprise=entreprise, numero_compte__startswith=prefix)
@@ -255,13 +268,5 @@ def apply_scf_subaccounts(entreprise, lignes: list) -> list:
             line["compte"] = get_or_create_scf_subaccount(
                 entreprise, prefix, line.get("libelle", "")
             )
-        elif prefix == "512" and numero in {"512001", "512002"}:
-            bank = entreprise.banque if numero == "512001" else entreprise.banque2
-            if bank:
-                SCFAccount.objects.update_or_create(
-                    entreprise=entreprise,
-                    numero_compte=numero,
-                    defaults={"libelle": f"BANQUE {bank}", "classe": 5},
-                )
         out.append(line)
     return out

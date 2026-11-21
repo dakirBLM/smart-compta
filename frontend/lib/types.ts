@@ -242,13 +242,26 @@ export interface BankStatementLigne {
 }
 
 export interface BankStatementExtraction {
+  /** The AI's verdict: "ok", or "rejete" with a "motif" (the import is refused). */
+  statut?: string;
+  motif?: string;
   nom_banque: string;
   nom_entreprise: string;
+  /** Account number read on the statement, without the key after the dash. */
+  numero_compte?: string;
+  cle_rib?: string;
   date?: string;
   confiance?: number;
   erreurs?: string[];
   lignes: BankStatementLigne[];
   image_url?: string;
+}
+
+/** The company bank a statement was matched to (and will be posted against). */
+export interface BankStatementMatchedBank {
+  id: number;
+  bank_name: string;
+  numero_compte: string;
 }
 
 export interface BankStatementImportResult {
