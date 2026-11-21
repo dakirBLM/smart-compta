@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Button, Input, Label } from "@/components/ui";
 import { PasswordHints, passwordIsStrong } from "@/components/PasswordHints";
 import { api } from "@/lib/api";
@@ -11,11 +11,22 @@ import {
   postalCodesFor,
 } from "@/lib/algeria";
 import { useI18n } from "@/lib/i18n-context";
-import { Entreprise } from "@/lib/types";
+import { BankAccount, Entreprise } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 type Mode = "create" | "edit";
 type Form = Record<string, string>;
+type BankAccountPayload = {
+  id?: number;
+  bank_name?: string;
+  account_number?: string;
+  rib?: string;
+};
+type BankAccountFormRow = Omit<BankAccount, "id" | "scf_account"> & {
+  id?: number;
+  scf_account?: BankAccount["scf_account"];
+  formKey: string;
+};
 type LongTextField = "marchandise" | "matiere_premiere" | "matieres_consommables";
 
 const LONG_TEXT_LIMIT = 10000;
@@ -46,6 +57,7 @@ export function EntrepriseForm({
   const [step, setStep] = useState(1);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const nextBankKey = useRef(0);
   const [textLimitErrors, setTextLimitErrors] = useState<Partial<Record<LongTextField, boolean>>>({});
 
   const [form, setForm] = useState<Form>(() => {
@@ -55,12 +67,37 @@ export function EntrepriseForm({
     });
     return base;
   });
+  const [bankAccounts, setBankAccounts] = useState<BankAccountFormRow[]>(() => {
+    if (initial?.bank_accounts !== undefined) {
+      return initial.bank_accounts.map((bank, index) => ({
+        ...bank,
+        formKey: `bank-${bank.id}-${index}`,
+      }));
+    }
+
+    if (!initial) return [];
+    return [
+      {
+        bank_name: initial.banque ?? "",
+        account_number: initial.numero_compte ?? "",
+        rib: initial.rib ?? "",
+        formKey: "legacy-bank-1",
+      },
+      {
+        bank_name: initial.banque2 ?? "",
+        account_number: initial.numero_compte2 ?? "",
+        rib: initial.rib2 ?? "",
+        formKey: "legacy-bank-2",
+      },
+    ].filter((bank) => bank.bank_name || bank.account_number || bank.rib);
+  });
   const [activites, setActivites] = useState<string[]>(() =>
     [initial?.activite, initial?.activite2].filter(Boolean) as string[]
   );
   const [client, setClient] = useState({ nom_client: "", username: "", password: "", email: "" });
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+
   function setLongText(k: LongTextField, value: string) {
     const characters = Array.from(value);
     const exceeded = characters.length > LONG_TEXT_LIMIT;
@@ -88,6 +125,11 @@ export function EntrepriseForm({
     ] as [string, number, string][]) {
       if (form[f] && form[f].length > len)
         return `${label} : ${len} chiffres maximum.`;
+    }
+    for (let index = 0; index < bankAccounts.length; index += 1) {
+      const bank = bankAccounts[index];
+      if (bank.rib && bank.rib.length > 22)
+        return `RIB de la banque ${index + 1} : 22 chiffres maximum.`;
     }
     return "";
   }
@@ -118,10 +160,22 @@ export function EntrepriseForm({
     }
     setSaving(true);
     try {
+      const bankPayload: BankAccountPayload[] = bankAccounts
+        .filter((bank) =>
+          bank.id !== undefined || bank.bank_name || bank.account_number || bank.rib
+        )
+        .map(({ id, bank_name, account_number, rib }) => ({
+          ...(id !== undefined ? { id } : {}),
+          bank_name,
+          account_number,
+          rib,
+        }));
+
       const payload = {
         ...form,
         activite: activites[0] ?? "",
         activite2: activites[1] ?? "",
+        bank_accounts: bankPayload,
       };
       const ent =
         mode === "create"
@@ -242,28 +296,65 @@ export function EntrepriseForm({
             </div>
           </div>
 
-          <h3 className="pt-2 font-semibold text-brand">Informations bancaires (jusqu'à 2 banques)</h3>
-          {[1, 2].map((n) => {
-            const bk = n === 1 ? "banque" : "banque2";
-            const ck = n === 1 ? "numero_compte" : "numero_compte2";
-            const rk = n === 1 ? "rib" : "rib2";
-            return (
-              <div key={n} className="grid grid-cols-3 gap-3 rounded-lg border p-3">
-                <div>
-                  <Label>Banque {n}</Label>
-                  <Input value={form[bk]} onChange={(e) => set(bk, e.target.value)} />
-                </div>
-                <div>
-                  <Label>N° compte</Label>
-                  <Input inputMode="numeric" value={form[ck]} onChange={(e) => set(ck, onlyDigits(e.target.value, 60))} />
-                </div>
-                <div>
-                  <Label>RIB (22 chiffres)</Label>
-                  <Input inputMode="numeric" value={form[rk]} onChange={(e) => set(rk, onlyDigits(e.target.value, 22))} />
-                </div>
+          <div className="flex items-center justify-between pt-2">
+            <h3 className="font-semibold text-brand">Informations bancaires</h3>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => {
+                const formKey = `new-bank-${nextBankKey.current++}`;
+            
+                setBankAccounts((rows) => [
+                 ...rows,
+               {
+                  bank_name: "",
+                  account_number: "",
+                  rib: "",
+                  formKey,
+                },
+              ]);
+            }}
+            >
+              Ajouter une banque
+            </Button>
+          </div>
+          {bankAccounts.map((bank, index) => (
+            <div key={bank.formKey} className="grid grid-cols-1 gap-3 rounded-lg border p-3 sm:grid-cols-3">
+              <div>
+                <Label>Banque {index + 1}</Label>
+                <Input
+                  value={bank.bank_name}
+                  onChange={(e) => setBankAccounts((rows) => rows.map((row) =>
+                    row.formKey === bank.formKey ? { ...row, bank_name: e.target.value } : row
+                  ))}
+                />
               </div>
-            );
-          })}
+              <div>
+                <Label>N° compte</Label>
+                <Input
+                  inputMode="numeric"
+                  value={bank.account_number}
+                  onChange={(e) => setBankAccounts((rows) => rows.map((row) =>
+                    row.formKey === bank.formKey
+                      ? { ...row, account_number: onlyDigits(e.target.value, 60) }
+                      : row
+                  ))}
+                />
+              </div>
+              <div>
+                <Label>RIB (22 chiffres)</Label>
+                <Input
+                  inputMode="numeric"
+                  value={bank.rib}
+                  onChange={(e) => setBankAccounts((rows) => rows.map((row) =>
+                    row.formKey === bank.formKey
+                      ? { ...row, rib: onlyDigits(e.target.value, 22) }
+                      : row
+                  ))}
+                />
+              </div>
+            </div>
+          ))}
         </div>
       )}
 

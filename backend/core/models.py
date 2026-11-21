@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.text import get_valid_filename
 from uuid import uuid4
@@ -305,6 +306,33 @@ class SCFAccount(models.Model):
     def __str__(self) -> str:
         ent = f" ({self.entreprise.nom})" if self.entreprise else ""
         return f"{self.numero_compte} - {self.libelle}{ent}"
+
+
+class BankAccount(models.Model):
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="bank_accounts"
+    )
+    bank_name = models.CharField(max_length=120, blank=True, default="")
+    account_number = models.CharField(max_length=60, blank=True, default="")
+    rib = models.CharField(max_length=60, blank=True, default="")
+    scf_account = models.OneToOneField(
+        SCFAccount, on_delete=models.PROTECT, related_name="bank_account"
+    )
+
+    class Meta:
+        ordering = ["id"]
+
+    def save(self, *args, **kwargs):
+        if self.scf_account_id and not SCFAccount.objects.filter(
+            pk=self.scf_account_id, entreprise_id=self.entreprise_id
+        ).exists():
+            raise ValidationError(
+                {"scf_account": "The SCF account must belong to the same company."}
+            )
+        super().save(*args, **kwargs)
+
+    def __str__(self) -> str:
+        return f"{self.bank_name or 'Bank'} ({self.scf_account.numero_compte})"
 
 
 class Message(models.Model):

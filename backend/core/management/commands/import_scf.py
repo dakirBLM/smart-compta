@@ -12,7 +12,7 @@ This works locally and in production (Vercel, etc.) without relying on user's Do
 import csv
 import re
 from pathlib import Path
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction
 from django.conf import settings
 from core.models import SCFAccount
@@ -35,8 +35,7 @@ class Command(BaseCommand):
             path = base_dir / "data" / "LA_TABLE_SCF.csv"
         
         if not path.exists():
-            self.stderr.write(self.style.ERROR(f"CSV file not found: {path.resolve()}"))
-            return
+            raise CommandError(f"CSV file not found: {path.resolve()}")
 
         created = 0
         skipped = 0
@@ -73,5 +72,13 @@ class Command(BaseCommand):
                             obj.classe = classe_val
                             obj.save(update_fields=["libelle", "classe"])
                         skipped += 1
+
+                if not SCFAccount.objects.filter(
+                    entreprise__isnull=True, numero_compte="512"
+                ).exists():
+                    raise CommandError(
+                        "SCF account 512 (global, entreprise=None) is missing after "
+                        f"importing {path.resolve()}. Ensure the CSV contains account 512."
+                    )
 
         self.stdout.write(self.style.SUCCESS(f"Import complete. Created={created}, Skipped={skipped}"))
