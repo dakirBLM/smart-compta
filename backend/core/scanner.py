@@ -22,6 +22,7 @@ from .account_helpers import (
     get_or_create_fournisseur,
     _normalize_name,
 )
+from .bank_statements import BankStatementError, validate_statement
 from .models import Ecriture, ExerciceAnnee, Journal, LigneEcriture
 
 REQUIRED_FIELDS = [
@@ -454,41 +455,19 @@ CAISSE_COMPTE = "530000"
 
 
 def check_bank_account_match(entreprise, data):
-    """Vérifie que le numéro de compte bancaire du relevé correspond à celui de l'entreprise."""
-    extracted_acc = (
-        data.get("numero_compte_bancaire") or
-        data.get("numero_compte") or
-        data.get("rib") or
-        ""
-    )
+    """Return the company's BankAccount this statement belongs to, or reject it.
 
-    def clean(s):
-        return re.sub(r'[^A-Za-z0-9]', '', str(s or '')).upper()
-
-    norm_extracted = clean(extracted_acc)
-
-    ent_accs = [
-        clean(entreprise.numero_compte),
-        clean(entreprise.rib),
-        clean(entreprise.numero_compte2),
-        clean(entreprise.rib2),
-    ]
-    ent_accs = [a for a in ent_accs if len(a) >= 4]
-
-    if not ent_accs:
+    Same rules as the bank statement page: the AI must name the bank, the name
+    must be one of the company's banks, and the account number must fit. A
+    statement scanned as an invoice has no such identity, so it is sent to the
+    bank statement page instead of guessing a bank.
+    """
+    try:
+        return validate_statement(entreprise, data)[2]
+    except BankStatementError as exc:
         raise WebhookError(
-            "L'entreprise n'est pas configurée avec un numéro de compte bancaire ou RIB dans son profil. "
-            "Veuillez renseigner le compte bancaire de l'entreprise dans ses paramètres."
-        )
-
-    if norm_extracted:
-        matched = any(norm_extracted in a or a in norm_extracted for a in ent_accs)
-        if not matched:
-            configured_list = ", ".join(filter(None, [entreprise.numero_compte, entreprise.rib, entreprise.numero_compte2, entreprise.rib2]))
-            raise WebhookError(
-                f"Le numéro de compte bancaire du relevé ({extracted_acc}) "
-                f"ne correspond pas aux comptes bancaires enregistrés de l'entreprise ({configured_list})."
-            )
+            f"{exc} Utilisez la page « Relevés bancaires » pour importer un relevé."
+        ) from exc
 
 
 def resolve_bank_counterpart(ligne, is_debit, entreprise):
@@ -503,7 +482,7 @@ def resolve_bank_counterpart(ligne, is_debit, entreprise):
     ).lower()
     tiers = str(ligne.get("tiers") or ligne.get("fournisseur") or "").strip()
 
-    if compte_fourni and compte_fourni != "512000":
+    if compte_fourni and not compte_fourni.startswith("512"):
         return compte_fourni, tiers or "Tiers"
 
     if is_debit:
@@ -664,7 +643,8 @@ def sanitize_bank_statement_data(data, entreprise=None):
 def persist_bank_statement(entreprise, data, source="scanner"):
     """Comptabilise un relevé bancaire ligne par ligne dans le journal Banque (512)."""
     data = sanitize_bank_statement_data(data, entreprise=entreprise)
-    check_bank_account_match(entreprise, data)
+    bank_account = check_bank_account_match(entreprise, data)
+    bank_number = bank_account.scf_account.numero_compte
 
     lignes = _sort_bank_lines(data.get("lignes") or [])
     if not lignes:
@@ -708,7 +688,7 @@ def persist_bank_statement(entreprise, data, source="scanner"):
         )
 
         if is_debit:
-            # Sortie de banque (Dépense) : Débit compte de contrepartie, Crédit 512000
+            # Sortie de banque (Dépense) : Débit compte de contrepartie, Crédit compte de la banque
             LigneEcriture.objects.create(
                 ecriture=ec,
                 numero_compte=compte_cp,
@@ -718,16 +698,16 @@ def persist_bank_statement(entreprise, data, source="scanner"):
             )
             LigneEcriture.objects.create(
                 ecriture=ec,
-                numero_compte="512000",
+                numero_compte=bank_number,
                 libelle=f"Débit Banque — {libelle_op}",
                 montant_debit=0,
                 montant_credit=montant,
             )
         else:
-            # Entrée en banque (Recette) : Débit 512000, Crédit compte de contrepartie
+            # Entrée en banque (Recette) : Débit compte de la banque, Crédit compte de contrepartie
             LigneEcriture.objects.create(
                 ecriture=ec,
-                numero_compte="512000",
+                numero_compte=bank_number,
                 libelle=f"Crédit Banque — {libelle_op}",
                 montant_debit=montant,
                 montant_credit=0,

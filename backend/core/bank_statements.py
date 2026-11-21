@@ -1,8 +1,10 @@
 """Validation and posting of AI-extracted bank statements.
 
 The AI is deliberately responsible only for reading/classifying a statement.
-This module remains the accounting authority: it validates the statement bank
-account and builds both sides of every entry itself.
+This module remains the accounting authority: it checks that the statement
+belongs to one of the company's registered banks (name, then account number),
+refuses anything the AI itself rejected, and builds both sides of every entry.
+There is no default bank: a statement that cannot be matched is rejected.
 """
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
@@ -14,28 +16,15 @@ from django.db import transaction
 
 from .account_helpers import (
     apply_scf_subaccounts,
-    enterprise_bank_subaccount,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
 )
 from .models import BankStatement, Ecriture, ExerciceAnnee, Journal, LigneEcriture, SCFAccount
 
 
+# Placeholder for "the statement's bank" while an operation is being classified.
+# import_bank_statement swaps it for the matched bank's own 512xxx account.
 BANK_ACCOUNT = "512000"
-
-
-def enterprise_bank_account(entreprise, label=""):
-    """Return the named dynamic SCF account for the enterprise's bank."""
-    if not entreprise or not (entreprise.banque or entreprise.banque2):
-        return BANK_ACCOUNT
-    if not SCFAccount.objects.filter(
-        entreprise__isnull=True, numero_compte="512"
-    ).exists():
-        normalized_label = _normalize_label(label)
-        if entreprise.banque2 and entreprise.banque2.upper() in normalized_label:
-            return "512002"
-        return "512001"
-    return enterprise_bank_subaccount(entreprise, label)
 
 # Compte d'attente used when the AI cannot determine the counterpart account.
 # The accountant can correct it in the journal afterwards.
@@ -88,6 +77,15 @@ class BankStatementError(Exception):
     """A statement cannot be safely imported."""
 
 
+class BankStatementRejected(BankStatementError):
+    """The AI analysis itself refused the statement (statut = "rejete")."""
+
+    def __init__(self, motif=""):
+        self.motif = motif
+        message = "Relevé rejeté par l'analyse IA"
+        super().__init__(f"{message} : {motif}" if motif else f"{message}.")
+
+
 _BANK_ALIASES = {
     "BNA": "BANQUE NATIONALE D ALGERIE",
     "BEA": "BANQUE EXTERIEURE D ALGERIE",
@@ -119,8 +117,64 @@ def identity_matches(extracted, expected, bank=False):
     return bool(extracted_tokens and expected_tokens and extracted_tokens == expected_tokens)
 
 
-def validate_statement_identity(entreprise, data):
-    """Validate the extracted bank and enterprise names against the client."""
+_REJECTED_STATUSES = {"REJETE", "REJET", "REJECTED", "REJECT"}
+
+
+def check_ai_status(data):
+    """Raise BankStatementRejected when the AI marked the statement as rejected.
+
+    The AI answers "statut": "ok" or "rejete" (with a "motif"). A missing
+    statut is treated as "ok" so the bank and account checks below still apply.
+    """
+    status_value = _normalize_label(_value(data, "statut", "status") or "").strip()
+    if status_value in _REJECTED_STATUSES:
+        raise BankStatementRejected(
+            str(_value(data, "motif", "raison", "reason") or "").strip()
+        )
+
+
+def _alnum(value):
+    return re.sub(r"[^A-Za-z0-9]", "", str(value or "")).upper()
+
+
+def _statement_account_candidates(data):
+    """The account number read on the statement, with and without its RIB key."""
+    number = _alnum(_value(data, "numero_compte", "numero_compte_bancaire", "account_number"))
+    key = _alnum(_value(data, "cle_rib", "cle", "rib_key"))
+    if not number:
+        number = _alnum(_value(data, "rib"))
+    candidates = {number} if number else set()
+    if number and key:
+        candidates.add(number + key)
+    return {c for c in candidates if c}
+
+
+def _bank_account_matches(bank_account, candidates):
+    """True when a statement account number matches the bank's saved number or RIB."""
+    for saved in (bank_account.account_number, bank_account.rib):
+        saved = _alnum(saved)
+        if len(saved) < 4:
+            continue
+        for candidate in candidates:
+            if len(candidate) >= 6 and (candidate in saved or saved in candidate):
+                return True
+    return False
+
+
+def _has_saved_account(bank_account):
+    return len(_alnum(bank_account.account_number)) >= 4 or len(_alnum(bank_account.rib)) >= 4
+
+
+def validate_statement(entreprise, data):
+    """Match a statement to one of the company's registered banks.
+
+    Returns (nom_banque, nom_entreprise, bank_account). Rejects the statement
+    when the AI refused it, when the bank or company name is missing or does
+    not match, or when the account number belongs to another account. Nothing
+    is ever filled in from the company profile.
+    """
+    check_ai_status(data)
+
     bank_name = _value(data, "nom_banque", "bank_name", "bank", "banque")
     company_name = _value(
         data,
@@ -131,18 +185,49 @@ def validate_statement_identity(entreprise, data):
         "entreprise",
     )
     errors = []
+    bank_account = None
 
-    configured_banks = [entreprise.banque, entreprise.banque2]
-    configured_banks = [name for name in configured_banks if str(name or "").strip()]
-    if not bank_name:
+    banks = list(entreprise.bank_accounts.select_related("scf_account"))
+    if not banks:
+        errors.append("Aucune banque n'est enregistrée pour cette entreprise. Import rejeté.")
+    elif not bank_name:
         errors.append("Le nom de la banque n'a pas pu être extrait du relevé. Import rejeté.")
-    elif not configured_banks or not any(
-        identity_matches(bank_name, configured, bank=True) for configured in configured_banks
-    ):
-        errors.append(
-            "Le nom de banque dans ce relevé ne correspond pas au nom de la banque "
-            "enregistré pour cette entreprise. Import rejeté."
-        )
+    else:
+        same_name = [
+            bank for bank in banks
+            if str(bank.bank_name or "").strip()
+            and identity_matches(bank_name, bank.bank_name, bank=True)
+        ]
+        if not same_name:
+            registered = ", ".join(
+                bank.bank_name for bank in banks if str(bank.bank_name or "").strip()
+            ) or "aucune"
+            errors.append(
+                f"Le nom de banque dans ce relevé ({bank_name}) ne correspond pas au nom "
+                f"de la banque enregistré pour cette entreprise ({registered}). Import rejeté."
+            )
+        else:
+            candidates = _statement_account_candidates(data)
+            if candidates:
+                verified = [b for b in same_name if _bank_account_matches(b, candidates)]
+                unverifiable = [b for b in same_name if not _has_saved_account(b)]
+                chosen = verified or unverifiable
+                if not chosen:
+                    errors.append(
+                        "Le numéro de compte du relevé ne correspond pas au compte "
+                        f"enregistré pour la banque {same_name[0].bank_name}. Import rejeté."
+                    )
+            else:
+                chosen = same_name
+            if not errors:
+                if len(chosen) == 1:
+                    bank_account = chosen[0]
+                else:
+                    errors.append(
+                        f"Plusieurs comptes de la banque {chosen[0].bank_name} sont "
+                        "enregistrés : le numéro de compte du relevé est nécessaire "
+                        "pour choisir. Import rejeté."
+                    )
 
     if not company_name:
         errors.append("Le nom de l'entreprise n'a pas pu être extrait du relevé. Import rejeté.")
@@ -154,20 +239,13 @@ def validate_statement_identity(entreprise, data):
 
     if errors:
         raise BankStatementError(" ".join(errors))
-    return str(bank_name).strip(), str(company_name).strip()
+    return str(bank_name).strip(), str(company_name).strip(), bank_account
 
 
-def fill_missing_statement_identity(entreprise, data):
-    """Supply profile identities when a legacy webhook omits those fields."""
-    bank_keys = ("nom_banque", "bank_name", "bank", "banque")
-    company_keys = (
-        "nom_entreprise", "company_name", "company", "entreprise_nom", "entreprise"
-    )
-    if not any(data.get(key) not in (None, "") for key in bank_keys):
-        data["nom_banque"] = entreprise.banque
-    if not any(data.get(key) not in (None, "") for key in company_keys):
-        data["nom_entreprise"] = entreprise.nom
-    return data
+def validate_statement_identity(entreprise, data):
+    """Validate the statement and return (bank name, company name) as read."""
+    nom_banque, nom_entreprise, _bank_account = validate_statement(entreprise, data)
+    return nom_banque, nom_entreprise
 
 
 def _value(row, *names):
@@ -398,7 +476,7 @@ def validated_lines(data):
     return sorted(result, key=lambda row: (row["date"], row["position"]))
 
 
-def preview_entries(data):
+def preview_entries(data, bank_account_number=None):
     """Return a list of preview accounting rows (no DB writes) from an AI payload.
 
     Utilise classify_operation() pour produire directement les bons comptes
@@ -420,6 +498,11 @@ def preview_entries(data):
             row["tiers"],
             entreprise=None,
         )
+        if bank_account_number:
+            if compte_debit == BANK_ACCOUNT:
+                compte_debit = bank_account_number
+            if compte_credit == BANK_ACCOUNT:
+                compte_credit = bank_account_number
         rows.append({
             "date": str(row["date"]),
             "libelle": row["libelle"],
@@ -515,10 +598,12 @@ def check_bank_operation_duplicate(entreprise, operation_date, reference, label,
 def import_bank_statement(entreprise, data):
     """Create one balanced two-line Banque entry per statement transaction.
 
+    The bank side of every entry is the matched bank's own 512xxx account.
     The accountant has explicitly reviewed and confirmed the extraction, so
     every created Ecriture is saved to Journal Banque and marked VALIDE immediately.
     """
-    nom_banque, nom_entreprise = validate_statement_identity(entreprise, data)
+    nom_banque, nom_entreprise, bank_account = validate_statement(entreprise, data)
+    bank_number = bank_account.scf_account.numero_compte
     lines = validated_lines(data)
 
     statement_date_value = _value(data, "date", "date_releve", "date_edition")
@@ -527,6 +612,7 @@ def import_bank_statement(entreprise, data):
         entreprise=entreprise,
         nom_banque=nom_banque,
         nom_entreprise=nom_entreprise,
+        bank_account=bank_account,
         date=statement_date,
         statut=BankStatement.Statut.VALIDE,
         confiance=data.get("confiance"),
@@ -584,11 +670,11 @@ def import_bank_statement(entreprise, data):
         non_bank_lines = [line for line in accounting_lines if line["compte"] != BANK_ACCOUNT]
         resolved_non_bank_lines = iter(apply_scf_subaccounts(entreprise, non_bank_lines))
         compte_debit = (
-            BANK_ACCOUNT if compte_debit == BANK_ACCOUNT
+            bank_number if compte_debit == BANK_ACCOUNT
             else next(resolved_non_bank_lines)["compte"]
         )
         compte_credit = (
-            BANK_ACCOUNT if compte_credit == BANK_ACCOUNT
+            bank_number if compte_credit == BANK_ACCOUNT
             else next(resolved_non_bank_lines)["compte"]
         )
         LigneEcriture.objects.create(

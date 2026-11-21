@@ -16,7 +16,7 @@ import { ConfidenceBadge, confidenceLevel } from "@/components/ConfidenceBadge";
 import { Button, Card, Input, Spinner } from "@/components/ui";
 import { ApiError, bankStatementImport, bankStatementUpload } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
-import { BankStatementExtraction, BankStatementImportResult, BankStatementLigne, EcrituresPreviewRow } from "@/lib/types";
+import { BankStatementExtraction, BankStatementImportResult, BankStatementLigne, BankStatementMatchedBank, EcrituresPreviewRow } from "@/lib/types";
 import { formatDZD } from "@/lib/utils";
 
 type Phase = "capture" | "loading" | "review" | "success";
@@ -67,6 +67,7 @@ export function BankStatementFlow({
   const [preview, setPreview] = useState<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [extraction, setExtraction] = useState<BankStatementExtraction | null>(null);
+  const [matchedBank, setMatchedBank] = useState<BankStatementMatchedBank | null>(null);
   const [reviewRows, setReviewRows] = useState<EcrituresPreviewRow[]>([]);
   const [stepDone, setStepDone] = useState(0);
   const [error, setError] = useState("");
@@ -111,6 +112,7 @@ export function BankStatementFlow({
       clearInterval(timer);
       setStepDone(4);
       setExtraction(res.data);
+      setMatchedBank(res.compte_bancaire ?? null);
       setReviewRows(res.ecritures_preview ?? []);
       setPhase("review");
     } catch (e) {
@@ -147,6 +149,7 @@ export function BankStatementFlow({
     setPreview(null);
     setFile(null);
     setExtraction(null);
+    setMatchedBank(null);
     setReviewRows([]);
     setError("");
     setRedirectIn(5);
@@ -344,7 +347,7 @@ export function BankStatementFlow({
           <h2 className="text-lg font-bold text-brand">{t("propositionEcriture")}</h2>
           <ConfidenceBadge score={lowestConfidence(extraction.lignes)} />
         </div>
-        <div className="grid gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700 sm:grid-cols-2">
+        <div className="grid gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700 sm:grid-cols-3">
           <div>
             <span className="block text-xs uppercase tracking-wide">Nom de la banque</span>
             <span className="font-semibold">{extraction.nom_banque}</span>
@@ -353,7 +356,22 @@ export function BankStatementFlow({
             <span className="block text-xs uppercase tracking-wide">Nom de l'entreprise</span>
             <span className="font-semibold">{extraction.nom_entreprise}</span>
           </div>
+          {matchedBank && (
+            <div>
+              <span className="block text-xs uppercase tracking-wide">Compte comptable</span>
+              <span className="font-semibold">
+                {matchedBank.numero_compte} — {matchedBank.bank_name}
+              </span>
+            </div>
+          )}
         </div>
+        {(extraction.erreurs ?? []).length > 0 && (
+          <ul className="mt-3 list-disc space-y-1 rounded-lg bg-amber-50 p-3 pl-7 text-sm text-warning">
+            {(extraction.erreurs ?? []).map((note, index) => (
+              <li key={index}>{note}</li>
+            ))}
+          </ul>
+        )}
         {level === "yellow" && (
           <p className="mt-3 rounded-lg bg-amber-50 p-3 text-sm text-warning">
             ⚠ {t("confiance")} moyenne — vérifiez les lignes avant de confirmer.
