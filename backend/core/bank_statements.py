@@ -10,6 +10,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 import re
 import unicodedata
+from typing import NamedTuple
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -19,7 +20,15 @@ from .account_helpers import (
     get_or_create_client_comptable,
     get_or_create_fournisseur,
 )
-from .models import BankStatement, Ecriture, ExerciceAnnee, Journal, LigneEcriture, SCFAccount
+from .models import (
+    BankAccount,
+    BankStatement,
+    Ecriture,
+    ExerciceAnnee,
+    Journal,
+    LigneEcriture,
+    SCFAccount,
+)
 
 
 # Placeholder for "the statement's bank" while an operation is being classified.
@@ -133,49 +142,299 @@ def check_ai_status(data):
         )
 
 
-def _alnum(value):
-    return re.sub(r"[^A-Za-z0-9]", "", str(value or "")).upper()
+def _normalize_bank_identifier(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
 
 
-def _statement_account_candidates(data):
-    """The account number read on the statement, with and without its RIB key."""
-    number = _alnum(_value(data, "numero_compte", "numero_compte_bancaire", "account_number"))
-    key = _alnum(_value(data, "cle_rib", "cle", "rib_key"))
-    if not number:
-        number = _alnum(_value(data, "rib"))
-    candidates = {number} if number else set()
-    if number and key:
-        candidates.add(number + key)
-    return {c for c in candidates if c}
+def _provided_aliases(data, *names):
+    return [
+        data[name]
+        for name in names
+        if name in data
+        and data[name] not in (None, "")
+        and str(data[name]).strip()
+    ]
 
 
-def _bank_account_matches(bank_account, candidates):
-    """True when a statement account number matches the bank's saved number or RIB."""
-    for saved in (bank_account.account_number, bank_account.rib):
-        saved = _alnum(saved)
-        if len(saved) < 4:
+def _aliases_conflict(values, normalizer):
+    normalized = [normalizer(value) for value in values]
+    return any(value != normalized[0] for value in normalized[1:])
+
+
+def _bank_candidate(bank_account=None, bank_name="", account_number="", rib=""):
+    return {
+        "bank_account": bank_account,
+        "bank_name": bank_name or "",
+        "account_number": account_number or "",
+        "rib": rib or "",
+        "legacy_scf_number": None,
+    }
+
+
+class ValidatedStatement(NamedTuple):
+    bank_name: str
+    company_name: str
+    bank_account: BankAccount | None
+    scf_account: SCFAccount
+
+
+def _same_bank_details(candidate, bank_name, account_number, rib):
+    candidate_name = str(candidate["bank_name"] or "").strip()
+    legacy_name = str(bank_name or "").strip()
+    if (
+        candidate_name
+        and legacy_name
+        and not identity_matches(candidate_name, legacy_name, bank=True)
+    ):
+        return False
+
+    candidate_account = _normalize_bank_identifier(candidate["account_number"])
+    legacy_account = _normalize_bank_identifier(account_number)
+    if candidate_account and legacy_account and candidate_account != legacy_account:
+        return False
+
+    candidate_rib = _normalize_bank_identifier(candidate["rib"])
+    legacy_rib = _normalize_bank_identifier(rib)
+    if candidate_rib and legacy_rib and candidate_rib != legacy_rib:
+        return False
+
+    return bool(
+        (candidate_account and legacy_account and candidate_account == legacy_account)
+        or (candidate_rib and legacy_rib and candidate_rib == legacy_rib)
+    )
+
+
+def resolve_statement_bank(entreprise, data):
+    """Resolve statement bank identity against company banks and legacy fields."""
+    bank_accounts = list(
+        BankAccount.objects.filter(entreprise=entreprise)
+        .select_related("scf_account")
+        .order_by("id")
+    )
+    candidates = [
+        _bank_candidate(
+            bank_account=account,
+            bank_name=account.bank_name,
+            account_number=account.account_number,
+            rib=account.rib,
+        )
+        for account in bank_accounts
+    ]
+
+    legacy_slots = (
+        (entreprise.banque, entreprise.numero_compte, entreprise.rib, "512001"),
+        (entreprise.banque2, entreprise.numero_compte2, entreprise.rib2, "512002"),
+    )
+    represented_bank_ids = set()
+    for bank_name, account_number, rib, scf_number in legacy_slots:
+        if not any((bank_name, account_number, rib)):
             continue
-        for candidate in candidates:
-            if len(candidate) >= 6 and (candidate in saved or saved in candidate):
-                return True
-    return False
+        represented = next(
+            (
+                candidate
+                for candidate in candidates
+                if candidate["bank_account"]
+                and candidate["bank_account"].pk not in represented_bank_ids
+                and _same_bank_details(
+                    candidate, bank_name, account_number, rib
+                )
+            ),
+            None,
+        )
+        if represented:
+            represented_bank_ids.add(represented["bank_account"].pk)
+            if not str(represented["bank_name"] or "").strip():
+                represented["bank_name"] = bank_name or ""
+            if not _normalize_bank_identifier(represented["account_number"]):
+                represented["account_number"] = account_number or ""
+            if not _normalize_bank_identifier(represented["rib"]):
+                represented["rib"] = rib or ""
+            continue
+        candidate = _bank_candidate(
+            bank_name=bank_name,
+            account_number=account_number,
+            rib=rib,
+        )
+        candidate["legacy_scf_number"] = scf_number
+        candidates.append(candidate)
 
+    if not candidates:
+        return {"status": "no_banks", "bank": None, "candidates": []}
 
-def _has_saved_account(bank_account):
-    return len(_alnum(bank_account.account_number)) >= 4 or len(_alnum(bank_account.rib)) >= 4
+    bank_names = _provided_aliases(
+        data, "nom_banque", "bank_name", "bank", "banque"
+    )
+    account_numbers = _provided_aliases(
+        data,
+        "numero_compte_bancaire",
+        "numero_compte",
+        "account_number",
+        "account",
+    )
+    ribs = _provided_aliases(data, "rib", "rib_bancaire", "bank_rib")
+    alias_groups = (
+        (bank_names, lambda value: frozenset(_identity_tokens(value, bank=True))),
+        (account_numbers, _normalize_bank_identifier),
+        (ribs, _normalize_bank_identifier),
+    )
+    if any(_aliases_conflict(values, normalize) for values, normalize in alias_groups):
+        return {"status": "conflict", "bank": None, "candidates": []}
+
+    bank_name = bank_names[0] if bank_names else None
+    account_number = account_numbers[0] if account_numbers else None
+    rib = ribs[0] if ribs else None
+    identifiers = [
+        ("bank_name", bank_name),
+        ("account_number", account_number),
+        ("rib", rib),
+    ]
+    identifiers = [(kind, value) for kind, value in identifiers if str(value or "").strip()]
+
+    if not identifiers:
+        if len(candidates) == 1:
+            return {"status": "missing", "bank": candidates[0], "candidates": []}
+        return {"status": "ambiguous", "bank": None, "candidates": candidates}
+
+    matching_indexes = []
+    for kind, value in identifiers:
+        if kind == "bank_name":
+            matched_indexes = {
+                index
+                for index, candidate in enumerate(candidates)
+                if identity_matches(value, candidate["bank_name"], bank=True)
+            }
+        else:
+            normalized = _normalize_bank_identifier(value)
+            if not normalized:
+                return {"status": "not_found", "bank": None, "candidates": []}
+            matched_indexes = {
+                index
+                for index, candidate in enumerate(candidates)
+                if (configured := _normalize_bank_identifier(candidate[kind]))
+                and (normalized in configured or configured in normalized)
+            }
+        if not matched_indexes:
+            prior_indexes = (
+                set.intersection(*matching_indexes) if matching_indexes else set()
+            )
+            candidates_for_error = (
+                [candidates[index] for index in sorted(prior_indexes)]
+                if prior_indexes
+                else candidates
+            )
+            return {
+                "status": "not_found",
+                "bank": None,
+                "candidates": candidates_for_error,
+                "unmatched_kind": kind,
+            }
+        matching_indexes.append(matched_indexes)
+
+    selected_indexes = set.intersection(*matching_indexes)
+    if not selected_indexes:
+        conflicting_indexes = set.union(*matching_indexes)
+        return {
+            "status": "conflict",
+            "bank": None,
+            "candidates": [candidates[index] for index in sorted(conflicting_indexes)],
+        }
+    if len(selected_indexes) > 1:
+        return {
+            "status": "ambiguous",
+            "bank": None,
+            "candidates": [candidates[index] for index in sorted(selected_indexes)],
+        }
+    selected = candidates[selected_indexes.pop()]
+    return {"status": "matched", "bank": selected, "candidates": []}
 
 
 def validate_statement(entreprise, data):
-    """Match a statement to one of the company's registered banks.
-
-    Returns (nom_banque, nom_entreprise, bank_account). Rejects the statement
-    when the AI refused it, when the bank or company name is missing or does
-    not match, or when the account number belongs to another account. Nothing
-    is ever filled in from the company profile.
-    """
+    """Validate statement identity and resolve its bank-specific SCF account."""
     check_ai_status(data)
 
-    bank_name = _value(data, "nom_banque", "bank_name", "bank", "banque")
+    resolution = resolve_statement_bank(entreprise, data)
+    if resolution["status"] == "no_banks":
+        raise BankStatementError(
+            "Aucune banque n'est configurée. Aucune banque n'est enregistrée "
+            "pour cette entreprise. Import rejeté."
+        )
+    if resolution["status"] == "missing":
+        raise BankStatementError(
+            "Le nom de la banque n'a pas pu être extrait du relevé : "
+            "l'identité bancaire est absente. Import rejeté."
+        )
+    if resolution["status"] == "ambiguous":
+        raise BankStatementError(
+            "L'identité bancaire est ambiguë : Plusieurs comptes correspondent; "
+            "le nom de la banque n'a pas pu être extrait ou un identifiant unique "
+            "manque. Import rejeté."
+        )
+    if resolution["status"] == "conflict":
+        raise BankStatementError(
+            "Les identifiants bancaires fournis identifient des banques différentes. "
+            "Le numéro de compte du relevé ne correspond pas à la banque nommée. "
+            "Import rejeté."
+        )
+    if resolution["status"] == "not_found":
+        if resolution.get("unmatched_kind") in ("account_number", "rib") and (
+            resolution["candidates"]
+        ):
+            identifier_label = (
+                "numéro de compte" if resolution["unmatched_kind"] == "account_number"
+                else "RIB"
+            )
+            raise BankStatementError(
+                f"Le {identifier_label} du relevé ne correspond pas aux "
+                "identifiants de la banque enregistrée. Import rejeté."
+            )
+        bank_name = _value(data, "nom_banque", "bank_name", "bank", "banque")
+        if bank_name:
+            registered = ", ".join(
+                dict.fromkeys(
+                    candidate["bank_name"]
+                    for candidate in resolution["candidates"]
+                    if candidate["bank_name"]
+                )
+            ) or "aucune"
+            raise BankStatementError(
+                f"Le relevé ne correspond à aucune banque enregistrée : le nom "
+                f"de banque dans ce relevé ({bank_name}) ne correspond pas au nom "
+                f"de la banque enregistré pour cette entreprise ({registered}). "
+                "Import rejeté."
+            )
+        raise BankStatementError(
+            "Le relevé ne correspond à aucune banque enregistrée selon les identifiants "
+            "du relevé. Import rejeté."
+        )
+
+    bank = resolution["bank"]
+    bank_account = bank["bank_account"]
+    bank_name = str(bank["bank_name"] or "").strip()
+    if not bank_name:
+        raise BankStatementError(
+            "Le nom de la banque associée aux identifiants du relevé n'est pas "
+            "enregistré. Import rejeté."
+        )
+
+    if bank_account:
+        scf_account = bank_account.scf_account
+    else:
+        scf_account = SCFAccount.objects.filter(
+            entreprise=entreprise,
+            numero_compte=bank["legacy_scf_number"],
+        ).first()
+        if not scf_account:
+            raise BankStatementError(
+                f"Le compte SCF {bank['legacy_scf_number']} de la banque "
+                f"{bank_name} n'est pas enregistré pour cette entreprise. "
+                "Import rejeté."
+            )
+        if BankAccount.objects.filter(scf_account=scf_account).exists():
+            raise BankStatementError(
+                f"Le compte SCF {scf_account.numero_compte} est lié à une autre "
+                "banque enregistrée. Import rejeté."
+            )
+
     company_name = _value(
         data,
         "nom_entreprise",
@@ -184,68 +443,39 @@ def validate_statement(entreprise, data):
         "entreprise_nom",
         "entreprise",
     )
-    errors = []
-    bank_account = None
-
-    banks = list(entreprise.bank_accounts.select_related("scf_account"))
-    if not banks:
-        errors.append("Aucune banque n'est enregistrée pour cette entreprise. Import rejeté.")
-    elif not bank_name:
-        errors.append("Le nom de la banque n'a pas pu être extrait du relevé. Import rejeté.")
-    else:
-        same_name = [
-            bank for bank in banks
-            if str(bank.bank_name or "").strip()
-            and identity_matches(bank_name, bank.bank_name, bank=True)
-        ]
-        if not same_name:
-            registered = ", ".join(
-                bank.bank_name for bank in banks if str(bank.bank_name or "").strip()
-            ) or "aucune"
-            errors.append(
-                f"Le nom de banque dans ce relevé ({bank_name}) ne correspond pas au nom "
-                f"de la banque enregistré pour cette entreprise ({registered}). Import rejeté."
-            )
-        else:
-            candidates = _statement_account_candidates(data)
-            if candidates:
-                verified = [b for b in same_name if _bank_account_matches(b, candidates)]
-                unverifiable = [b for b in same_name if not _has_saved_account(b)]
-                chosen = verified or unverifiable
-                if not chosen:
-                    errors.append(
-                        "Le numéro de compte du relevé ne correspond pas au compte "
-                        f"enregistré pour la banque {same_name[0].bank_name}. Import rejeté."
-                    )
-            else:
-                chosen = same_name
-            if not errors:
-                if len(chosen) == 1:
-                    bank_account = chosen[0]
-                else:
-                    errors.append(
-                        f"Plusieurs comptes de la banque {chosen[0].bank_name} sont "
-                        "enregistrés : le numéro de compte du relevé est nécessaire "
-                        "pour choisir. Import rejeté."
-                    )
-
     if not company_name:
-        errors.append("Le nom de l'entreprise n'a pas pu être extrait du relevé. Import rejeté.")
-    elif not identity_matches(company_name, entreprise.nom):
-        errors.append(
+        raise BankStatementError(
+            "Le nom de l'entreprise n'a pas pu être extrait du relevé. Import rejeté."
+        )
+    if not identity_matches(company_name, entreprise.nom):
+        raise BankStatementError(
             "Le nom de l'entreprise dans ce relevé ne correspond pas au nom de "
             "l'entreprise enregistré. Import rejeté."
         )
 
-    if errors:
-        raise BankStatementError(" ".join(errors))
-    return str(bank_name).strip(), str(company_name).strip(), bank_account
+    data["nom_banque"] = bank_name
+    return ValidatedStatement(
+        bank_name=bank_name,
+        company_name=str(company_name).strip(),
+        bank_account=bank_account,
+        scf_account=scf_account,
+    )
 
 
 def validate_statement_identity(entreprise, data):
-    """Validate the statement and return (bank name, company name) as read."""
-    nom_banque, nom_entreprise, _bank_account = validate_statement(entreprise, data)
-    return nom_banque, nom_entreprise
+    """Validate the statement and return its canonical bank and company names."""
+    statement = validate_statement(entreprise, data)
+    return statement.bank_name, statement.company_name
+
+
+def fill_missing_statement_identity(entreprise, data):
+    """Supply the company identity when a legacy webhook omits it."""
+    company_keys = (
+        "nom_entreprise", "company_name", "company", "entreprise_nom", "entreprise"
+    )
+    if not any(data.get(key) not in (None, "") for key in company_keys):
+        data["nom_entreprise"] = entreprise.nom
+    return data
 
 
 def _value(row, *names):
@@ -602,8 +832,10 @@ def import_bank_statement(entreprise, data):
     The accountant has explicitly reviewed and confirmed the extraction, so
     every created Ecriture is saved to Journal Banque and marked VALIDE immediately.
     """
-    nom_banque, nom_entreprise, bank_account = validate_statement(entreprise, data)
-    bank_number = bank_account.scf_account.numero_compte
+    statement = validate_statement(entreprise, data)
+    nom_banque = statement.bank_name
+    nom_entreprise = statement.company_name
+    bank_number = statement.scf_account.numero_compte
     lines = validated_lines(data)
 
     statement_date_value = _value(data, "date", "date_releve", "date_edition")
@@ -612,7 +844,7 @@ def import_bank_statement(entreprise, data):
         entreprise=entreprise,
         nom_banque=nom_banque,
         nom_entreprise=nom_entreprise,
-        bank_account=bank_account,
+        bank_account=statement.bank_account,
         date=statement_date,
         statut=BankStatement.Statut.VALIDE,
         confiance=data.get("confiance"),

@@ -35,6 +35,7 @@ from .bank_statements import (
     BankStatementRejected,
     import_bank_statement,
     preview_entries,
+    resolve_statement_bank,
     validate_statement,
 )
 from .permissions import IsAccountant, IsClient
@@ -877,7 +878,11 @@ class ScannerUploadView(APIView):
 
         data = sanitize_bank_statement_data(data, entreprise=ent)
 
-        errors = validate_extraction(data, entreprise=ent)
+        errors = validate_extraction(
+            data,
+            entreprise=ent,
+            check_bank_identity=request.user.role == "accountant",
+        )
         return Response({"data": data, "erreurs": errors,
                          "confiance": data.get("confiance")})
 
@@ -1090,15 +1095,15 @@ class BankStatementDownloadView(APIView):
         return response
 
 
-def _bank_context_line(bank_account):
+def _bank_context_line(bank_candidate):
     """One bank for the AI: its name and the account numbers saved for it."""
     details = []
-    if bank_account.account_number:
-        details.append(f"compte {bank_account.account_number}")
-    if bank_account.rib:
-        details.append(f"RIB {bank_account.rib}")
+    if bank_candidate["account_number"]:
+        details.append(f"compte {bank_candidate['account_number']}")
+    if bank_candidate["rib"]:
+        details.append(f"RIB {bank_candidate['rib']}")
     suffix = f" ({', '.join(details)})" if details else ""
-    return f"{bank_account.bank_name}{suffix}"
+    return f"{bank_candidate['bank_name']}{suffix}"
 
 
 class BankStatementUploadView(APIView):
@@ -1120,19 +1125,24 @@ class BankStatementUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        banks = list(entreprise.bank_accounts.all())
-        if not banks:
+        bank_resolution = resolve_statement_bank(entreprise, {})
+        if bank_resolution["status"] == "no_banks":
             return Response(
                 {"error": "Aucune banque n'est enregistrée pour cette entreprise. "
                           "Ajoutez une banque avant d'importer un relevé."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        banks = (
+            [bank_resolution["bank"]]
+            if bank_resolution["status"] == "missing"
+            else bank_resolution["candidates"]
+        )
 
         # Every registered bank goes to the AI so it can tell whether the
         # statement belongs to one of them (or answer statut "rejete").
         context = {
             "entreprise_nom": entreprise.nom,
-            "banques": " | ".join(b.bank_name for b in banks if b.bank_name),
+            "banques": " | ".join(b["bank_name"] for b in banks if b["bank_name"]),
             "comptes_bancaires": " | ".join(_bank_context_line(b) for b in banks),
             "nombre_banques": str(len(banks)),
             "document_type": "releve_bancaire",
@@ -1151,9 +1161,9 @@ class BankStatementUploadView(APIView):
                 raise BankStatementError(
                     "Les données d'identité du relevé sont absentes. Import rejeté."
                 )
-            nom_banque, nom_entreprise, bank_account = validate_statement(entreprise, data)
-            data["nom_banque"] = nom_banque
-            data["nom_entreprise"] = nom_entreprise
+            statement = validate_statement(entreprise, data)
+            data["nom_banque"] = statement.bank_name
+            data["nom_entreprise"] = statement.company_name
         except BankStatementRejected as exc:
             return Response(
                 {"error": str(exc), "statut": "rejete", "motif": exc.motif},
@@ -1162,16 +1172,19 @@ class BankStatementUploadView(APIView):
         except (WebhookError, BankStatementError) as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
-        bank_number = bank_account.scf_account.numero_compte
+        bank_account = statement.bank_account
+        bank_number = statement.scf_account.numero_compte
+        matched_bank: dict[str, int | str] = {
+            "bank_name": statement.bank_name,
+            "numero_compte": bank_number,
+        }
+        if bank_account:
+            matched_bank["id"] = bank_account.id
         return Response({
             "data": data,
             "nom_banque_valide": True,
             "nom_entreprise_valide": True,
-            "compte_bancaire": {
-                "id": bank_account.id,
-                "bank_name": bank_account.bank_name,
-                "numero_compte": bank_number,
-            },
+            "compte_bancaire": matched_bank,
             "ecritures_preview": preview_entries(data, bank_number),
             "confiance": data.get("confiance"),
         })

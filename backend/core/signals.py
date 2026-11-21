@@ -2,7 +2,12 @@ from django.db.models.signals import post_delete, post_save
 from django.dispatch import receiver
 
 from .models import (
-    BankAccount, ClientComptable, Entreprise, Fournisseur, LigneEcriture, SCFAccount,
+    BankAccount,
+    ClientComptable,
+    Entreprise,
+    Fournisseur,
+    LigneEcriture,
+    SCFAccount,
 )
 
 
@@ -46,6 +51,27 @@ def get_inherited_label(numero_compte):
             return match.libelle
     return ""
 
+
+def _linked_bank_account(entreprise, numero_compte):
+    return (
+        BankAccount.objects.filter(
+            entreprise=entreprise,
+            scf_account__numero_compte=numero_compte,
+        )
+        .select_related("scf_account")
+        .first()
+    )
+
+
+def _sync_linked_bank_label(bank_account):
+    if not bank_account or not bank_account.bank_name:
+        return
+    label = f"BANQUE {bank_account.bank_name}"
+    if bank_account.scf_account.libelle != label:
+        bank_account.scf_account.libelle = label
+        bank_account.scf_account.save(update_fields=["libelle"])
+
+
 @receiver(post_save, sender=LigneEcriture)
 def add_ligne_compte_to_scf(sender, instance: LigneEcriture, created, **kwargs):
     if not instance.numero_compte:
@@ -56,14 +82,17 @@ def add_ligne_compte_to_scf(sender, instance: LigneEcriture, created, **kwargs):
         ent = instance.ecriture.journal.entreprise
     except Exception:
         pass
-    if not ent or not SCFAccount.objects.filter(
-        entreprise__isnull=True, numero_compte=instance.numero_compte
-    ).exists():
+    if not ent:
         return
 
     if instance.numero_compte.startswith("512"):
         # Bank accounts are created (and labelled) from BankAccount rows, never
         # inferred from a ledger line.
+        return
+
+    if not SCFAccount.objects.filter(
+        entreprise__isnull=True, numero_compte=instance.numero_compte
+    ).exists():
         return
 
     inherited = get_inherited_label(instance.numero_compte) or instance.libelle

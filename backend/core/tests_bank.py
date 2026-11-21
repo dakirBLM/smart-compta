@@ -4,10 +4,20 @@ from django.test import TestCase
 from django.core.files.uploadedfile import SimpleUploadedFile
 from rest_framework.test import APITestCase
 from core.bank_test_utils import make_bank
-from core.models import BankStatement, Entreprise, Journal, Ecriture, LigneEcriture, ExerciceAnnee
+from core.models import (
+    BankAccount,
+    BankStatement,
+    Entreprise,
+    ExerciceAnnee,
+    Ecriture,
+    Journal,
+    LigneEcriture,
+    SCFAccount,
+)
 from core.bank_statements import (
     import_bank_statement as _import_bank_statement, BankStatementError,
-    BankStatementRejected, preview_entries, validate_statement_identity,
+    BankStatementRejected, preview_entries, resolve_statement_bank,
+    validate_statement_identity,
     classify_operation, BANK_ACCOUNT, HOLDING_ACCOUNT,
 )
 from django.contrib.auth import get_user_model
@@ -22,6 +32,382 @@ def import_bank_statement(entreprise, data):
     payload.setdefault("nom_banque", first_bank.bank_name if first_bank else "")
     payload.setdefault("nom_entreprise", entreprise.nom)
     return _import_bank_statement(entreprise, payload)
+
+
+class BankAccountResolverTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username="bank-resolver", password="password", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="Resolver Company",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.user,
+        )
+
+    def add_bank(self, bank_name, account_number, rib):
+        index = self.entreprise.bank_accounts.count() + 1
+        scf_account = SCFAccount.objects.create(
+            entreprise=self.entreprise,
+            numero_compte=f"512{index:03d}",
+            libelle=f"BANQUE {bank_name}",
+            classe=5,
+        )
+        return BankAccount.objects.create(
+            entreprise=self.entreprise,
+            bank_name=bank_name,
+            account_number=account_number,
+            rib=rib,
+            scf_account=scf_account,
+        )
+
+    def set_legacy_banks(self, first=("", "", ""), second=("", "", "")):
+        (
+            self.entreprise.banque,
+            self.entreprise.numero_compte,
+            self.entreprise.rib,
+        ) = first
+        (
+            self.entreprise.banque2,
+            self.entreprise.numero_compte2,
+            self.entreprise.rib2,
+        ) = second
+        self.entreprise.save(update_fields=[
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ])
+
+    def test_one_bank_without_identity_is_selected_with_missing_status(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "missing")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_one_bank_matches_name_account_number_and_rib(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "nom_banque": "Banque Nationale d'Algerie",
+            "numero_compte_bancaire": "1111-2222",
+            "rib": "0011 1122 2233",
+        })
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_two_banks_are_identified_separately_by_name(self):
+        first = self.add_bank("BNA", "11112222", "001111222233")
+        second = self.add_bank("CPA", "33334444", "003333444455")
+
+        first_result = resolve_statement_bank(self.entreprise, {"bank": "BNA"})
+        second_result = resolve_statement_bank(self.entreprise, {"nom_banque": "CPA"})
+
+        self.assertEqual(first_result["bank"]["bank_account"], first)
+        self.assertEqual(second_result["bank"]["bank_account"], second)
+
+    def test_account_number_disambiguates_accounts_with_same_bank_name(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        second = self.add_bank("BNA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "nom_banque": "BNA",
+            "numero_compte": second.account_number,
+        })
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], second)
+
+    def test_two_banks_are_identified_separately_by_account_number(self):
+        first = self.add_bank("BNA", "11112222", "001111222233")
+        second = self.add_bank("CPA", "33334444", "003333444455")
+
+        first_result = resolve_statement_bank(
+            self.entreprise, {"numero_compte": "11112222"}
+        )
+        second_result = resolve_statement_bank(
+            self.entreprise, {"account_number": "33334444"}
+        )
+
+        self.assertEqual(first_result["bank"]["bank_account"], first)
+        self.assertEqual(second_result["bank"]["bank_account"], second)
+
+    def test_two_banks_are_identified_separately_by_rib(self):
+        first = self.add_bank("BNA", "11112222", "001111222233")
+        second = self.add_bank("CPA", "33334444", "003333444455")
+
+        first_result = resolve_statement_bank(self.entreprise, {"rib": "001111222233"})
+        second_result = resolve_statement_bank(self.entreprise, {"rib": "003333444455"})
+
+        self.assertEqual(first_result["bank"]["bank_account"], first)
+        self.assertEqual(second_result["bank"]["bank_account"], second)
+
+    def test_three_banks_can_match_the_third_bank(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+        third = self.add_bank("Bank Three", "55556666", "005555666677")
+
+        result = resolve_statement_bank(self.entreprise, {"bank_name": "Bank Three"})
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], third)
+
+    def test_five_banks_can_match_the_fifth_bank(self):
+        for index in range(1, 5):
+            self.add_bank(
+                f"Bank {index}", f"{index}1112222", f"00{index}111222233"
+            )
+        fifth = self.add_bank("Bank Five", "51112222", "005111222233")
+
+        result = resolve_statement_bank(self.entreprise, {"bank_name": "Bank Five"})
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], fifth)
+
+    def test_unique_partial_account_number_matches(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {"numero_compte": "1122"})
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_unique_partial_rib_matches(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {"rib": "112222"})
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_partial_identifier_matching_multiple_banks_is_ambiguous(self):
+        self.add_bank("BNA", "123456", "001111222233")
+        self.add_bank("CPA", "99123", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {"numero_compte": "123"})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+
+    def test_name_and_account_number_identifying_different_banks_conflict(self):
+        first = self.add_bank("BNA", "11112222", "001111222233")
+        second = self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "nom_banque": first.bank_name,
+            "numero_compte": second.account_number,
+        })
+
+        self.assertEqual(result["status"], "conflict")
+        self.assertEqual(
+            {candidate["bank_account"] for candidate in result["candidates"]},
+            {first, second},
+        )
+
+    def test_conflicting_bank_name_aliases_conflict(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "nom_banque": "BNA",
+            "bank_name": "CPA",
+        })
+
+        self.assertEqual(result["status"], "conflict")
+
+    def test_conflicting_account_number_aliases_conflict(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "numero_compte_bancaire": "11112222",
+            "account_number": "33334444",
+        })
+
+        self.assertEqual(result["status"], "conflict")
+
+    def test_conflicting_rib_aliases_conflict(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "rib": "001111222233",
+            "bank_rib": "003333444455",
+        })
+
+        self.assertEqual(result["status"], "conflict")
+
+    def test_equivalent_identifier_aliases_preserve_matching(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+
+        result = resolve_statement_bank(self.entreprise, {
+            "nom_banque": "BNA",
+            "bank_name": "Banque Nationale d'Algerie",
+            "numero_compte_bancaire": "1111-2222",
+            "account_number": "11112222",
+            "rib": "0011 1122 2233",
+            "bank_rib": "001111222233",
+        })
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_supplied_identity_with_no_matching_bank_is_not_found(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+
+        result = resolve_statement_bank(self.entreprise, {"nom_banque": "CPA"})
+
+        self.assertEqual(result["status"], "not_found")
+        self.assertIsNone(result["bank"])
+
+    def test_account_number_without_alphanumeric_characters_is_not_found(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+
+        result = resolve_statement_bank(self.entreprise, {"numero_compte": "---"})
+
+        self.assertEqual(result["status"], "not_found")
+
+    def test_legacy_only_company_with_one_bank_is_selected_without_identity(self):
+        self.entreprise.banque = "BNA"
+        self.entreprise.numero_compte = "11112222"
+        self.entreprise.rib = "001111222233"
+        self.entreprise.save(update_fields=["banque", "numero_compte", "rib"])
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "missing")
+        self.assertIsNone(result["bank"]["bank_account"])
+        self.assertEqual(result["bank"]["bank_name"], "BNA")
+
+    def test_legacy_only_company_with_two_banks_matches_second_by_rib(self):
+        self.entreprise.banque = "BNA"
+        self.entreprise.numero_compte = "11112222"
+        self.entreprise.rib = "001111222233"
+        self.entreprise.banque2 = "CPA"
+        self.entreprise.numero_compte2 = "33334444"
+        self.entreprise.rib2 = "003333444455"
+        self.entreprise.save(update_fields=[
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ])
+
+        result = resolve_statement_bank(self.entreprise, {"rib": "003333444455"})
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_name"], "CPA")
+        self.assertIsNone(result["bank"]["bank_account"])
+
+    def test_migrated_legacy_banks_are_not_duplicated_as_candidates(self):
+        self.set_legacy_banks(
+            ("BNA", "11112222", "001111222233"),
+            ("CPA", "33334444", "003333444455"),
+        )
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+        self.assertTrue(all(
+            candidate["bank_account"] is not None
+            for candidate in result["candidates"]
+        ))
+
+    def test_migrated_bank_with_missing_legacy_rib_is_deduplicated(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(("BNA", "11112222", ""))
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "missing")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_migrated_bank_with_missing_legacy_account_number_is_deduplicated(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(("BNA", "", "001111222233"))
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "missing")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+
+    def test_deduplicated_candidate_keeps_legacy_bank_name_when_model_name_is_blank(self):
+        bank = self.add_bank("", "11112222", "001111222233")
+        self.set_legacy_banks(("BNA", "11112222", "001111222233"))
+
+        result = resolve_statement_bank(
+            self.entreprise, {"numero_compte": "11112222"}
+        )
+
+        self.assertEqual(result["status"], "matched")
+        self.assertEqual(result["bank"]["bank_account"], bank)
+        self.assertEqual(result["bank"]["bank_name"], "BNA")
+
+    def test_conflicting_account_numbers_prevent_deduplication(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(("BNA", "99999999", "001111222233"))
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+
+    def test_conflicting_ribs_prevent_deduplication(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(("BNA", "11112222", "009999999999"))
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+
+    def test_same_bank_name_with_different_accounts_is_not_deduplicated(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(("BNA", "33334444", "003333444455"))
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+
+    def test_conflicting_bank_names_prevent_deduplication(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(("CPA", "11112222", "001111222233"))
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+
+    def test_one_bank_account_cannot_represent_both_legacy_slots(self):
+        bank = self.add_bank("BNA", "11112222", "001111222233")
+        slot = ("BNA", "11112222", "001111222233")
+        self.set_legacy_banks(slot, slot)
+
+        result = resolve_statement_bank(self.entreprise, {})
+
+        self.assertEqual(result["status"], "ambiguous")
+        self.assertEqual(len(result["candidates"]), 2)
+        self.assertEqual(
+            sum(candidate["bank_account"] == bank for candidate in result["candidates"]),
+            1,
+        )
+        self.assertEqual(
+            sum(candidate["bank_account"] is None for candidate in result["candidates"]),
+            1,
+        )
+
+    def test_company_without_configured_banks_returns_no_banks(self):
+        result = resolve_statement_bank(self.entreprise, {"nom_banque": "BNA"})
+
+        self.assertEqual(result["status"], "no_banks")
+        self.assertIsNone(result["bank"])
+        self.assertEqual(result["candidates"], [])
 
 
 class BankStatementTestCase(APITestCase):
@@ -45,6 +431,81 @@ class BankStatementTestCase(APITestCase):
             is_active=True
         )
         self.client.force_authenticate(user=self.user)
+
+    def _create_bank_account(self, bank_name, account_number, rib):
+        index = self.entreprise.bank_accounts.count() + 1
+        scf_account = SCFAccount.objects.create(
+            entreprise=self.entreprise,
+            numero_compte=f"5129{index:02d}",
+            libelle=f"BANQUE {bank_name}",
+            classe=5,
+        )
+        return BankAccount.objects.create(
+            entreprise=self.entreprise,
+            bank_name=bank_name,
+            account_number=account_number,
+            rib=rib,
+            scf_account=scf_account,
+        )
+
+    def _clear_legacy_banks(self):
+        self.entreprise.banque = ""
+        self.entreprise.numero_compte = ""
+        self.entreprise.rib = ""
+        self.entreprise.banque2 = ""
+        self.entreprise.numero_compte2 = ""
+        self.entreprise.rib2 = ""
+        self.entreprise.save(update_fields=[
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ])
+
+    def _upload_statement(self, webhook_data):
+        with patch("core.views.call_webhook", return_value=webhook_data):
+            return self.client.post(
+                f"/api/entreprises/{self.entreprise.id}/releves-bancaires/upload/",
+                {"file": SimpleUploadedFile(
+                    "releve.jpg", b"image", content_type="image/jpeg"
+                )},
+                format="multipart",
+            )
+
+    @staticmethod
+    def _statement_webhook_data(**identity):
+        return {
+            "journal": "Banque",
+            "lignes": [{
+                "date": "01/02/2026",
+                "libelle": "Frais bancaires",
+                "sens": "credit",
+                "montant": 10,
+            }],
+            **identity,
+        }
+
+    def test_upload_uses_legacy_scf_account_without_bankaccount_record(self):
+        scf_account = self.bank.scf_account
+        self.entreprise.bank_accounts.all().delete()
+        self.entreprise.banque = "BNA"
+        self.entreprise.numero_compte = "002000123456789"
+        self.entreprise.rib = "00200012345678901234"
+        self.entreprise.save(update_fields=["banque", "numero_compte", "rib"])
+
+        response = self._upload_statement(self._statement_webhook_data(
+            numero_compte_bancaire=self.entreprise.numero_compte,
+            nom_entreprise=self.entreprise.nom,
+        ))
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertNotIn("id", response.data["compte_bancaire"])
+        self.assertEqual(
+            response.data["compte_bancaire"]["numero_compte"],
+            scf_account.numero_compte,
+        )
+        self.assertEqual(
+            response.data["ecritures_preview"][0]["compte_credit"],
+            scf_account.numero_compte,
+        )
 
     def test_bank_account_mismatch_raises_error(self):
         data = {
@@ -74,11 +535,12 @@ class BankStatementTestCase(APITestCase):
             (data["nom_banque"], data["nom_entreprise"].strip()),
         )
 
-    def test_identity_validation_rejects_missing_fields(self):
+    def test_identity_validation_rejects_missing_bank_identity_even_for_one_bank(self):
+        data = {"nom_entreprise": self.entreprise.nom}
         with self.assertRaises(BankStatementError) as ctx:
-            validate_statement_identity(self.entreprise, {})
-        self.assertIn("nom de la banque n'a pas pu être extrait", str(ctx.exception))
-        self.assertIn("nom de l'entreprise n'a pas pu être extrait", str(ctx.exception))
+            validate_statement_identity(self.entreprise, data)
+        self.assertNotIn("nom_banque", data)
+        self.assertIn("identité bancaire est absente", str(ctx.exception))
 
     def test_identity_validation_accepts_second_registered_bank(self):
         make_bank(self.entreprise, "CPA")
@@ -122,6 +584,110 @@ class BankStatementTestCase(APITestCase):
             )
         self.assertEqual(request.status_code, 400)
         self.assertIn("nom de la banque n'a pas pu être extrait", request.data["error"])
+
+    def test_upload_accepts_bank_account_only_company_with_extracted_identity(self):
+        self._clear_legacy_banks()
+        bank = self._create_bank_account("CPA", "CPA-12345", "CPA-RIB-12345")
+
+        response = self._upload_statement(self._statement_webhook_data(
+            nom_banque=bank.bank_name,
+            nom_entreprise=self.entreprise.nom,
+        ))
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["nom_banque"], bank.bank_name)
+
+    def test_upload_matches_by_bank_name(self):
+        response = self._upload_statement(
+            self._statement_webhook_data(
+                nom_banque="BNA", nom_entreprise=self.entreprise.nom
+            )
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["nom_banque"], "BNA")
+
+    def test_upload_matches_by_account_number(self):
+        self._clear_legacy_banks()
+        self._create_bank_account("BNA", "BNA-12345", "BNA-RIB-12345")
+        second = self._create_bank_account("CPA", "CPA-12345", "CPA-RIB-12345")
+
+        response = self._upload_statement(
+            self._statement_webhook_data(
+                nom_entreprise=self.entreprise.nom,
+                numero_compte_bancaire=second.account_number,
+            )
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["nom_banque"], second.bank_name)
+        self.assertEqual(response.data["compte_bancaire"]["id"], second.id)
+        self.assertEqual(
+            response.data["compte_bancaire"]["numero_compte"],
+            second.scf_account.numero_compte,
+        )
+
+    def test_upload_matches_by_rib(self):
+        self._clear_legacy_banks()
+        self._create_bank_account("BNA", "BNA-12345", "BNA-RIB-12345")
+        second = self._create_bank_account("CPA", "CPA-12345", "CPA-RIB-12345")
+
+        response = self._upload_statement(
+            self._statement_webhook_data(
+                nom_banque=second.bank_name,
+                nom_entreprise=self.entreprise.nom,
+                rib=second.rib,
+            )
+        )
+
+        self.assertEqual(response.status_code, 200, response.data)
+        self.assertEqual(response.data["data"]["nom_banque"], second.bank_name)
+
+    def test_upload_rejects_missing_bank_name_when_multiple_banks_are_configured(self):
+        self._create_bank_account("CPA", "CPA-12345", "CPA-RIB-12345")
+
+        response = self._upload_statement(self._statement_webhook_data())
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("nom de la banque n'a pas pu être extrait", response.data["error"])
+
+    def test_upload_rejects_conflicting_identifiers(self):
+        self._clear_legacy_banks()
+        self._create_bank_account("BNA", "BNA-12345", "BNA-RIB-12345")
+        second = self._create_bank_account("CPA", "CPA-12345", "CPA-RIB-12345")
+
+        response = self._upload_statement(self._statement_webhook_data(
+            nom_banque="BNA",
+            nom_entreprise=self.entreprise.nom,
+            numero_compte_bancaire=second.account_number,
+        ))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("identifient des banques différentes", response.data["error"])
+        self.assertIn("numéro de compte du relevé ne correspond", response.data["error"])
+
+    def test_upload_rejects_unknown_bank(self):
+        response = self._upload_statement(
+            self._statement_webhook_data(
+                nom_banque="CPA", nom_entreprise=self.entreprise.nom
+            )
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("ne correspond pas au nom de la banque", response.data["error"])
+
+    def test_upload_rejects_company_without_configured_banks(self):
+        self._clear_legacy_banks()
+        self.entreprise.bank_accounts.all().delete()
+
+        response = self._upload_statement(
+            self._statement_webhook_data(
+                nom_banque="BNA", nom_entreprise=self.entreprise.nom
+            )
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Aucune banque n'est enregistrée", response.data["error"])
 
     def test_duplicate_sort_chq_raises_error(self):
         """Pour SORT CHQ: Vérifier qu'une opération identique (date, ref, label, montant) est rejetée."""
@@ -888,18 +1454,12 @@ class BankStatementBankMatchingTests(APITestCase):
         self.assertEqual(Ecriture.objects.count(), 0)
         self.assertEqual(BankStatement.objects.count(), 0)
 
-    def test_missing_bank_name_is_never_filled_from_the_company_profile(self):
+    def test_missing_bank_name_is_resolved_from_unique_account_identity(self):
         payload = self.statement()
         del payload["nom_banque"]
-        with self.assertRaises(BankStatementError) as ctx:
-            _import_bank_statement(self.entreprise, payload)
-        self.assertIn("nom de la banque n'a pas pu être extrait", str(ctx.exception))
-        self.assertEqual(Ecriture.objects.count(), 0)
-
-        payload["nom_banque"] = ""
-        with self.assertRaises(BankStatementError):
-            _import_bank_statement(self.entreprise, payload)
-        self.assertEqual(Ecriture.objects.count(), 0)
+        entries = _import_bank_statement(self.entreprise, payload)
+        self.assertEqual(self.bank_side_account(entries[0]), self.abc.scf_account.numero_compte)
+        self.assertEqual(Ecriture.objects.count(), 1)
 
     def test_ai_rejection_is_reported_with_its_reason(self):
         payload = self.statement(statut="rejete", motif="Banque ABR ne correspond pas à ABC, XYZ", lignes=[])

@@ -21,9 +21,14 @@ from .models import BankAccount, BankStatement, BankStatementSubmission, ClientA
 from .account_helpers import apply_scf_subaccounts
 from .bank_test_utils import make_bank
 from .reports import build_balance, build_grand_livre
-from .scanner import persist_extraction, upload_invoice_image
-from .bank_statements import BankStatementError
-from .serializers import FactureSerializer
+from .scanner import (
+    WebhookError,
+    persist_bank_statement,
+    persist_extraction,
+    upload_invoice_image,
+)
+from .bank_statements import BankStatementError, resolve_statement_bank
+from .serializers import EntrepriseSerializer, FactureSerializer
 from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES, MAX_MESSAGE_ATTACHMENT_BYTES
 
 
@@ -228,13 +233,85 @@ class CompanyBankAccountAPITests(APITestCase):
             SCFAccount.objects.get(pk=bank["scf_account"]["id"]).libelle,
             "BANQUE Renamed bank",
         )
-        # A later company save must not write the old label back.
         self.client.put(
-            f"{self.list_url}{created.data['id']}/", {"nom": "Rename bank 2"}, format="json"
+            f"{self.list_url}{created.data['id']}/",
+            {"nom": "Rename bank 2"},
+            format="json",
         )
         self.assertEqual(
             SCFAccount.objects.get(pk=bank["scf_account"]["id"]).libelle,
             "BANQUE Renamed bank",
+        )
+
+    def create_bank_entry(self, entreprise, account_number, piece):
+        exercice, _ = ExerciceAnnee.objects.get_or_create(
+            entreprise=entreprise,
+            annee=2026,
+            defaults={"is_active": True},
+        )
+        journal, _ = Journal.objects.get_or_create(
+            entreprise=entreprise,
+            annee=exercice,
+            type_journal=Journal.Type.BANQUE,
+        )
+        entry = Ecriture.objects.create(
+            journal=journal,
+            date_ecriture=date(2026, 1, 1),
+            numero_piece=piece,
+        )
+        bank_line = LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte=account_number,
+            libelle=f"{piece} bank line",
+            montant_debit=10,
+        )
+        LigneEcriture.objects.create(
+            ecriture=entry,
+            numero_compte="581000",
+            libelle=f"{piece} counterpart",
+            montant_credit=10,
+        )
+        return entry, bank_line
+
+    def create_legacy_mapped_banks(self, name):
+        response = self.client.post(
+            self.list_url,
+            self.company_payload(
+                name,
+                banque="BNA",
+                numero_compte="1234567890",
+                rib="1111111111111111111111",
+                banque2="CPA",
+                numero_compte2="4567890123",
+                rib2="2222222222222222222222",
+                bank_accounts=[
+                    {
+                        "bank_name": "BNA",
+                        "account_number": "1234567890",
+                        "rib": "1111111111111111111111",
+                    },
+                    {
+                        "bank_name": "CPA",
+                        "account_number": "4567890123",
+                        "rib": "2222222222222222222222",
+                    },
+                ],
+            ),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        entreprise = Entreprise.objects.get(pk=response.data["id"])
+        first = entreprise.bank_accounts.get(
+            scf_account__numero_compte="512001"
+        )
+        second = entreprise.bank_accounts.get(
+            scf_account__numero_compte="512002"
+        )
+        return entreprise, first, second
+
+    def test_company_api_returns_empty_bank_list_when_company_has_no_banks(self):
+        response = self.client.post(
+            self.list_url, self.company_payload("No bank company"), format="json"
         )
 
     def test_legacy_bank_columns_are_read_only_mirrors_of_the_first_two_banks(self):
@@ -370,6 +447,805 @@ class CompanyBankAccountAPITests(APITestCase):
             ),
             ("581000", 0, 10),
         )
+
+    def test_updating_first_bank_account_number_syncs_legacy_field(self):
+        entreprise, first, _ = self.create_legacy_mapped_banks(
+            "Update first bank account number"
+        )
+        scf_number = first.scf_account.numero_compte
+        entry, bank_line = self.create_bank_entry(
+            entreprise, scf_number, "FIRST-BANK-ID-BEFORE-UPDATE"
+        )
+        original_lines = list(
+            entry.lignes.order_by("id").values(
+                "numero_compte", "libelle", "montant_debit", "montant_credit"
+            )
+        )
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "numero_compte": entreprise.numero_compte,
+                "bank_accounts": [{
+                    "id": first.id,
+                    "account_number": "9876543210",
+                }],
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        self.assertEqual(entreprise.numero_compte, "9876543210")
+        self.assertEqual(first.account_number, "9876543210")
+        self.assertEqual(first.rib, "1111111111111111111111")
+        self.assertEqual(first.scf_account.numero_compte, scf_number)
+        entry.refresh_from_db()
+        bank_line.refresh_from_db()
+        self.assertEqual(
+            list(entry.lignes.order_by("id").values(
+                "numero_compte", "libelle", "montant_debit", "montant_credit"
+            )),
+            original_lines,
+        )
+        self.assertEqual(bank_line.numero_compte, scf_number)
+
+    def test_updating_first_bank_rib_syncs_legacy_field(self):
+        entreprise, first, _ = self.create_legacy_mapped_banks(
+            "Update first bank RIB"
+        )
+        scf_number = first.scf_account.numero_compte
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "rib": entreprise.rib,
+                "bank_accounts": [{
+                    "id": first.id,
+                    "rib": "9999999999999999999999",
+                }],
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        self.assertEqual(entreprise.rib, "9999999999999999999999")
+        self.assertEqual(first.rib, "9999999999999999999999")
+        self.assertEqual(first.account_number, "1234567890")
+        self.assertEqual(first.scf_account.numero_compte, scf_number)
+
+    def test_updating_second_bank_identifiers_syncs_legacy_fields(self):
+        entreprise, first, second = self.create_legacy_mapped_banks(
+            "Update second bank identifiers"
+        )
+        first_values = (first.account_number, first.rib)
+        scf_number = second.scf_account.numero_compte
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "numero_compte2": entreprise.numero_compte2,
+                "rib2": entreprise.rib2,
+                "bank_accounts": [{
+                    "id": second.id,
+                    "account_number": "9999999999",
+                    "rib": "8888888888888888888888",
+                }],
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(entreprise.numero_compte2, "9999999999")
+        self.assertEqual(entreprise.rib2, "8888888888888888888888")
+        self.assertEqual(
+            (second.account_number, second.rib),
+            ("9999999999", "8888888888888888888888"),
+        )
+        self.assertEqual((first.account_number, first.rib), first_values)
+        self.assertEqual(second.scf_account.numero_compte, scf_number)
+
+    def test_legacy_bank_fields_are_read_only_when_updating_linked_banks(self):
+        entreprise, first, second = self.create_legacy_mapped_banks(
+            "Update legacy bank identifiers"
+        )
+        original_first = (first.bank_name, first.account_number, first.rib)
+        original_second = (second.bank_name, second.account_number, second.rib)
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "banque": "BNA Updated",
+                "numero_compte": "1111111111",
+                "rib": "3333333333333333333333",
+                "banque2": "CPA Updated",
+                "numero_compte2": "2222222222",
+                "rib2": "4444444444444444444444",
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertEqual(
+            (first.bank_name, first.account_number, first.rib),
+            original_first,
+        )
+        self.assertEqual(
+            (second.bank_name, second.account_number, second.rib),
+            original_second,
+        )
+        self.assertEqual(
+            (
+                entreprise.banque, entreprise.numero_compte, entreprise.rib,
+                entreprise.banque2, entreprise.numero_compte2, entreprise.rib2,
+            ),
+            (
+                *original_first, *original_second,
+            ),
+        )
+
+    def test_legacy_only_bank_updates_are_ignored(self):
+        created = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Legacy-only identifier update",
+                banque="BNA",
+                numero_compte="1234567890",
+                rib="1111111111111111111111",
+            ),
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        entreprise = Entreprise.objects.get(pk=created.data["id"])
+        first = entreprise.bank_accounts.order_by("id").first()
+        original = (first.bank_name, first.account_number, first.rib)
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "banque": "BNA Updated",
+                "numero_compte": "9876543210",
+                "rib": "9999999999999999999999",
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        self.assertEqual((first.bank_name, first.account_number, first.rib), original)
+        self.assertEqual(
+            (entreprise.banque, entreprise.numero_compte, entreprise.rib), original
+        )
+
+    def test_combined_bank_name_and_identifiers_update_uses_original_values(self):
+        entreprise, first, _ = self.create_legacy_mapped_banks(
+            "Combined bank identifier update"
+        )
+        scf_number = first.scf_account.numero_compte
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "banque": entreprise.banque,
+                "numero_compte": entreprise.numero_compte,
+                "rib": entreprise.rib,
+                "bank_accounts": [{
+                    "id": first.id,
+                    "bank_name": "BNA Updated",
+                    "account_number": "9999999999",
+                    "rib": "8888888888888888888888",
+                }],
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        first.scf_account.refresh_from_db()
+        self.assertEqual(
+            (entreprise.banque, entreprise.numero_compte, entreprise.rib),
+            ("BNA Updated", "9999999999", "8888888888888888888888"),
+        )
+        self.assertEqual(
+            (first.bank_name, first.account_number, first.rib),
+            ("BNA Updated", "9999999999", "8888888888888888888888"),
+        )
+        self.assertEqual(first.scf_account.libelle, "BANQUE BNA Updated")
+        self.assertEqual(first.scf_account.numero_compte, scf_number)
+
+    def test_bank_synchronization_failure_rolls_back_company_and_bank_updates(self):
+        entreprise, first, _ = self.create_legacy_mapped_banks(
+            "Bank synchronization rollback"
+        )
+        original_company_name = entreprise.nom
+        original_bank_name = first.bank_name
+        first.scf_account.refresh_from_db()
+        original_scf_label = first.scf_account.libelle
+        original_save_bank_accounts = EntrepriseSerializer._save_bank_accounts
+        updated_company_name = "Must roll back"
+        updated_bank_name = "BNA Must Roll Back"
+
+        def save_then_fail(serializer, updated_entreprise, bank_accounts):
+            updated_entreprise.refresh_from_db()
+            self.assertEqual(updated_entreprise.nom, updated_company_name)
+            original_save_bank_accounts(
+                serializer, updated_entreprise, bank_accounts
+            )
+            updated_entreprise.refresh_from_db()
+            updated_bank = updated_entreprise.bank_accounts.get(pk=first.pk)
+            updated_scf_account = updated_bank.scf_account
+            updated_scf_account.refresh_from_db()
+            self.assertEqual(updated_bank.bank_name, updated_bank_name)
+            self.assertEqual(
+                updated_scf_account.libelle,
+                f"BANQUE {updated_bank_name}",
+            )
+            raise RuntimeError("forced failure after bank synchronization")
+
+        with patch.object(
+            EntrepriseSerializer,
+            "_save_bank_accounts",
+            autospec=True,
+            side_effect=save_then_fail,
+        ) as save_mock:
+            with self.assertRaisesRegex(
+                RuntimeError, "forced failure after bank synchronization"
+            ):
+                self.client.put(
+                    f"{self.list_url}{entreprise.id}/",
+                    {
+                        "nom": updated_company_name,
+                        "bank_accounts": [{
+                            "id": first.id,
+                            "bank_name": updated_bank_name,
+                        }],
+                    },
+                    format="json",
+                )
+
+        save_mock.assert_called_once()
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        first.scf_account.refresh_from_db()
+        self.assertEqual(entreprise.nom, original_company_name)
+        self.assertEqual(first.bank_name, original_bank_name)
+        self.assertEqual(first.scf_account.libelle, original_scf_label)
+
+    def test_bank_account_update_is_authoritative_over_legacy_input(self):
+        entreprise, first, _ = self.create_legacy_mapped_banks(
+            "Conflicting simultaneous bank update"
+        )
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {
+                "nom": "Must not persist",
+                "numero_compte": "1111111111",
+                "bank_accounts": [{
+                    "id": first.id,
+                    "account_number": "2222222222",
+                }],
+            },
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        self.assertEqual(entreprise.nom, "Must not persist")
+        self.assertEqual(first.account_number, "2222222222")
+        self.assertEqual(entreprise.numero_compte, "2222222222")
+
+    def test_existing_identifier_mismatch_is_not_overwritten(self):
+        entreprise, first, _ = self.create_legacy_mapped_banks(
+            "Existing bank identifier mismatch"
+        )
+        entreprise.numero_compte = "0000000000"
+        entreprise.save(update_fields=["numero_compte"])
+        original_legacy = (
+            entreprise.banque, entreprise.numero_compte, entreprise.rib
+        )
+        original_relation = (
+            first.bank_name, first.account_number, first.rib
+        )
+        original_scf_label = first.scf_account.libelle
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {"bank_accounts": [{
+                "id": first.id,
+                "account_number": "9999999999",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("historique ne correspond pas", str(updated.data))
+        entreprise.refresh_from_db()
+        first.refresh_from_db()
+        first.scf_account.refresh_from_db()
+        self.assertEqual(
+            (entreprise.banque, entreprise.numero_compte, entreprise.rib),
+            original_legacy,
+        )
+        self.assertEqual(
+            (first.bank_name, first.account_number, first.rib),
+            original_relation,
+        )
+        self.assertEqual(first.scf_account.libelle, original_scf_label)
+
+    def test_identifiers_that_exceed_legacy_limits_are_rejected_atomically(self):
+        for relation_field, legacy_field, value in (
+            ("account_number", "numero_compte", "12345678901"),
+            ("rib", "rib", "1" * 23),
+        ):
+            with self.subTest(relation_field=relation_field):
+                entreprise, first, _ = self.create_legacy_mapped_banks(
+                    f"Overlength {relation_field}"
+                )
+                original_legacy_value = getattr(entreprise, legacy_field)
+                original_relation_value = getattr(first, relation_field)
+
+                updated = self.client.put(
+                    f"{self.list_url}{entreprise.id}/",
+                    {"bank_accounts": [{
+                        "id": first.id,
+                        relation_field: value,
+                    }]},
+                    format="json",
+                )
+
+                self.assertEqual(updated.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(
+                    "max 10" if relation_field == "account_number" else "max 22",
+                    str(updated.data),
+                )
+                entreprise.refresh_from_db()
+                first.refresh_from_db()
+                self.assertEqual(
+                    getattr(entreprise, legacy_field), original_legacy_value
+                )
+                self.assertEqual(
+                    getattr(first, relation_field), original_relation_value
+                )
+
+    def test_third_bank_identifier_updates_leave_legacy_slots_unchanged(self):
+        response = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Third bank identifier update",
+                banque="BNA",
+                numero_compte="1234567890",
+                rib="1111111111111111111111",
+                banque2="CPA",
+                numero_compte2="4567890123",
+                rib2="2222222222222222222222",
+                bank_accounts=[
+                    {
+                        "bank_name": "BNA",
+                        "account_number": "1234567890",
+                        "rib": "1111111111111111111111",
+                    },
+                    {
+                        "bank_name": "CPA",
+                        "account_number": "4567890123",
+                        "rib": "2222222222222222222222",
+                    },
+                    {
+                        "bank_name": "BEA",
+                        "account_number": "3333333333",
+                        "rib": "3333333333333333333333",
+                    },
+                ],
+            ),
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        entreprise = Entreprise.objects.get(pk=response.data["id"])
+        third = entreprise.bank_accounts.get(
+            scf_account__numero_compte="512003"
+        )
+        original_legacy = (
+            entreprise.banque, entreprise.numero_compte, entreprise.rib,
+            entreprise.banque2, entreprise.numero_compte2, entreprise.rib2,
+        )
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {"bank_accounts": [{
+                "id": third.id,
+                "account_number": "4444444444",
+                "rib": "4444444444444444444444",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        third.refresh_from_db()
+        self.assertEqual(
+            (third.account_number, third.rib),
+            ("4444444444", "4444444444444444444444"),
+        )
+        self.assertEqual(
+            (
+                entreprise.banque, entreprise.numero_compte, entreprise.rib,
+                entreprise.banque2, entreprise.numero_compte2, entreprise.rib2,
+            ),
+            original_legacy,
+        )
+
+    def test_renaming_first_bank_syncs_label_without_changing_accounting_history(self):
+        created = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Rename first bank",
+                banque="BNA",
+                numero_compte="123",
+                rib="111",
+                banque2="CPA",
+                numero_compte2="456",
+                rib2="222",
+                bank_accounts=[{
+                    "bank_name": "BNA",
+                    "account_number": "123",
+                    "rib": "111",
+                }, {
+                    "bank_name": "CPA",
+                    "account_number": "456",
+                    "rib": "222",
+                }],
+            ),
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        entreprise = Entreprise.objects.get(pk=created.data["id"])
+        bank_data = created.data["bank_accounts"][0]
+        bank_account = entreprise.bank_accounts.get(pk=bank_data["id"])
+        scf_number = bank_account.scf_account.numero_compte
+        entry, bank_line = self.create_bank_entry(
+            entreprise, scf_number, "FIRST-BANK-BEFORE-RENAME"
+        )
+        original_lines = list(
+            entry.lignes.order_by("id").values(
+                "numero_compte",
+                "libelle",
+                "montant_debit",
+                "montant_credit",
+            )
+        )
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {"bank_accounts": [{
+                "id": bank_account.id,
+                "bank_name": "BNA Updated",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        bank_account.refresh_from_db()
+        bank_account.scf_account.refresh_from_db()
+        self.assertEqual(bank_account.bank_name, "BNA Updated")
+        self.assertEqual(bank_account.scf_account.numero_compte, scf_number)
+        self.assertEqual(bank_account.scf_account.libelle, "BANQUE BNA Updated")
+        self.assertEqual((bank_account.account_number, bank_account.rib), ("123", "111"))
+
+        entreprise.refresh_from_db()
+        self.assertEqual(entreprise.banque, "BNA Updated")
+        self.assertEqual(entreprise.banque2, "CPA")
+        self.assertEqual(
+            (entreprise.numero_compte, entreprise.rib,
+             entreprise.numero_compte2, entreprise.rib2),
+            ("123", "111", "456", "222"),
+        )
+        resolution = resolve_statement_bank(entreprise, {
+            "nom_banque": "BNA Updated",
+            "numero_compte": "123",
+        })
+        self.assertEqual(resolution["status"], "matched")
+        self.assertEqual(
+            resolution["bank"]["bank_account"].pk,
+            bank_account.pk,
+        )
+
+        entry.refresh_from_db()
+        bank_line.refresh_from_db()
+        self.assertEqual(
+            list(entry.lignes.order_by("id").values(
+                "numero_compte",
+                "libelle",
+                "montant_debit",
+                "montant_credit",
+            )),
+            original_lines,
+        )
+        self.assertEqual(bank_line.numero_compte, scf_number)
+
+        entreprise.telephone = "0550000000"
+        entreprise.save(update_fields=["telephone"])
+        bank_account.scf_account.refresh_from_db()
+        self.assertEqual(bank_account.scf_account.libelle, "BANQUE BNA Updated")
+
+        self.create_bank_entry(entreprise, scf_number, "FIRST-BANK-AFTER-RENAME")
+        bank_account.scf_account.refresh_from_db()
+        self.assertEqual(bank_account.scf_account.libelle, "BANQUE BNA Updated")
+
+    def test_renaming_second_bank_syncs_legacy_name_and_statement_resolution(self):
+        created = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Rename second bank",
+                banque="BNA",
+                numero_compte="123",
+                rib="111",
+                banque2="CPA",
+                numero_compte2="456",
+                rib2="222",
+                bank_accounts=[{
+                    "bank_name": "BNA",
+                    "account_number": "123",
+                    "rib": "111",
+                }, {
+                    "bank_name": "CPA",
+                    "account_number": "456",
+                    "rib": "222",
+                }],
+            ),
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        entreprise = Entreprise.objects.get(pk=created.data["id"])
+        second_bank_data = created.data["bank_accounts"][1]
+        second_bank = entreprise.bank_accounts.get(pk=second_bank_data["id"])
+        scf_number = second_bank.scf_account.numero_compte
+        entry, bank_line = self.create_bank_entry(
+            entreprise, scf_number, "SECOND-BANK-BEFORE-RENAME"
+        )
+        original_lines = list(
+            entry.lignes.order_by("id").values(
+                "numero_compte",
+                "libelle",
+                "montant_debit",
+                "montant_credit",
+            )
+        )
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {"bank_accounts": [{
+                "id": second_bank.id,
+                "bank_name": "CPA Updated",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        second_bank.refresh_from_db()
+        second_bank.scf_account.refresh_from_db()
+        self.assertEqual(second_bank.bank_name, "CPA Updated")
+        self.assertEqual(second_bank.scf_account.numero_compte, scf_number)
+        self.assertEqual(second_bank.scf_account.libelle, "BANQUE CPA Updated")
+        self.assertEqual(
+            (second_bank.account_number, second_bank.rib),
+            ("456", "222"),
+        )
+
+        entreprise.refresh_from_db()
+        self.assertEqual(entreprise.banque, "BNA")
+        self.assertEqual(entreprise.banque2, "CPA Updated")
+        self.assertEqual(
+            (entreprise.numero_compte, entreprise.rib,
+             entreprise.numero_compte2, entreprise.rib2),
+            ("123", "111", "456", "222"),
+        )
+        resolution = resolve_statement_bank(entreprise, {
+            "nom_banque": "CPA Updated",
+            "rib": "222",
+        })
+        self.assertEqual(resolution["status"], "matched")
+        self.assertEqual(
+            resolution["bank"]["bank_account"].pk,
+            second_bank.pk,
+        )
+
+        entry.refresh_from_db()
+        bank_line.refresh_from_db()
+        self.assertEqual(
+            list(entry.lignes.order_by("id").values(
+                "numero_compte",
+                "libelle",
+                "montant_debit",
+                "montant_credit",
+            )),
+            original_lines,
+        )
+        self.assertEqual(bank_line.numero_compte, scf_number)
+
+    def test_renaming_bank_rejects_conflicting_legacy_identifiers_atomically(self):
+        for field, conflicting_value in (
+            ("numero_compte", "different-account"),
+            ("rib", "different-rib"),
+        ):
+            with self.subTest(field=field):
+                created = self.client.post(
+                    self.list_url,
+                    self.company_payload(
+                        f"Conflicting legacy {field}",
+                        banque="BNA",
+                        numero_compte="123",
+                        rib="111",
+                        bank_accounts=[{
+                            "bank_name": "BNA",
+                            "account_number": "123",
+                            "rib": "111",
+                        }],
+                    ),
+                    format="json",
+                )
+                self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+                entreprise = Entreprise.objects.get(pk=created.data["id"])
+                bank_data = created.data["bank_accounts"][0]
+                bank_account = entreprise.bank_accounts.get(pk=bank_data["id"])
+                scf_account = bank_account.scf_account
+                setattr(entreprise, field, conflicting_value)
+                entreprise.save(update_fields=[field])
+                legacy_values = (
+                    entreprise.banque,
+                    entreprise.numero_compte,
+                    entreprise.rib,
+                    entreprise.banque2,
+                    entreprise.numero_compte2,
+                    entreprise.rib2,
+                )
+
+                updated = self.client.put(
+                    f"{self.list_url}{entreprise.id}/",
+                    {"bank_accounts": [{
+                        "id": bank_account.id,
+                        "bank_name": "BNA Updated",
+                    }]},
+                    format="json",
+                )
+
+                self.assertEqual(updated.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn("historique ne correspond pas", str(updated.data))
+                bank_account.refresh_from_db()
+                scf_account.refresh_from_db()
+                entreprise.refresh_from_db()
+                self.assertEqual(bank_account.bank_name, "BNA")
+                self.assertEqual(scf_account.libelle, "BANQUE BNA")
+                self.assertEqual(
+                    (
+                        entreprise.banque,
+                        entreprise.numero_compte,
+                        entreprise.rib,
+                        entreprise.banque2,
+                        entreprise.numero_compte2,
+                        entreprise.rib2,
+                    ),
+                    legacy_values,
+                )
+
+    def test_renaming_first_bank_syncs_legacy_name_when_identifiers_are_missing(self):
+        created = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Rename bank without legacy identifiers",
+                banque="BNA",
+                bank_accounts=[{"bank_name": "BNA"}],
+            ),
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        entreprise = Entreprise.objects.get(pk=created.data["id"])
+        bank_account = entreprise.bank_accounts.get(
+            pk=created.data["bank_accounts"][0]["id"]
+        )
+        self.assertEqual(bank_account.scf_account.numero_compte, "512001")
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {"bank_accounts": [{
+                "id": bank_account.id,
+                "bank_name": "BNA Updated",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        entreprise.refresh_from_db()
+        bank_account.refresh_from_db()
+        self.assertEqual(entreprise.banque, "BNA Updated")
+        self.assertEqual((entreprise.numero_compte, entreprise.rib), ("", ""))
+        self.assertEqual(bank_account.scf_account.numero_compte, "512001")
+
+    def test_renaming_third_bank_syncs_label_and_later_line_saves_keep_it(self):
+        created = self.client.post(
+            self.list_url,
+            self.company_payload(
+                "Rename third bank",
+                bank_accounts=[
+                    {"bank_name": "Bank One"},
+                    {"bank_name": "Bank Two"},
+                    {"bank_name": "Bank Three"},
+                ],
+            ),
+            format="json",
+        )
+        self.assertEqual(created.status_code, status.HTTP_201_CREATED)
+        entreprise = Entreprise.objects.get(pk=created.data["id"])
+        third_bank_data = created.data["bank_accounts"][2]
+        third_bank = entreprise.bank_accounts.get(pk=third_bank_data["id"])
+        scf_number = third_bank.scf_account.numero_compte
+        self.assertEqual(scf_number, "512003")
+
+        updated = self.client.put(
+            f"{self.list_url}{entreprise.id}/",
+            {"bank_accounts": [{
+                "id": third_bank.id,
+                "bank_name": "Bank Three Updated",
+            }]},
+            format="json",
+        )
+
+        self.assertEqual(updated.status_code, status.HTTP_200_OK, updated.data)
+        third_bank.refresh_from_db()
+        third_bank.scf_account.refresh_from_db()
+        self.assertEqual(third_bank.bank_name, "Bank Three Updated")
+        self.assertEqual(third_bank.scf_account.numero_compte, scf_number)
+        self.assertEqual(third_bank.scf_account.libelle, "BANQUE Bank Three Updated")
+        entreprise.refresh_from_db()
+        self.assertEqual(
+            (entreprise.banque, entreprise.banque2),
+            ("Bank One", "Bank Two"),
+        )
+
+        self.create_bank_entry(entreprise, scf_number, "THIRD-BANK-AFTER-RENAME")
+        third_bank.scf_account.refresh_from_db()
+        self.assertEqual(
+            third_bank.scf_account.libelle,
+            "BANQUE Bank Three Updated",
+        )
+
+    def test_legacy_only_bank_labels_do_not_create_scf_bank_accounts(self):
+        SCFAccount.objects.create(
+            numero_compte="512001",
+            libelle="Banque globale 001",
+            classe=5,
+        )
+        entreprise = Entreprise.objects.create(
+            nom="Legacy bank labels",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            banque="BNA",
+            numero_compte="123",
+            banque2="CPA",
+            numero_compte2="456",
+            accountant=self.accountant,
+        )
+        self.assertFalse(entreprise.bank_accounts.exists())
+
+        entreprise.banque = "BNA Updated"
+        entreprise.banque2 = "CPA Updated"
+        entreprise.save(update_fields=["banque", "banque2"])
+
+        self.assertFalse(SCFAccount.objects.filter(entreprise=entreprise).exists())
+
+        self.create_bank_entry(entreprise, "512001", "LEGACY-BANK-LINE")
+        self.assertFalse(SCFAccount.objects.filter(entreprise=entreprise).exists())
 
     def test_entreprise_updates_preserve_bank_accounts_when_omitted(self):
         created = self.client.post(
@@ -639,6 +1515,9 @@ class BankStatementSubmissionAPITests(APITestCase):
             self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_submission_status_changes_only_after_owned_import_succeeds(self):
+        self.enterprise.banque = "BNA"
+        self.enterprise.numero_compte = "BNA-12345"
+        self.enterprise.save(update_fields=["banque", "numero_compte"])
         self.client.force_authenticate(self.client_user)
         uploaded = self.client.post(
             self.client_url, {"file": self.pdf_upload()}, format="multipart"
@@ -648,7 +1527,10 @@ class BankStatementSubmissionAPITests(APITestCase):
         import_url = f"/api/entreprises/{self.enterprise.id}/releves-bancaires/import/"
         body = {"submission_id": submission.id, "data": {"lignes": []}}
 
-        with patch("core.views.import_bank_statement", side_effect=BankStatementError("invalid")):
+        with patch(
+            "core.views.import_bank_statement",
+            side_effect=BankStatementError("invalid"),
+        ):
             failed = self.client.post(import_url, body, format="json")
         self.assertEqual(failed.status_code, status.HTTP_400_BAD_REQUEST)
         submission.refresh_from_db()
@@ -662,6 +1544,38 @@ class BankStatementSubmissionAPITests(APITestCase):
         self.assertEqual(importer.call_count, 1)
         submission.refresh_from_db()
         self.assertEqual(submission.status, BankStatementSubmission.Status.PROCESSED)
+
+    def test_invalid_confirmation_keeps_submission_pending_without_posting(self):
+        self.client.force_authenticate(self.client_user)
+        uploaded = self.client.post(
+            self.client_url, {"file": self.pdf_upload()}, format="multipart"
+        )
+        self.assertEqual(uploaded.status_code, status.HTTP_201_CREATED)
+        submission = BankStatementSubmission.objects.get(pk=uploaded.data["id"])
+
+        self.client.force_authenticate(self.accountant)
+        import_url = f"/api/entreprises/{self.enterprise.id}/releves-bancaires/import/"
+        response = self.client.post(import_url, {
+            "submission_id": submission.id,
+            "data": {
+                "nom_banque": "BNA",
+                "nom_entreprise": self.enterprise.nom,
+                "lignes": [{
+                    "date": "04/02/2026",
+                    "libelle": "Frais bancaires",
+                    "montant": 50,
+                    "sens": "debit",
+                    "compte_contrepartie": "627000",
+                }],
+            },
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Aucune banque n'est configurée", response.data["error"])
+        submission.refresh_from_db()
+        self.assertEqual(submission.status, BankStatementSubmission.Status.PENDING)
+        self.assertEqual(BankStatement.objects.count(), 0)
+        self.assertEqual(Ecriture.objects.count(), 0)
 
 
 class ReportAccountLabelTests(APITestCase):
@@ -1013,6 +1927,22 @@ class BankStatementImportTests(APITestCase):
         self.client.force_authenticate(user)
         self.url = f"/api/entreprises/{self.enterprise.id}/releves-bancaires/import/"
 
+    def _create_bank_account(self, bank_name, account_number, rib):
+        index = BankAccount.objects.filter(entreprise=self.enterprise).count() + 1
+        scf_account = SCFAccount.objects.create(
+            entreprise=self.enterprise,
+            numero_compte=f"5129{index:02d}",
+            libelle=f"BANQUE {bank_name}",
+            classe=5,
+        )
+        return BankAccount.objects.create(
+            entreprise=self.enterprise,
+            bank_name=bank_name,
+            account_number=account_number,
+            rib=rib,
+            scf_account=scf_account,
+        )
+
     def test_import_sorts_lines_and_creates_balanced_inverse_entries(self):
         response = self.client.post(self.url, {
             "nom_banque": "BNA",
@@ -1059,6 +1989,171 @@ class BankStatementImportTests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("nom de la banque n'a pas pu être extrait", response.data["error"])
+        self.assertEqual(BankStatement.objects.count(), 0)
+        self.assertEqual(Ecriture.objects.count(), 0)
+
+    def test_import_matches_second_legacy_bank(self):
+        self.enterprise.banque2 = "CPA"
+        self.enterprise.numero_compte2 = "CPA-12345"
+        self.enterprise.rib2 = "CPA-RIB-12345"
+        self.enterprise.save(update_fields=["banque2", "numero_compte2", "rib2"])
+        SCFAccount.objects.create(
+            entreprise=self.enterprise,
+            numero_compte="512002",
+            libelle="BANQUE CPA",
+            classe=5,
+        )
+
+        response = self.client.post(self.url, {
+            "nom_banque": "CPA",
+            "nom_entreprise": "ACME",
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(
+            BankStatement.objects.get(entreprise=self.enterprise).nom_banque,
+            "CPA",
+        )
+        self.assertIsNone(
+            BankStatement.objects.get(entreprise=self.enterprise).bank_account
+        )
+        bank_line = LigneEcriture.objects.filter(
+            ecriture__journal__entreprise=self.enterprise,
+            numero_compte="512002",
+        )
+        self.assertTrue(bank_line.exists())
+
+    def test_import_matches_third_bank_account_by_account_number(self):
+        self.enterprise.banque2 = "CPA"
+        self.enterprise.save(update_fields=["banque2"])
+        third = self._create_bank_account(
+            "Bank Three", "BANK-THREE-123", "BANK-THREE-RIB"
+        )
+
+        response = self.client.post(self.url, {
+            "numero_compte_bancaire": third.account_number,
+            "nom_entreprise": "ACME",
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        statement = BankStatement.objects.get(entreprise=self.enterprise)
+        self.assertEqual(statement.nom_banque, third.bank_name)
+
+    def test_import_matches_bank_account_only_company_by_rib(self):
+        self.enterprise.banque = ""
+        self.enterprise.numero_compte = ""
+        self.enterprise.rib = ""
+        self.enterprise.banque2 = ""
+        self.enterprise.numero_compte2 = ""
+        self.enterprise.rib2 = ""
+        self.enterprise.save(update_fields=[
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ])
+        self._create_bank_account("BNA", "BNA-12345", "BNA-RIB-12345")
+        selected = self._create_bank_account("CPA", "CPA-12345", "CPA-RIB-12345")
+
+        response = self.client.post(self.url, {
+            "rib": selected.rib,
+            "nom_entreprise": "ACME",
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        statement = BankStatement.objects.get(entreprise=self.enterprise)
+        self.assertEqual(statement.nom_banque, selected.bank_name)
+
+    def test_import_rejects_missing_identity_when_multiple_banks_are_configured(self):
+        self.enterprise.banque2 = "CPA"
+        self.enterprise.save(update_fields=["banque2"])
+
+        response = self.client.post(self.url, {
+            "nom_entreprise": "ACME",
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ambiguë", response.data["error"])
+        self.assertEqual(BankStatement.objects.count(), 0)
+        self.assertEqual(Ecriture.objects.count(), 0)
+
+    def test_import_rejects_conflicting_bank_identifiers_before_writes(self):
+        self.enterprise.banque2 = "CPA"
+        self.enterprise.numero_compte2 = "CPA-12345"
+        self.enterprise.rib2 = "CPA-RIB-12345"
+        self.enterprise.save(update_fields=["banque2", "numero_compte2", "rib2"])
+
+        response = self.client.post(self.url, {
+            "nom_banque": "BNA",
+            "numero_compte_bancaire": "CPA-12345",
+            "nom_entreprise": "ACME",
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("banques différentes", response.data["error"])
+        self.assertEqual(BankStatement.objects.count(), 0)
+        self.assertEqual(Ecriture.objects.count(), 0)
+
+    def test_import_rejects_confirmation_without_any_configured_bank(self):
+        self.enterprise.banque = ""
+        self.enterprise.numero_compte = ""
+        self.enterprise.rib = ""
+        self.enterprise.banque2 = ""
+        self.enterprise.numero_compte2 = ""
+        self.enterprise.rib2 = ""
+        self.enterprise.save(update_fields=[
+            "banque", "numero_compte", "rib",
+            "banque2", "numero_compte2", "rib2",
+        ])
+        self.enterprise.bank_accounts.all().delete()
+
+        response = self.client.post(self.url, {
+            "nom_banque": "BNA",
+            "nom_entreprise": "ACME",
+            "lignes": [{
+                "date": "04/02/2026",
+                "libelle": "Frais bancaires",
+                "montant": 50,
+                "sens": "debit",
+                "compte_contrepartie": "627000",
+            }],
+        }, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Aucune banque n'est configurée", response.data["error"])
         self.assertEqual(BankStatement.objects.count(), 0)
         self.assertEqual(Ecriture.objects.count(), 0)
 
@@ -1146,6 +2241,93 @@ class EcritureScfValidationTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         account = SCFAccount.objects.get(entreprise=self.enterprise, numero_compte="512001")
         self.assertEqual(account.libelle, "BANQUE BNA")
+
+    def test_explicit_first_bank_subaccount_prefers_linked_bank_name(self):
+        account = SCFAccount.objects.get(
+            entreprise=self.enterprise, numero_compte="512001"
+        )
+        BankAccount.objects.create(
+            entreprise=self.enterprise,
+            bank_name="CPA",
+            scf_account=account,
+        )
+
+        result = apply_scf_subaccounts(
+            self.enterprise, [{"compte": "512001", "libelle": "Virement"}]
+        )
+
+        account.refresh_from_db()
+        self.assertEqual(result[0]["compte"], "512001")
+        self.assertEqual(account.numero_compte, "512001")
+        self.assertEqual(account.libelle, "BANQUE CPA")
+
+    def test_explicit_second_bank_subaccount_prefers_linked_bank_name(self):
+        self.enterprise.banque2 = "Ancienne banque"
+        self.enterprise.save(update_fields=["banque2"])
+        account = SCFAccount.objects.get(
+            entreprise=self.enterprise, numero_compte="512002"
+        )
+        BankAccount.objects.create(
+            entreprise=self.enterprise,
+            bank_name="BEA",
+            scf_account=account,
+        )
+
+        result = apply_scf_subaccounts(
+            self.enterprise, [{"compte": "512002", "libelle": "Virement"}]
+        )
+
+        account.refresh_from_db()
+        self.assertEqual(result[0]["compte"], "512002")
+        self.assertEqual(account.numero_compte, "512002")
+        self.assertEqual(account.libelle, "BANQUE BEA")
+
+    def test_explicit_bank_subaccount_uses_legacy_name_when_linked_name_is_empty(self):
+        account = SCFAccount.objects.get(
+            entreprise=self.enterprise, numero_compte="512001"
+        )
+        account.libelle = "Ancien libelle"
+        account.save(update_fields=["libelle"])
+        BankAccount.objects.create(
+            entreprise=self.enterprise,
+            bank_name="",
+            scf_account=account,
+        )
+
+        result = apply_scf_subaccounts(
+            self.enterprise, [{"compte": "512001", "libelle": "Virement"}]
+        )
+
+        account.refresh_from_db()
+        self.assertEqual(result[0]["compte"], "512001")
+        self.assertEqual(account.numero_compte, "512001")
+        self.assertEqual(account.libelle, "BANQUE BNA")
+
+    def test_explicit_bank_subaccounts_keep_legacy_fallback_without_relations(self):
+        self.enterprise.banque2 = "CPA"
+        self.enterprise.save(update_fields=["banque2"])
+
+        result = apply_scf_subaccounts(
+            self.enterprise,
+            [
+                {"compte": "512001", "libelle": "Virement"},
+                {"compte": "512002", "libelle": "Virement"},
+            ],
+        )
+
+        self.assertEqual([line["compte"] for line in result], ["512001", "512002"])
+        self.assertEqual(
+            SCFAccount.objects.get(
+                entreprise=self.enterprise, numero_compte="512001"
+            ).libelle,
+            "BANQUE BNA",
+        )
+        self.assertEqual(
+            SCFAccount.objects.get(
+                entreprise=self.enterprise, numero_compte="512002"
+            ).libelle,
+            "BANQUE CPA",
+        )
 
     def test_scf_api_nests_dynamic_accounts_under_parent(self):
         Fournisseur.objects.create(
@@ -1318,6 +2500,321 @@ class EcritureScfValidationTests(APITestCase):
         self.assertIn(fournisseur.numero_compte, comptes)
         self.assertNotIn("401000", comptes)
         self.assertEqual(Ecriture.objects.count(), 0)
+
+    @patch("core.views.call_webhook")
+    def test_client_invoice_scan_uses_client_access_company_context(self, webhook):
+        self.enterprise.activite = "Commerce"
+        self.enterprise.activite2 = "Services"
+        self.enterprise.marchandise = "Produits"
+        self.enterprise.matiere_premiere = "Matiere"
+        self.enterprise.matieres_consommables = "Consommables"
+        self.enterprise.save(update_fields=[
+            "activite", "activite2", "marchandise",
+            "matiere_premiere", "matieres_consommables",
+        ])
+        client_user = get_user_model().objects.create_user(
+            username="scanner-invoice-client",
+            password="secret",
+            role="client",
+        )
+        ClientAccess.objects.create(
+            client=client_user,
+            entreprise=self.enterprise,
+            nom_client="Client du scanner",
+        )
+        self.client.force_authenticate(client_user)
+        webhook.return_value = {
+            "fournisseur": "Fournisseur A",
+            "date_facture": "01/01/2026",
+            "numero_facture": "FAC-CLIENT-1",
+            "montant_ht": 100,
+            "tva_pourcentage": 19,
+            "montant_tva": 19,
+            "montant_ttc": 119,
+            "journal": "Achats",
+            "confiance": 95,
+            "lignes": [
+                {"compte": "6011", "libelle": "Achats", "debit": 119, "credit": 0},
+                {"compte": "401000", "libelle": "Fournisseur A", "debit": 0, "credit": 119},
+            ],
+        }
+
+        response = self.client.post(
+            "/api/scanner/upload/",
+            {"file": SimpleUploadedFile(
+                "invoice.jpg", b"invoice image", content_type="image/jpeg"
+            )},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(
+            webhook.call_args.kwargs["context"],
+            {
+                "entreprise_nom": self.enterprise.nom,
+                "entreprise_nif": self.enterprise.nif,
+                "activite": "Commerce, Services",
+                "marchandise": "Produits",
+                "matiere_premiere": "Matiere",
+                "matieres_consommables": "Consommables",
+            },
+        )
+        self.assertEqual(response.data["data"]["numero_facture"], "FAC-CLIENT-1")
+        self.assertEqual(response.data["erreurs"], [])
+        self.assertEqual(response.data["confiance"], 95)
+        self.assertEqual(Ecriture.objects.count(), 0)
+        self.assertEqual(Facture.objects.count(), 0)
+
+
+class ScannerBankIdentityTests(APITestCase):
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="scanner-bank-accountant",
+            password="secret",
+            role="accountant",
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="Scanner Bank Company",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        self.client.force_authenticate(self.accountant)
+
+    def add_bank(self, name, account_number, rib, entreprise=None):
+        entreprise = entreprise or self.entreprise
+        index = entreprise.bank_accounts.count() + 1
+        scf_account = SCFAccount.objects.create(
+            entreprise=entreprise,
+            numero_compte=f"5129{index:02d}",
+            libelle=f"BANQUE {name}",
+            classe=5,
+        )
+        return BankAccount.objects.create(
+            entreprise=entreprise,
+            bank_name=name,
+            account_number=account_number,
+            rib=rib,
+            scf_account=scf_account,
+        )
+
+    def bank_data(self, numero_facture="SCAN-BANK-1", **identity):
+        return {
+            "date_facture": "2026-01-15",
+            "numero_facture": numero_facture,
+            "journal": "Banque",
+            "nom_entreprise": self.entreprise.nom,
+            "confiance": 95,
+            "lignes": [{
+                "date": "2026-01-15",
+                "libelle": "Frais bancaires",
+                "debit": 10,
+                "credit": 0,
+                "compte": "627000",
+            }],
+            **identity,
+        }
+
+    def preview(self, data, entreprise_id=None):
+        with patch("core.views.call_webhook", return_value=data):
+            return self.client.post(
+                "/api/scanner/upload/",
+                {
+                    "entreprise": entreprise_id or self.entreprise.pk,
+                    "image": "dGVzdA==",
+                },
+                format="multipart",
+            )
+
+    def confirm(self, data):
+        return self.client.post(
+            "/api/scanner/confirm/",
+            {"entreprise": self.entreprise.pk, "data": data},
+            format="json",
+        )
+
+    def assert_preview_error(self, response, expected_text):
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn(
+            expected_text,
+            " ".join(response.data["erreurs"]),
+        )
+
+    def assert_no_accounting_records(self):
+        self.assertEqual(Journal.objects.filter(entreprise=self.entreprise).count(), 0)
+        self.assertEqual(
+            Ecriture.objects.filter(journal__entreprise=self.entreprise).count(), 0
+        )
+        self.assertEqual(
+            LigneEcriture.objects.filter(
+                ecriture__journal__entreprise=self.entreprise
+            ).count(),
+            0,
+        )
+
+    def test_single_bankaccount_without_identity_is_rejected(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        data = self.bank_data()
+
+        preview = self.preview(data)
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertIn("identité bancaire est absente", " ".join(preview.data["erreurs"]))
+
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("identité bancaire est absente", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_multiple_bankaccounts_without_identity_are_ambiguous(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+        data = self.bank_data()
+
+        self.assert_preview_error(self.preview(data), "ambiguë")
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ambiguë", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_third_bank_matches_by_account_number_in_preview_and_confirmation(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        self.add_bank("CPA", "33334444", "003333444455")
+        third_bank = self.add_bank("BEA", "55556666", "005555666677")
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-THIRD",
+            numero_compte_bancaire=third_bank.account_number,
+        )
+
+        preview = self.preview(data)
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview.data["erreurs"], [])
+        self.assertEqual(preview.data["data"]["nom_banque"], third_bank.bank_name)
+
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(
+            Ecriture.objects.filter(journal__entreprise=self.entreprise).count(), 1
+        )
+
+    def test_bank_matches_by_rib_in_preview_and_confirmation(self):
+        bank = self.add_bank("CPA", "33334444", "003333444455")
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-RIB",
+            rib_bancaire=bank.rib,
+        )
+
+        preview = self.preview(data)
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview.data["erreurs"], [])
+        self.assertEqual(preview.data["data"]["nom_banque"], bank.bank_name)
+
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_201_CREATED)
+
+    def test_unknown_bank_is_reported_in_preview_and_rejected_before_writes(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-UNKNOWN",
+            nom_banque="Banque Inconnue",
+        )
+
+        self.assert_preview_error(self.preview(data), "aucune banque enregistrée")
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("aucune banque enregistrée", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_partial_identity_matching_multiple_banks_is_ambiguous(self):
+        self.add_bank("BNA", "12345678", "001234567890")
+        self.add_bank("CPA", "12349999", "001234999999")
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-AMBIGUOUS",
+            numero_compte_bancaire="1234",
+        )
+
+        self.assert_preview_error(self.preview(data), "ambiguë")
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("ambiguë", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_conflicting_bank_name_and_account_are_rejected(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+        second_bank = self.add_bank("CPA", "33334444", "003333444455")
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-CONFLICT",
+            nom_banque="BNA",
+            numero_compte_bancaire=second_bank.account_number,
+        )
+
+        self.assert_preview_error(self.preview(data), "identifient des banques différentes")
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("identifient des banques différentes", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_legacy_only_bank_remains_compatible(self):
+        self.entreprise.banque = "BNA"
+        self.entreprise.numero_compte = "11112222"
+        self.entreprise.rib = "001111222233"
+        self.entreprise.save(update_fields=["banque", "numero_compte", "rib"])
+        SCFAccount.objects.create(
+            entreprise=self.entreprise,
+            numero_compte="512001",
+            libelle="BANQUE BNA",
+            classe=5,
+        )
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-LEGACY",
+            numero_compte_bancaire="11112222",
+        )
+
+        preview = self.preview(data)
+        self.assertEqual(preview.status_code, status.HTTP_200_OK)
+        self.assertEqual(preview.data["erreurs"], [])
+
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_201_CREATED)
+
+    def test_legacy_bank_without_its_scf_account_is_rejected(self):
+        self.entreprise.banque = "BNA"
+        self.entreprise.numero_compte = "11112222"
+        self.entreprise.save(update_fields=["banque", "numero_compte"])
+        data = self.bank_data(
+            numero_facture="SCAN-BANK-LEGACY-NO-SCF",
+            numero_compte_bancaire="11112222",
+        )
+
+        self.assert_preview_error(
+            self.preview(data), "Le compte SCF 512001 de la banque BNA"
+        )
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Le compte SCF 512001", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_no_configured_banks_is_rejected(self):
+        data = self.bank_data(numero_facture="SCAN-BANK-NONE")
+
+        self.assert_preview_error(self.preview(data), "Aucune banque n'est configurée")
+        confirmation = self.confirm(data)
+        self.assertEqual(confirmation.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("Aucune banque n'est configurée", confirmation.data["error"])
+        self.assert_no_accounting_records()
+
+    def test_direct_bank_persistence_keeps_identity_validation(self):
+        self.add_bank("BNA", "11112222", "001111222233")
+
+        with self.assertRaises(WebhookError):
+            persist_bank_statement(
+                self.entreprise,
+                self.bank_data(
+                    numero_facture="SCAN-BANK-DIRECT",
+                    nom_banque="Banque Inconnue",
+                ),
+            )
+
+        self.assert_no_accounting_records()
 
 
 class SCFReferenceDataTests(APITestCase):

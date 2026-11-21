@@ -3,7 +3,7 @@ import re
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from .models import ClientComptable, Fournisseur, SCFAccount
+from .models import BankAccount, ClientComptable, Fournisseur, SCFAccount
 
 
 def _normalize_name(name: str) -> str:

@@ -259,7 +259,7 @@ export interface BankStatementExtraction {
 
 /** The company bank a statement was matched to (and will be posted against). */
 export interface BankStatementMatchedBank {
-  id: number;
+  id?: number;
   bank_name: string;
   numero_compte: string;
 }
