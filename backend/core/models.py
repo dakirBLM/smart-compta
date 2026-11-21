@@ -58,6 +58,40 @@ class Entreprise(models.Model):
         return self.nom
 
 
+class EntrepriseProduct(models.Model):
+    class Category(models.TextChoices):
+        MARCHANDISE = "marchandise", "Marchandises"
+        MATIERE_PREMIERE = "matiere_premiere", "Matières premières"
+        MATIERES_CONSOMMABLES = "matieres_consommables", "Matières consommables"
+
+    entreprise = models.ForeignKey(
+        Entreprise, on_delete=models.CASCADE, related_name="products"
+    )
+    category = models.CharField(max_length=32, choices=Category.choices)
+    nom = models.CharField(max_length=10000)
+    numero_compte = models.CharField(max_length=20, blank=True, default="")
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["entreprise", "numero_compte"],
+                condition=models.Q(is_active=True) & ~models.Q(numero_compte=""),
+                name="unique_active_product_account",
+            ),
+            models.UniqueConstraint(
+                fields=["entreprise", "category", "nom"],
+                condition=models.Q(is_active=True),
+                name="unique_active_product_name",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.nom} ({self.numero_compte})"
+
+
 class BankStatement(models.Model):
     class Statut(models.TextChoices):
         EN_ATTENTE = "en_attente", "En attente"
@@ -380,6 +414,7 @@ class Facture(models.Model):
     )
     mode_paiement = models.CharField(max_length=50, blank=True, default="")
     fournisseur_client = models.CharField(max_length=255, blank=True, default="")
+    lignes = models.JSONField(default=list, blank=True)
     type_facture = models.CharField(
         max_length=20,
         choices=[("achat", "Achat"), ("vente", "Vente")],

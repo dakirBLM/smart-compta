@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from django.db.models import Q
 from django.urls import reverse
 from rest_framework import serializers
@@ -19,6 +21,7 @@ from .models import (
     Message,
     MessageAttachment,
 )
+from .account_helpers import synchronize_entreprise_products
 
 User = get_user_model()
 
@@ -36,6 +39,7 @@ class ExerciceAnneeSerializer(serializers.ModelSerializer):
 class EntrepriseSerializer(serializers.ModelSerializer):
     exercices = ExerciceAnneeSerializer(many=True, read_only=True)
     clients_count = serializers.SerializerMethodField()
+    produits = serializers.SerializerMethodField()
 
     class Meta:
         model = Entreprise
@@ -46,12 +50,23 @@ class EntrepriseSerializer(serializers.ModelSerializer):
             "banque2", "numero_compte2", "rib2",
             "regime_fiscale", "activite", "activite2", "matiere_premiere",
             "marchandise", "matieres_consommables", "telephone", "email",
-            "accountant", "created_at", "exercices", "clients_count",
+            "accountant", "created_at", "exercices", "clients_count", "produits",
         ]
         read_only_fields = ["accountant", "created_at"]
 
     def get_clients_count(self, obj):
         return obj.client_accesses.count()
+
+    def get_produits(self, obj):
+        return [
+            {
+                "id": product.id,
+                "category": product.category,
+                "nom": product.nom,
+                "numero_compte": product.numero_compte,
+            }
+            for product in obj.products.filter(is_active=True)
+        ]
 
     # --- field-level format rules ---
     def _digit_limit(self, value, maxlen, label):
@@ -138,7 +153,21 @@ class EntrepriseSerializer(serializers.ModelSerializer):
         # Enforce locked fields: silently ignore any attempt to change them.
         for field in LOCKED_ENTREPRISE_FIELDS:
             validated_data.pop(field, None)
-        return super().update(instance, validated_data)
+        return self._save_and_sync_products(super().update, instance, validated_data)
+
+    def create(self, validated_data):
+        return self._save_and_sync_products(super().create, validated_data)
+
+    @transaction.atomic
+    def _save_and_sync_products(self, save, *args):
+        instance = save(*args)
+        try:
+            synchronize_entreprise_products(instance)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(
+                getattr(exc, "message_dict", None) or exc.messages
+            ) from exc
+        return instance
 
 
 class ClientAccessSerializer(serializers.ModelSerializer):
@@ -410,11 +439,13 @@ class FactureSerializer(serializers.ModelSerializer):
             "date_facture", "montant_ht", "tva_pourcentage", "montant_tva",
             "montant_ttc", "image_url", "statut", "confiance_ia", "ecriture",
             "ecriture_detail", "mode_paiement", "created_at",
-            "fournisseur_client", "type_facture",
+            "fournisseur_client", "type_facture", "lignes",
         ]
         # entreprise is resolved server-side (from the client's ClientAccess),
         # so it must not be required in the request payload.
-        read_only_fields = ["client", "entreprise", "created_at", "ecriture", "ecriture_detail"]
+        read_only_fields = [
+            "client", "entreprise", "created_at", "ecriture", "ecriture_detail", "lignes"
+        ]
 
     def get_image_url(self, obj):
         if not obj.image_url:

@@ -8,18 +8,19 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
 from django.core.files.storage import Storage
+from django.db import IntegrityError, transaction
 from rest_framework import status
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import override_settings
 from rest_framework.test import APIRequestFactory, APITestCase
 from openpyxl import load_workbook
 
-from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
-from .account_helpers import apply_scf_subaccounts
+from .models import BankStatement, BankStatementSubmission, ClientAccess, ClientComptable, Ecriture, Entreprise, EntrepriseProduct, ExerciceAnnee, Facture, Fournisseur, Journal, LigneEcriture, Message, MessageAttachment, SCFAccount
+from .account_helpers import apply_product_accounts, apply_scf_subaccounts, synchronize_entreprise_products
 from .reports import build_balance, build_grand_livre
 from .scanner import persist_extraction, upload_invoice_image
 from .bank_statements import BankStatementError
-from .serializers import FactureSerializer
+from .serializers import EntrepriseSerializer, FactureSerializer
 from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES, MAX_MESSAGE_ATTACHMENT_BYTES
 
 
@@ -919,6 +920,198 @@ class EcritureScfValidationTests(APITestCase):
         self.assertIn(fournisseur.numero_compte, comptes)
         self.assertNotIn("401000", comptes)
         self.assertEqual(Ecriture.objects.count(), 0)
+
+
+class EntrepriseProductNumberingTests(APITestCase):
+    def setUp(self):
+        accountant = get_user_model().objects.create_user(
+            username="product-accountant", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="Product Test", date_creation=date(2026, 1, 1),
+            exercice_comptable="2026", accountant=accountant,
+        )
+
+    def _set_products(self, **categories):
+        for field, names in categories.items():
+            setattr(self.entreprise, field, names)
+        self.entreprise.save(update_fields=list(categories))
+        synchronize_entreprise_products(self.entreprise)
+
+    def test_single_product_in_each_category_uses_general_number(self):
+        self._set_products(
+            marchandise="Papeterie",
+            matiere_premiere="Bois",
+            matieres_consommables="Papier",
+        )
+
+        self.assertEqual(
+            list(
+                self.entreprise.products.filter(is_active=True)
+                .order_by("category")
+                .values_list("category", "numero_compte")
+            ),
+            [
+                ("marchandise", "380000"),
+                ("matiere_premiere", "381000"),
+                ("matieres_consommables", "382000"),
+            ],
+        )
+
+    def test_multiple_products_get_independent_sequential_accounts(self):
+        self._set_products(
+            marchandise="Papeterie\nMobilier\nMatériel informatique",
+            matiere_premiere="Bois\nAcier",
+            matieres_consommables="Papier\nEncre\nCartouches",
+        )
+
+        accounts = {
+            product.nom: product.numero_compte
+            for product in self.entreprise.products.filter(is_active=True)
+        }
+        self.assertEqual(
+            accounts,
+            {
+                "Papeterie": "380001",
+                "Mobilier": "380002",
+                "Matériel informatique": "380003",
+                "Bois": "381001",
+                "Acier": "381002",
+                "Papier": "382001",
+                "Encre": "382002",
+                "Cartouches": "382003",
+            },
+        )
+
+    def test_deleted_subaccount_is_not_reused(self):
+        self._set_products(marchandise="Papeterie\nMobilier")
+        self._set_products(marchandise="Papeterie")
+        self._set_products(marchandise="Papeterie\nMatériel informatique")
+
+        accounts = {
+            product.nom: product.numero_compte
+            for product in self.entreprise.products.filter(is_active=True)
+        }
+        self.assertEqual(
+            accounts, {"Papeterie": "380003", "Matériel informatique": "380004"}
+        )
+        deleted = self.entreprise.products.get(nom="Mobilier")
+        self.assertFalse(deleted.is_active)
+        self.assertEqual(deleted.numero_compte, "380002")
+
+    def test_duplicate_active_account_number_is_rejected_by_database(self):
+        self._set_products(marchandise="Papeterie\nMobilier")
+
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                EntrepriseProduct.objects.create(
+                    entreprise=self.entreprise,
+                    category=EntrepriseProduct.Category.MARCHANDISE,
+                    nom="Doublon",
+                    numero_compte="380001",
+                )
+
+    def test_selected_product_account_is_used_in_purchase_entry(self):
+        self._set_products(marchandise="Papeterie\nMobilier")
+        product = self.entreprise.products.get(nom="Mobilier", is_active=True)
+        ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=2026, is_active=True
+        )
+        entry = persist_extraction(
+            self.entreprise,
+            {
+                "fournisseur": "Fournisseur Test",
+                "date_facture": "2026-01-15",
+                "numero_facture": "PRODUIT-1",
+                "montant_ht": 100,
+                "tva_pourcentage": 0,
+                "montant_tva": 0,
+                "montant_ttc": 100,
+                "journal": "Achats",
+                "confiance": 95,
+                "lignes": [
+                    {
+                        "compte": "380000",
+                        "libelle": "Mobilier",
+                        "debit": 100,
+                        "credit": 0,
+                        "product_id": product.id,
+                    },
+                    {
+                        "compte": "401",
+                        "libelle": "Fournisseur Test",
+                        "debit": 0,
+                        "credit": 100,
+                    },
+                ],
+            },
+        )
+
+        self.assertIn(
+            product.numero_compte,
+            entry.lignes.values_list("numero_compte", flat=True),
+        )
+
+    def test_accountant_validation_uses_manually_selected_product(self):
+        accountant = self.entreprise.accountant
+        self.client.force_authenticate(accountant)
+        self._set_products(marchandise="Papeterie\nMobilier")
+        product = self.entreprise.products.get(nom="Mobilier", is_active=True)
+        ExerciceAnnee.objects.create(
+            entreprise=self.entreprise, annee=2026, is_active=True
+        )
+        facture = Facture.objects.create(
+            entreprise=self.entreprise,
+            client=accountant,
+            numero_facture="PRODUIT-2",
+            date_facture=date(2026, 1, 15),
+            montant_ht=100,
+            montant_tva=0,
+            montant_ttc=100,
+            fournisseur_client="Fournisseur Test",
+            type_facture="achat",
+            lignes=[
+                {
+                    "compte": "380000",
+                    "libelle": "Mobilier",
+                    "debit": 100,
+                    "credit": 0,
+                    "product_id": product.id,
+                },
+                {
+                    "compte": "401",
+                    "libelle": "Fournisseur Test",
+                    "debit": 0,
+                    "credit": 100,
+                },
+            ],
+        )
+
+        response = self.client.post(
+            f"/api/factures/{facture.id}/validate/",
+            {"lignes": facture.lignes},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertIn(
+            product.numero_compte,
+            Ecriture.objects.get().lignes.values_list("numero_compte", flat=True),
+        )
+
+    def test_entreprise_serializer_accepts_multiple_product_names(self):
+        serializer = EntrepriseSerializer(
+            self.entreprise,
+            data={"marchandise": "Papeterie\nMobilier"},
+            partial=True,
+        )
+
+        self.assertTrue(serializer.is_valid(), serializer.errors)
+        entreprise = serializer.save()
+        self.assertEqual(
+            [product.nom for product in entreprise.products.filter(is_active=True)],
+            ["Papeterie", "Mobilier"],
+        )
 
 
 class SCFReferenceDataTests(APITestCase):

@@ -949,6 +949,7 @@ class ScannerConfirmView(APIView):
             "statut": Facture.Statut.VALIDE,
             "confiance_ia": int(data.get("confiance", 0) or 0),
             "ecriture": ecriture,
+            "lignes": data.get("lignes") or [],
             "fournisseur_client": data.get("fournisseur", "") or "",
             "type_facture": "banque" if any(
                 k in str(data.get("journal")).lower() for k in ("banque", "relev")
@@ -1333,6 +1334,7 @@ class FactureListCreateView(APIView):
                 statut=Facture.Statut.EN_COURS,
                 confiance_ia=extraction_data["confiance"],
                 ecriture=None,
+                lignes=extraction_data["lignes"],
                 fournisseur_client=fournisseur_client,
                 type_facture=type_facture,
                 mode_paiement=mode_paiement,
@@ -1367,6 +1369,7 @@ class FactureListCreateView(APIView):
             "statut": Facture.Statut.VALIDE,
             "confiance_ia": extraction_data["confiance"],
             "ecriture": ecriture,
+            "lignes": extraction_data["lignes"],
             "fournisseur_client": fournisseur_client,
             "type_facture": type_facture,
             "mode_paiement": mode_paiement,
@@ -1443,6 +1446,21 @@ class FactureValidateView(APIView):
 
         mode = (request.data.get("mode_paiement") or facture.mode_paiement or "").lower().strip()
         entreprise = facture.entreprise
+        lignes_facture = request.data.get("lignes", facture.lignes)
+        if isinstance(lignes_facture, str):
+            import json as _json
+            try:
+                lignes_facture = _json.loads(lignes_facture)
+            except ValueError:
+                return Response(
+                    {"error": "Les lignes de facture sont invalides."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        if not isinstance(lignes_facture, list):
+            return Response(
+                {"error": "Les lignes de facture sont invalides."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         # Determine which journal to post to
         is_vente = facture.type_facture == "vente"
@@ -1473,40 +1491,43 @@ class FactureValidateView(APIView):
                 }
             ]
         else:
-            compte_achat = None
-            if not is_vente:
-                compte_achat_scf = SCFAccount.objects.filter(
-                    entreprise__isnull=True,
-                    libelle__icontains="marchandises stock",
-                ).order_by("numero_compte").first()
-                if not compte_achat_scf:
-                    return Response(
-                        {"error": "Le compte SCF des marchandises stockées est introuvable."},
-                        status=status.HTTP_400_BAD_REQUEST,
-                    )
-                compte_achat = compte_achat_scf.numero_compte.ljust(6, "0")
+            if not is_vente and lignes_facture:
+                lignes = lignes_facture
+            else:
+                compte_achat = None
+                if not is_vente:
+                    compte_achat_scf = SCFAccount.objects.filter(
+                        entreprise__isnull=True,
+                        libelle__icontains="marchandises stock",
+                    ).order_by("numero_compte").first()
+                    if not compte_achat_scf:
+                        return Response(
+                            {"error": "Le compte SCF des marchandises stockées est introuvable."},
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+                    compte_achat = compte_achat_scf.numero_compte.ljust(6, "0")
 
-            lignes = [
-                {
-                    "compte": "411" if is_vente else "401",
-                    "libelle": tiers_nom,
-                    "debit": float(facture.montant_ttc) if is_vente else 0,
-                    "credit": 0 if is_vente else float(facture.montant_ttc),
-                },
-                {
-                    "compte": "700000" if is_vente else compte_achat,
-                    "libelle": "Vente de marchandises" if is_vente else "Achats de marchandises",
-                    "debit": 0 if is_vente else float(facture.montant_ht),
-                    "credit": float(facture.montant_ht) if is_vente else 0,
-                }
-            ]
-            if float(facture.montant_tva) > 0:
-                lignes.append({
-                    "compte": "445700" if is_vente else "44566",
-                    "libelle": "TVA collectée" if is_vente else "TVA déductible",
-                    "debit": 0 if is_vente else float(facture.montant_tva),
-                    "credit": float(facture.montant_tva) if is_vente else 0,
-                })
+                lignes = [
+                    {
+                        "compte": "411" if is_vente else "401",
+                        "libelle": tiers_nom,
+                        "debit": float(facture.montant_ttc) if is_vente else 0,
+                        "credit": 0 if is_vente else float(facture.montant_ttc),
+                    },
+                    {
+                        "compte": "700000" if is_vente else compte_achat,
+                        "libelle": "Vente de marchandises" if is_vente else "Achats de marchandises",
+                        "debit": 0 if is_vente else float(facture.montant_ht),
+                        "credit": float(facture.montant_ht) if is_vente else 0,
+                    }
+                ]
+                if float(facture.montant_tva) > 0:
+                    lignes.append({
+                        "compte": "445700" if is_vente else "44566",
+                        "libelle": "TVA collectée" if is_vente else "TVA déductible",
+                        "debit": 0 if is_vente else float(facture.montant_tva),
+                        "credit": float(facture.montant_tva) if is_vente else 0,
+                    })
 
         extraction_data = {
             "fournisseur": tiers_nom,
@@ -1531,7 +1552,8 @@ class FactureValidateView(APIView):
         facture.statut = Facture.Statut.VALIDE
         facture.ecriture = ecriture
         facture.mode_paiement = mode
-        facture.save()
+        facture.lignes = lignes_facture
+        facture.save(update_fields=["statut", "ecriture", "mode_paiement", "lignes"])
 
         return Response(
             {

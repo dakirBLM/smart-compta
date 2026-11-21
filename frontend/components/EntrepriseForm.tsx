@@ -292,7 +292,13 @@ export function EntrepriseForm({
               <Label className={isCommerciale ? "text-danger" : ""}>
                 Marchandises {isCommerciale && "*"}
               </Label>
-              <Input value={form.marchandise} onChange={(e) => setLongText("marchandise", e.target.value)} />
+              <textarea
+                rows={3}
+                value={form.marchandise}
+                onChange={(e) => setLongText("marchandise", e.target.value)}
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm"
+              />
+              <p className="mt-1 text-xs text-gray-500">Un produit par ligne.</p>
               {textLimitErrors.marchandise && (
                 <p role="alert" className="mt-1 text-xs text-danger">
                   Maximum 10 000 caractères : le texte a été tronqué.
@@ -303,7 +309,13 @@ export function EntrepriseForm({
               <Label className={isIndustrielle ? "text-danger" : ""}>
                 Matières premières {isIndustrielle && "*"}
               </Label>
-              <Input value={form.matiere_premiere} onChange={(e) => setLongText("matiere_premiere", e.target.value)} />
+              <textarea
+                rows={3}
+                value={form.matiere_premiere}
+                onChange={(e) => setLongText("matiere_premiere", e.target.value)}
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm"
+              />
+              <p className="mt-1 text-xs text-gray-500">Un produit par ligne.</p>
               {textLimitErrors.matiere_premiere && (
                 <p role="alert" className="mt-1 text-xs text-danger">
                   Maximum 10 000 caractères : le texte a été tronqué.
@@ -314,7 +326,13 @@ export function EntrepriseForm({
               <Label className={isIndustrielle ? "text-danger" : ""}>
                 Matières consommables {isIndustrielle && "*"}
               </Label>
-              <Input value={form.matieres_consommables} onChange={(e) => setLongText("matieres_consommables", e.target.value)} />
+              <textarea
+                rows={3}
+                value={form.matieres_consommables}
+                onChange={(e) => setLongText("matieres_consommables", e.target.value)}
+                className="w-full rounded-xl border border-gray-300 bg-white px-3 py-2 text-sm"
+              />
+              <p className="mt-1 text-xs text-gray-500">Un produit par ligne.</p>
               {textLimitErrors.matieres_consommables && (
                 <p role="alert" className="mt-1 text-xs text-danger">
                   Maximum 10 000 caractères : le texte a été tronqué.
