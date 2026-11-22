@@ -65,54 +65,81 @@ const FAQ: { q: TranslationKey; a: TranslationKey }[] = [
   { q: "faq4q", a: "faq4a" },
 ];
 
-function ProductVideo({
+// The product demos are small self-contained HTML animations (public/landing),
+// designed on a fixed 1440x900 stage and scaled down to the card's width.
+const DEMO_WIDTH = 1440;
+const DEMO_HEIGHT = 900;
+
+function ProductDemo({
   src,
+  still,
   label,
   reduce,
 }: {
   src: string;
+  /** Second of the animation shown as a still frame when motion is reduced. */
+  still: number;
   label: string;
   reduce: boolean;
 }) {
-  const ref = useRef<HTMLVideoElement>(null);
+  const box = useRef<HTMLDivElement>(null);
+  const [scale, setScale] = useState(0);
+  const [playing, setPlaying] = useState(false);
 
   useEffect(() => {
-    const video = ref.current;
-    if (!video) return;
-    video.pause();
-    if (reduce) return;
+    const el = box.current;
+    if (!el) return;
 
-    let onScreen = false;
-    const observer = new IntersectionObserver(
-      ([entry]) => {
-        const showing = entry.isIntersecting && entry.intersectionRatio >= 0.4;
-        if (showing && !onScreen) {
-          onScreen = true;
-          video.currentTime = 0;
-          void video.play();
-        } else if (!showing && onScreen) {
-          onScreen = false;
-          video.pause();
-        }
-      },
-      { threshold: 0.4 }
+    const resizeObserver = new ResizeObserver(([entry]) =>
+      setScale(entry.contentRect.width / DEMO_WIDTH)
     );
-    observer.observe(video);
-    return () => observer.disconnect();
+    resizeObserver.observe(el);
+
+    // The animation only runs (and restarts from the beginning) while it is on
+    // screen; off screen the iframe is removed so it costs nothing.
+    const intersectionObserver = reduce
+      ? null
+      : new IntersectionObserver(
+          ([entry]) => setPlaying(entry.isIntersecting && entry.intersectionRatio >= 0.4),
+          { threshold: 0.4 }
+        );
+    intersectionObserver?.observe(el);
+
+    return () => {
+      resizeObserver.disconnect();
+      intersectionObserver?.disconnect();
+    };
   }, [reduce]);
+
+  const separator = src.includes("?") ? "&" : "?";
+  const frameSrc = reduce ? `${src}${separator}seek=${still}` : src;
 
   return (
     <div className="w-full max-w-full overflow-hidden rounded-[28px] border border-[#e7e2d8] bg-white shadow-[0_30px_80px_-28px_rgba(23,28,26,0.35)] [mask-image:linear-gradient(to_bottom,black_86%,transparent)] [-webkit-mask-image:linear-gradient(to_bottom,black_86%,transparent)]">
-      <video
-        ref={ref}
-        loop
-        muted
-        playsInline
-        preload="metadata"
+      <div
+        ref={box}
+        role="img"
         aria-label={label}
-        src={src}
-        className="block h-auto w-full min-w-0 max-w-full"
-      />
+        className="relative w-full overflow-hidden bg-[#f5f7f5]"
+        style={{ aspectRatio: `${DEMO_WIDTH} / ${DEMO_HEIGHT}` }}
+      >
+        {scale > 0 && (reduce || playing) && (
+          <iframe
+            src={frameSrc}
+            title={label}
+            tabIndex={-1}
+            aria-hidden="true"
+            sandbox="allow-scripts"
+            className="pointer-events-none absolute left-0 top-0 border-0"
+            style={{
+              width: DEMO_WIDTH,
+              height: DEMO_HEIGHT,
+              transformOrigin: "0 0",
+              transform: `scale(${scale})`,
+            }}
+          />
+        )}
+      </div>
     </div>
   );
 }
@@ -279,7 +306,12 @@ export default function LandingPage() {
           </p>
           <p className="mt-3 text-sm leading-relaxed text-[#5e6a65]">{t("dashSplit")}</p>
           <div className="mt-10">
-            <ProductVideo src="/landing/dashboard.mp4" label={t("dashTitle")} reduce={prefersReducedMotion} />
+            <ProductDemo
+              src="/landing/demo-dashboard.html?loop"
+              still={5.8}
+              label={t("dashTitle")}
+              reduce={prefersReducedMotion}
+            />
           </div>
         </div>
       </section>
@@ -326,7 +358,12 @@ export default function LandingPage() {
             ))}
           </ul>
           <div className="mt-10">
-            <ProductVideo src="/landing/ai.mp4" label={t("aiTitle")} reduce={prefersReducedMotion} />
+            <ProductDemo
+              src="/landing/demo-bank.html"
+              still={15}
+              label={t("aiTitle")}
+              reduce={prefersReducedMotion}
+            />
           </div>
         </div>
       </section>

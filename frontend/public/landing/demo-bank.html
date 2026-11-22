@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Comptia – Démo relevé bancaire IA</title>
+<style>
+  :root{--bg:#f5f7f5;--card:#fff;--line:#e6ebe8;--ink:#14231d;--muted:#6b7a73;--green:#34715f;--green-l:#8fbfae;--orange:#c47a4f;--active:#e5f0ec;--lime:#dff27a;--dark:#173a30}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{width:100%;height:100%;overflow:hidden;background:var(--bg)}
+  body{font-family:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;color:var(--ink)}
+  #app{position:relative;width:1440px;height:900px;transform-origin:0 0;overflow:hidden;background:var(--bg)}
+  svg{display:block}
+  .ico{width:24px;height:24px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  aside{position:absolute;left:0;top:0;bottom:0;width:144px;border-right:1px solid var(--line);background:var(--bg);z-index:5}
+  .logo{position:absolute;left:12px;top:20px;display:flex;align-items:center;gap:6px;font-weight:700;font-size:25px;letter-spacing:-.5px}
+  .logo b{font-size:11px;background:var(--lime);padding:5px 7px;border-radius:7px;letter-spacing:0}
+  nav{position:absolute;left:11px;right:11px;top:72px}
+  .nav{position:relative;height:56px;margin-bottom:2px;border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;font-size:10.5px;color:#4a5a53}
+  .nav .ico{width:22px;height:22px}
+  .nav.on{background:var(--active);color:var(--ink)}
+  .nav .ia{position:absolute;right:8px;top:2px;font-size:7px;font-weight:700;background:#dbece5;color:var(--green);padding:2px 4px;border-radius:5px}
+  .globe{position:absolute;left:50px;bottom:14px;width:44px;height:44px;border:1px solid var(--line);background:#fff;border-radius:12px;display:grid;place-items:center;color:var(--green)}
+  .back{position:absolute;left:184px;top:36px;display:flex;align-items:center;gap:8px;font-size:15px;z-index:4}
+  .back .ico{width:18px;height:18px}
+  #ttl{position:absolute;left:259px;top:33px;font-size:19px;font-weight:600;letter-spacing:-.3px;z-index:4}
+  .bell{position:absolute;right:104px;top:25px;width:38px;height:38px;background:#fff;border:1px solid var(--line);border-radius:11px;display:grid;place-items:center}
+  .bell .ico{width:18px;height:18px}.bell i{position:absolute;right:7px;top:7px;width:5px;height:5px;border-radius:50%;background:#e2763b}
+  .avatar{position:absolute;right:42px;top:25px;width:38px;height:38px;border-radius:50%;background:radial-gradient(circle at 65% 70%,#5e8a4c 0,#2f4a2a 30%,#111 60%)}
+  main{position:absolute;left:174px;right:36px;top:100px;bottom:20px}
+  .page{position:absolute;inset:0}
+  /* tabs */
+  #tabs{position:absolute;left:0;top:0;display:flex;gap:8px}
+  .tab{height:36px;padding:0 16px;border-radius:10px;display:flex;align-items:center;gap:9px;font-size:13.5px;background:#fff;border:1px solid var(--line)}
+  .tab .ico{width:16px;height:16px}
+  .tab.dk{background:var(--dark);color:#fff;border-color:var(--dark)}
+  /* dashboard */
+  .kpis{position:absolute;left:0;right:0;top:0;display:grid;grid-template-columns:repeat(4,1fr);gap:20px}
+  .kpi{background:#fff;border:1px solid var(--line);border-radius:20px;height:106px;padding:23px 20px}
+  .kpi small{font-size:9.5px;letter-spacing:1.1px;font-weight:600;color:#4a5a53}
+  .kpi .v{font-size:25px;font-weight:600;margin-top:22px;letter-spacing:-.4px}
+  .dpan{position:absolute;top:132px;height:400px;background:#fff;border:1px solid var(--line);border-radius:22px;padding:22px 24px}
+  .dpan h2{font-size:16.5px;font-weight:600}.dpan p{font-size:11.5px;color:var(--muted);margin-top:8px}
+  /* upload */
+  .dz{position:absolute;left:341px;top:64px;width:548px;height:267px;border:1.5px dashed #c4d0ca;border-radius:22px;background:rgba(255,255,255,.4);text-align:center;overflow:hidden}
+  .dz .ibx{position:absolute;left:50%;top:60px;margin-left:-29px;width:58px;height:58px;border-radius:16px;background:#e8f1ed;color:var(--green);display:grid;place-items:center}
+  .dz .ibx .ico{width:24px;height:24px}
+  .dz .t1{position:absolute;left:0;right:0;top:134px;font-size:17px;font-weight:600}
+  .dz .t2{position:absolute;left:0;right:0;top:163px;font-size:11.5px;color:var(--muted)}
+  .dz .t3{position:absolute;left:0;right:0;top:192px;font-size:11.5px;color:#4a5a53}
+  .idle{position:absolute;inset:0}
+  .chip{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+  .chipc{display:flex;align-items:center;gap:16px;background:#fff;border:1px solid var(--line);border-radius:16px;padding:16px 22px;box-shadow:0 6px 20px rgba(20,35,29,.07)}
+  .pdf{width:44px;height:52px;border-radius:8px;background:#fdecec;color:#d44a3d;font-weight:700;font-size:12px;display:grid;place-items:center;border:1px solid #f4cfcb}
+  .chipc b{display:block;font-size:14px;text-align:left}.chipc span{font-size:11.5px;color:var(--muted);display:block;text-align:left;margin-top:3px}
+  .ok{width:24px;height:24px;border-radius:50%;background:var(--green);color:#fff;display:grid;place-items:center}
+  .ok .ico{width:14px;height:14px;stroke-width:2.6}
+  .proc{position:absolute;inset:0;display:flex;align-items:center;gap:30px;padding:0 36px;text-align:left;background:#fff}
+  .doc{position:relative;width:128px;height:170px;border-radius:12px;border:1px solid var(--line);background:#fbfcfb;overflow:hidden;flex:none;padding:14px 12px}
+  .doc i{display:block;height:5px;border-radius:3px;background:#e1e8e4;margin-bottom:9px}
+  .scan{position:absolute;left:0;right:0;height:34px;background:linear-gradient(180deg,rgba(52,113,95,0),rgba(52,113,95,.28));border-bottom:2px solid var(--green)}
+  .steps{flex:1}
+  .steps h3{font-size:15px;font-weight:600;display:flex;align-items:center;gap:8px}
+  .spark{color:var(--green);width:18px;height:18px}
+  .st{display:flex;align-items:center;gap:10px;font-size:12.5px;color:var(--muted);margin-top:10px}
+  .st .d{width:17px;height:17px;border-radius:50%;border:1.5px solid #cfd9d4;display:grid;place-items:center;color:#fff;flex:none}
+  .st .d .ico{width:10px;height:10px;stroke-width:3}
+  .bar{height:6px;border-radius:4px;background:#e8eeea;margin-top:18px;overflow:hidden}.bar i{display:block;height:100%;background:linear-gradient(90deg,var(--green-l),var(--green));width:0}
+  .opc{font-size:11.5px;color:var(--muted);margin-top:8px}.opc b{color:var(--ink)}
+  .sel{position:absolute;left:371px;top:358px;font-size:12.5px;color:#4a5a53}
+  .sel div{margin-top:9px;width:422px;height:52px;background:#fff;border:1px solid var(--line);border-radius:14px;padding:0 20px;display:flex;align-items:center;font-size:15px;color:var(--ink)}
+  .btns{position:absolute;left:0;right:0;top:458px;display:flex;justify-content:center;gap:12px}
+  .b1{height:52px;padding:0 26px;border-radius:14px;background:#fff;border:1px solid var(--line);display:flex;align-items:center;gap:9px;font-size:15px;font-weight:500}
+  .b1 .ico{width:18px;height:18px}
+  .b2{height:52px;padding:0 22px;border-radius:14px;background:#8fcbb7;color:#fff;display:flex;align-items:center;font-size:15px;font-weight:600}
+  /* result */
+  #scroller{position:absolute;left:0;right:0;top:64px;height:636px;overflow:hidden}
+  .pcard{background:#fff;border-radius:22px;padding:22px 26px;border:1px solid var(--line)}
+  .pcard h2{font-size:21px;font-weight:600;letter-spacing:-.3px}
+  .badge{position:absolute;right:26px;top:26px;font-size:15px;font-weight:600;padding:8px 14px;border-radius:999px;background:#e4f4ec;color:#1f7a55;display:flex;align-items:center;gap:7px}
+  .badge .ico{width:17px;height:17px}
+  .info{margin-top:20px;background:#eaf7f1;border-radius:12px;padding:14px 18px;display:grid;grid-template-columns:1fr 1fr;font-size:12.5px;color:#1f7a55}
+  .info b{display:block;font-size:15.5px;margin-top:4px;color:#17604a}
+  .warn{margin-top:14px;background:#eaf7f1;border-radius:12px;padding:14px 18px;font-size:14px;color:#1f7a55}
+  .tbl{margin-top:26px;border-radius:20px;overflow:hidden;background:#fff;border:1px solid var(--line)}
+  .gr{display:grid;grid-template-columns:1.1fr 1.15fr 1.15fr 1.9fr 1.3fr 1.5fr;gap:12px;padding:0 12px;align-items:center}
+  .th{height:44px;background:var(--dark);color:#fff;font-size:13px;font-weight:600;padding:0 22px}
+  .th span{padding:0}
+  .tr{height:58px;border-top:1px solid var(--line)}
+  .tr:first-of-type{border-top:0}
+  .c{height:42px;border:1px solid var(--line);border-radius:10px;padding:0 14px;display:flex;align-items:center;font-size:14px;background:#fff;font-variant-numeric:tabular-nums}
+  .c.am{justify-content:flex-start}
+  .tr .flash{position:absolute}
+  .foot{position:absolute;left:0;right:0;bottom:0;height:62px;display:flex;align-items:center;justify-content:space-between;background:rgba(245,247,245,.92);backdrop-filter:blur(6px);border-top:1px solid var(--line);padding:0 4px}
+  .foot span{font-size:13px;color:#4a5a53}
+  .conf{height:44px;padding:0 24px;border-radius:12px;background:var(--dark);color:#fff;font-weight:600;font-size:14.5px;display:flex;align-items:center;gap:9px}
+  .conf .ico{width:18px;height:18px}
+  .toast{position:absolute;right:0;top:-8px;display:flex;gap:12px;align-items:center;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 18px;box-shadow:0 10px 30px rgba(20,35,29,.14);font-size:13px;z-index:8}
+  .toast .ok{width:30px;height:30px}.toast b{display:block;font-size:13.5px}.toast small{color:var(--muted);font-size:12px}
+  #cursor{transform-origin:3px 3px;position:absolute;left:0;top:0;width:22px;height:22px;z-index:20;opacity:0;filter:drop-shadow(0 2px 3px rgba(0,0,0,.3))}
+  #ripple{position:absolute;left:0;top:0;width:40px;height:40px;margin:-20px 0 0 -20px;border-radius:50%;border:2px solid var(--green);opacity:0;z-index:19}
+  #file{position:absolute;left:0;top:0;width:210px;z-index:18;background:#fff;border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;gap:10px;align-items:center;box-shadow:0 12px 30px rgba(20,35,29,.18);opacity:0;font-size:11px}
+  #file b{display:block;font-size:11.5px}#file span{color:var(--muted)}
+  #file .pdf{width:30px;height:36px;font-size:9px}
+  #fade{position:absolute;inset:0;background:var(--bg);opacity:0;z-index:30;pointer-events:none}
+</style>
+</head>
+<body>
+<div id="app">
+  <aside>
+    <div class="logo">Comptia <b>DZ</b></div>
+    <nav id="nav"></nav>
+    <div class="globe"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18"/></svg></div>
+  </aside>
+  <div class="back" id="back"><svg class="ico" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg>Retour</div>
+  <div id="ttl">Relevé bancaire</div>
+  <div class="bell"><svg class="ico" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0112 0c0 7 3 8 3 8H3s3-1 3-8M10 20a2 2 0 004 0"/></svg><i></i></div>
+  <div class="avatar"></div>
+
+  <main>
+    <!-- dashboard -->
+    <div class="page" id="pg-dash">
+      <section class="kpis">
+        <div class="kpi"><small>CHIFFRE D'AFFAIRES</small><div class="v">1 790 000,00 DZD</div></div>
+        <div class="kpi"><small>TOTAL ACHATS</small><div class="v">640 000,00 DZD</div></div>
+        <div class="kpi"><small>CHARGES</small><div class="v">1 130 000,00 DZD</div></div>
+        <div class="kpi"><small>RÉSULTAT</small><div class="v">660 000,00 DZD</div></div>
+      </section>
+      <div class="dpan" style="left:0;width:720px"><h2>Évolution des résultats</h2><p>Exercice 2026</p>
+        <svg width="670" height="300" viewBox="0 0 670 300" style="margin-top:20px"><g stroke="#eef1ef"><path d="M0 40H670M0 120H670M0 200H670M0 280H670"/></g>
+        <path d="M10 230L140 205 270 170 400 150 530 100 660 50" fill="none" stroke="#8fbfae" stroke-width="3"/><path d="M10 250L140 238 270 228 400 215 530 195 660 175" fill="none" stroke="#c47a4f" stroke-width="3"/><path d="M10 270L140 262 270 250 400 240 530 225 660 210" fill="none" stroke="#34715f" stroke-width="3"/></svg></div>
+      <div class="dpan" style="right:0;width:490px"><h2>Répartition des charges</h2><p>1 130 000,00 DZD</p>
+        <svg width="200" height="200" viewBox="0 0 200 200" style="margin:50px auto 0"><circle cx="100" cy="100" r="78" fill="none" stroke="#34715f" stroke-width="30" stroke-dasharray="220 600" transform="rotate(-90 100 100)"/><circle cx="100" cy="100" r="78" fill="none" stroke="#6fae98" stroke-width="30" stroke-dasharray="122 600" stroke-dashoffset="-222" transform="rotate(-90 100 100)"/><circle cx="100" cy="100" r="78" fill="none" stroke="#c47a4f" stroke-width="30" stroke-dasharray="88 600" stroke-dashoffset="-346" transform="rotate(-90 100 100)"/></svg></div>
+    </div>
+
+    <!-- tabs (upload + result) -->
+    <div id="tabs">
+      <div class="tab dk"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8V5a1 1 0 011-1h3M16 4h3a1 1 0 011 1v3M20 16v3a1 1 0 01-1 1h-3M8 20H5a1 1 0 01-1-1v-3M7 12h10"/></svg>Scanner / Importer</div>
+      <div class="tab"><svg class="ico" viewBox="0 0 24 24"><path d="M12 4v11M7 11l5 5 5-5M5 20h14"/></svg>Relevés reçus</div>
+      <div class="tab"><svg class="ico" viewBox="0 0 24 24"><path d="M3 9l9-5 9 5M5 9v9M9 9v9M15 9v9M19 9v9M3 20h18"/></svg>Historique des imports</div>
+    </div>
+
+    <!-- upload -->
+    <div class="page" id="pg-up">
+      <div class="dz" id="dz">
+        <div class="idle" id="idle">
+          <div class="ibx"><svg class="ico" viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5M4 15v4a1 1 0 001 1h14a1 1 0 001-1v-4"/></svg></div>
+          <div class="t1" id="t1">Importer un relevé bancaire (PDF ou image)</div>
+          <div class="t2">Formats acceptés : PDF, JPG, JPEG, PNG</div>
+          <div class="t3" id="t3">Déposez le fichier ici, ou cliquez pour le choisir</div>
+        </div>
+        <div class="chip" id="chip"><div class="chipc"><div class="pdf">PDF</div><div><b>Releve_BNA_fevrier_2026.pdf</b><span>1,2 Mo · 4 pages</span></div><div class="ok"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></div></div></div>
+        <div class="proc" id="proc">
+          <div class="doc"><i style="width:60%"></i><i></i><i></i><i style="width:80%"></i><i></i><i style="width:70%"></i><i></i><i style="width:90%"></i><i></i><i style="width:55%"></i><i></i><i></i><div class="scan" id="scan"></div></div>
+          <div class="steps">
+            <h3><svg class="ico spark" viewBox="0 0 24 24"><path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2z"/></svg>L'IA analyse votre relevé…</h3>
+            <div class="st"><span class="d"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>Lecture du document</div>
+            <div class="st"><span class="d"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>Extraction des opérations</div>
+            <div class="st"><span class="d"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>Affectation des comptes comptables</div>
+            <div class="st"><span class="d"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></span>Génération des écritures</div>
+            <div class="bar"><i id="bar"></i></div>
+            <div class="opc"><b id="opn">0</b> opérations détectées</div>
+          </div>
+        </div>
+      </div>
+      <div class="sel"><span>Banque (facultatif — aide l'IA)</span><div>Détection automatique</div></div>
+      <div class="btns"><div class="b1"><svg class="ico" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4zM12 17a4 4 0 100-8 4 4 0 000 8"/></svg>Scanner</div><div class="b2" id="send">Envoyer</div></div>
+    </div>
+
+    <!-- result -->
+    <div class="page" id="pg-res">
+      <div id="scroller"><div id="inner">
+        <div class="pcard" style="position:relative"><h2>Proposition d'écriture</h2>
+          <div class="badge"><svg class="ico" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg>96% · Fiable</div>
+          <div class="info"><div>NOM DE LA BANQUE<b>BNA</b></div><div>NOM DE L'ENTREPRISE<b>ATELIER NOUR SARL</b></div></div>
+          <div class="warn">✓ Confiance élevée — vérifiez les lignes puis confirmez pour enregistrer.</div>
+        </div>
+        <div class="tbl"><div class="gr th"><span>Date</span><span>Compte Débit</span><span>Compte Crédit</span><span>Libellé et intitulé</span><span>Montant (DZD)</span><span>Tiers / Réf.</span></div><div id="rows"></div></div>
+        <div style="height:30px"></div>
+      </div></div>
+      <div class="foot"><span id="fs">18 écritures prêtes à être enregistrées</span><div class="conf" id="conf"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg><span id="conft" style="color:#fff;font-size:14.5px">Confirmer et enregistrer</span></div></div>
+      <div class="toast" id="toast"><div class="ok"><svg class="ico" viewBox="0 0 24 24"><path d="M5 12l5 5 9-10"/></svg></div><div><b>18 écritures enregistrées</b><small>Journal de banque · Février 2026</small></div></div>
+    </div>
+  </main>
+
+  <div id="file"><div class="pdf">PDF</div><div><b>Releve_BNA_fev_2026.pdf</b><span>1,2 Mo</span></div></div>
+  <div id="ripple"></div>
+  <svg id="cursor" viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-3 6z" fill="#14231d" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg>
+  <div id="fade"></div>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const clamp=(x,a=0,b=1)=>Math.min(b,Math.max(a,x));
+const easeOut=x=>1-Math.pow(1-x,3);
+const easeIO=x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
+const seg=(t,s,d)=>clamp((t-s)/d);
+let MEASURE=false;
+
+const NAV=[['Tableau de bord','<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'],['Journaux','<path d="M5 3h12a2 2 0 012 2v16H7a2 2 0 01-2-2zM5 18h14"/>'],['Mes factures','<path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2z"/>',1],['Relevé bancaire','<path d="M3 9l9-5 9 5M5 9v9M9 9v9M15 9v9M19 9v9M3 20h18"/>',1],['Compte de résultat','<path d="M6 3h9l4 4v14H6zM9 12h7M9 16h7M9 8h3"/>'],['La Balance','<path d="M12 3v18M6 21h12M5 7h14M5 7l-3 7a3 3 0 006 0zM19 7l-3 7a3 3 0 006 0z"/>'],['Bilan','<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 10h18M10 10v11"/>'],['Grand Livre','<path d="M4 4v16h16M9 16v-5M13 16V8M17 16v-3"/>'],['Clients','<circle cx="9" cy="8" r="3.5"/><path d="M2 20c0-4 3-6 7-6s7 2 7 6M16 4.5a3.5 3.5 0 010 7M18 14c2.5.6 4 2.4 4 6"/>'],['Fournisseurs','<path d="M2 6h11v10H2zM13 9h5l3 3v4h-8zM6 18.5a1.5 1.5 0 100 .01M17 18.5a1.5 1.5 0 100 .01"/>'],['Tableau SCF','<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 9v12"/>'],['Messages','<path d="M4 4h16v12H9l-5 4z"/>']];
+const nav=$('#nav');
+NAV.forEach(([l,p,ia],i)=>{const d=document.createElement('div');d.className='nav';d.innerHTML=`<svg class="ico" viewBox="0 0 24 24">${p}</svg><span>${l}</span>${ia?'<span class="ia">IA</span>':''}`;nav.appendChild(d)});
+const navEls=[...nav.children];
+
+/* table rows */
+const ROWS=[
+['02/03/2026','512000','411000','VIR CLIENT SARL TASSILI','327 450,00','710284'],
+['02/03/2026','627000','512000','FRAIS DE TENUE DE COMPTE','95,50','448120'],
+['03/03/2026','401000','512000','PAIEMENT FOURNISSEUR EURL DJURDJURA','214 780,35','903317'],
+['04/03/2026','512000','411000','VIR CLIENT SPA HODNA','1 460 200,00','710291'],
+['04/03/2026','613000','512000','PRELEV LOYER LOCAL COMMERCIAL','120 000,00','562208'],
+['05/03/2026','606000','512000','ACHAT CARBURANT CARTE','18 640,20','334771'],
+['06/03/2026','512000','411000','REMISE CHEQUE CLIENT','560 000,00','845503'],
+['06/03/2026','627000','512000','COMMISSION DE VIREMENT','210,00','448131'],
+['09/03/2026','401000','512000','PAIEMENT FOURNISSEUR SARL AURES','389 915,80','903342'],
+['10/03/2026','641000','512000','VIR SALAIRES MARS','865 000,00','127006'],
+['11/03/2026','512000','411000','VIR CLIENT EURL BELLE VUE','742 318,60','710307'],
+['12/03/2026','626000','512000','ABONNEMENT TELECOM','12 480,00','671190'],
+['13/03/2026','447000','512000','PAIEMENT IMPOTS G50','98 726,00','990875'],
+['16/03/2026','512000','411000','VIR CLIENT SPA CIRTA','2 015 400,00','710319'],
+['17/03/2026','661000','512000','AGIOS ET INTERETS','2 904,15','100457'],
+['18/03/2026','401000','512000','PAIEMENT FOURNISSEUR SARL KABYLIE','176 230,00','903358'],
+['19/03/2026','627000','512000','FRAIS DE TENUE DE COMPTE','95,50','448160'],
+['20/03/2026','512000','411000','VIR CLIENT EURL ZIBAN','433 870,25','710326']];
+const rowsEl=$('#rows');
+ROWS.forEach(r=>{const d=document.createElement('div');d.className='gr tr';d.innerHTML=r.map(c=>`<div class="c">${c}</div>`).join('');rowsEl.appendChild(d)});
+const rowEls=[...rowsEl.children];
+
+/* keyframes */
+const ZOOM=[[0,1],[1.9,1],[2.6,1.7],[3.9,1.7],[4.6,1],[4.9,1],[5.5,1.4],[7.0,1.4],[7.6,1.6],[8.7,1.6],[9.3,1.3],[12.1,1.3],[12.8,1],[15.9,1],[16.4,1.25],[19.3,1.25],[20.0,1.7],[22.8,1.7],[23.4,1],[24,1]];
+const zoomAt=t=>{for(let i=0;i<ZOOM.length-1;i++){const a=ZOOM[i],b=ZOOM[i+1];if(t>=a[0]&&t<=b[0])return a[1]+(b[1]-a[1])*easeIO((t-a[0])/(b[0]-a[0]))}return 1};
+const DUR=24;
+const FILE0=[1210,660]; // file tile start (app coords, center)
+let CP,TARGET={},MAXSCROLL=0;
+const ctr=el=>{const r=el.getBoundingClientRect();return [r.left+r.width/2,r.top+r.height/2]};
+function buildPath(){
+  const nv=ctr(navEls[3]), dz=ctr($('#dz')), sd=ctr($('#send')), cf=ctr($('#conf'));
+  nv[0]+=8;
+  TARGET={nv,dz,sd,cf};
+  MAXSCROLL=$('#scroller').scrollHeight-$('#scroller').clientHeight;
+  CP=[[0,1000,330],[1.8,1000,330],[2.7,...nv],[3.4,...nv],
+   [4.4,980,600],[5.0,...FILE0],[5.3,...FILE0],
+   [6.5,...dz],[6.9,...dz],
+   [7.7,...sd],[8.4,...sd],
+   [9.4,860,430],[12.9,860,430],
+   [13.8,860,520],[19.8,860,520],
+   [20.6,...cf],[24,...cf]];
+}
+const cursorAt=t=>{if(t<=CP[0][0])return CP[0].slice(1);for(let i=0;i<CP.length-1;i++){const a=CP[i],b=CP[i+1];if(t>=a[0]&&t<=b[0]){const k=easeIO((t-a[0])/(b[0]-a[0]));return[a[1]+(b[1]-a[1])*k,a[2]+(b[2]-a[2])*k]}}return CP[CP.length-1].slice(1)};
+
+const CLICKS=[3.3,6.9,8.3,21.6];
+const cur=$('#cursor'),rip=$('#ripple');
+function show(el,o,y=0,x=0){el.style.opacity=o;el.style.transform=MEASURE?'none':`translate(${x}px,${y}px)`;if(MEASURE)el.style.opacity=1}
+
+function render(t){
+  // chrome
+  const intro=easeOut(seg(t,0,.8));
+  document.querySelector('aside').style.opacity=intro;
+  $('#back').style.opacity=intro;
+  $('#ttl').style.opacity=easeOut(seg(t,3.4,.5));
+  const active=t>=3.3?3:0;
+  navEls.forEach((n,i)=>n.classList.toggle('on',i===active));
+  navEls.forEach((n,i)=>{const k=easeOut(seg(t,.1+i*.05,.5));n.style.opacity=k});
+
+  // pages
+  const dOut=seg(t,3.3,.5);
+  show($('#pg-dash'),(easeOut(seg(t,.3,.8)))*(1-dOut),-12*dOut+ (1-easeOut(seg(t,.3,.8)))*14);
+  $('#pg-dash').style.pointerEvents='none';
+  const upIn=easeOut(seg(t,3.5,.6)), upOut=seg(t,12.4,.5);
+  show($('#pg-up'),upIn*(1-upOut),(1-upIn)*18-upOut*14);
+  const rIn=easeOut(seg(t,12.8,.6));
+  show($('#pg-res'),rIn,(1-rIn)*22);
+  const tabsO=easeOut(seg(t,3.5,.6));
+  $('#tabs').style.opacity=MEASURE?1:tabsO;
+
+  // dropzone states
+  const hover=seg(t,5.4,.5)*(1-seg(t,6.5,.2)); // file hovering
+  const dz=$('#dz');
+  dz.style.borderColor=hover>0?'#34715f':'#c4d0ca';
+  dz.style.background=hover>0?`rgba(223,242,235,${.5*hover+.4*(1-hover)})`:'rgba(255,255,255,.4)';
+  dz.style.transform=hover>0?`scale(${1+.012*hover})`:'none';
+  $('#t1').textContent=hover>.3?'Relâchez pour importer':'Importer un relevé bancaire (PDF ou image)';
+  const dropped=t>=6.9, proc=t>=8.5;
+  const procK=easeOut(seg(t,8.6,.5));
+  $('#idle').style.opacity=dropped?0:1;
+  $('#chip').style.opacity=dropped&&!proc?easeOut(seg(t,6.9,.35)):0;
+  $('#chip').style.transform=`scale(${.92+.08*easeOut(seg(t,6.9,.35))})`;
+  $('#proc').style.opacity=procK; $('#proc').style.visibility=t>=8.5?'visible':'hidden';
+  if(MEASURE){$('#proc').style.visibility='hidden'}
+  // send btn
+  const en=easeOut(seg(t,7.2,.4));
+  const sb=$('#send');sb.style.background=en>0?`rgb(${143-91*en},${203-90*en},${183-88*en})`:'#8fcbb7';
+  sb.style.transform=Math.abs(t-8.3)<.12?'scale(.95)':'none';
+  // processing
+  const p=seg(t,8.9,3.4);
+  $('#bar').style.width=(easeIO(p)*100)+'%';
+  $('#opn').textContent=Math.round(18*easeOut(seg(t,9.6,2.6)));
+  const th=[.12,.38,.62,.9];
+  document.querySelectorAll('.st').forEach((s,i)=>{const done=easeIO(p)>th[i];const d=s.querySelector('.d');d.style.background=done?'#34715f':'transparent';d.style.borderColor=done?'#34715f':'#cfd9d4';d.firstElementChild.style.opacity=done?1:0;s.style.color=done?'#14231d':'#6b7a73'});
+  $('#scan').style.top=(-34+(170+34)*((t*0.9)%1))+'px';
+
+  // result rows
+  rowEls.forEach((r,i)=>{const k=easeOut(seg(t,13.5+Math.min(i,9)*.1,.45));r.style.opacity=MEASURE?1:k;r.style.transform=MEASURE?'none':`translateY(${(1-k)*14}px)`});
+  const sc=easeIO(seg(t,16.4,3.2));
+  $('#scroller').scrollTop=MEASURE?0:sc*MAXSCROLL;
+  // confirm
+  const done=t>=21.6;
+  $('#conft').textContent=done?'Écritures enregistrées':'Confirmer et enregistrer';
+  const cf=$('#conf');cf.style.background=done?'#1f9d6b':'#173a30';
+  cf.style.transform=Math.abs(t-21.6)<.1?'scale(.96)':'none';
+  $('#fs').textContent=done?'Terminé — vos écritures sont dans le journal':'18 écritures prêtes à être enregistrées';
+  const tk=easeOut(seg(t,21.9,.5));$('#toast').style.opacity=MEASURE?0:tk;$('#toast').style.transform=`translateY(${(1-tk)*-14}px)`;
+  if(done&&!MEASURE)rowEls.forEach((r,i)=>{r.style.background=`rgba(228,244,236,${.9*(1-clamp((t-21.8-i*.03)/.9))})`});
+  else rowEls.forEach(r=>r.style.background='transparent');
+}
+
+function renderCursor(t){
+  const [x,y]=cursorAt(t);
+  cur.style.opacity=easeOut(seg(t,1.2,.5))*(1-seg(t,23.3,.5));
+  cur.style.transform=`translate(${x-3}px,${y-3}px)`;
+  // dragged file
+  const f=$('#file');
+  const appear=easeOut(seg(t,4.0,.5));
+  let fx=FILE0[0],fy=FILE0[1],fo=appear,fs=1;
+  if(t>=5.1&&t<6.9){fx=x+14;fy=y+16;fs=1.04}
+  if(t>=6.9){fo=0;}
+  if(t>=6.55&&t<6.9){fo=1-seg(t,6.55,.35);}
+  f.style.opacity=fo;
+  const bob=t<5.1?Math.sin(t*3)*3:0;
+  f.style.transform=`translate(${fx-105}px,${fy-30+bob}px) scale(${fs}) rotate(${t>=5.1&&t<6.9?-3:0}deg)`;
+  // click ripple
+  let r=0;CLICKS.forEach(ct=>{const k=seg(t,ct,.6);if(k>0&&k<1){r=1-k;const [cx,cy]=cursorAt(ct);rip.style.transform=`translate(${cx}px,${cy}px) scale(${.4+k*1.4})`}});
+  rip.style.opacity=r*.7;
+}
+
+function seek(t){
+  const app=$('#app');app.style.transform='none';
+  render(t);if(!CP)return;renderCursor(t);
+  $('#fade').style.opacity=seg(t,23.3,.7);
+  const s=zoomAt(t);
+  if(s>1.001){const [fx,fy]=cursorAt(t);const w=clamp((s-1)/.55);
+    const px=fx+(720-fx)*.5*w,py=fy+(450-fy)*.5*w;
+    const tx=Math.min(0,Math.max(1440*(1-s),px-fx*s)),ty=Math.min(0,Math.max(900*(1-s),py-fy*s));
+    app.style.transform=`translate(${tx}px,${ty}px) scale(${s})`;cur.style.transform+=` scale(${1/s})`;}
+}
+window.__seek=seek;
+function start(){
+  MEASURE=true;seek(0);buildPath();MEASURE=false;
+  window.__ready=true;
+  const q=new URLSearchParams(location.search);if(q.has('seek')){seek(parseFloat(q.get('seek'))||0);return}
+  let t0=null;const loop=now=>{if(t0===null)t0=now;let t=((now-t0)/1000)%DUR;seek(t);requestAnimationFrame(loop)};requestAnimationFrame(loop);
+}
+document.fonts.ready.then(()=>setTimeout(start,200));
+</script>
+</body>
+</html>
