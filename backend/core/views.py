@@ -1392,6 +1392,7 @@ class FactureListCreateView(APIView):
                 fournisseur_client=fournisseur_client,
                 type_facture=type_facture,
                 mode_paiement=mode_paiement,
+                lignes_ia=lignes if isinstance(lignes, list) else [],
             )
             return Response(FactureSerializer(facture, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
@@ -1528,7 +1529,14 @@ class FactureValidateView(APIView):
                     "tiers": tiers_nom,
                 }
             ]
+        elif facture.lignes_ia:
+            # The account lines the AI proposed at submission (charges in OD,
+            # stock in Achats...). persist_extraction checks them against the
+            # SCF table and routes the journal.
+            lignes = [dict(ligne) for ligne in facture.lignes_ia]
         else:
+            # Invoices submitted before the AI lines were stored: fall back to
+            # the generic purchase/sale accounts.
             compte_achat = None
             if not is_vente:
                 compte_achat_scf = SCFAccount.objects.filter(

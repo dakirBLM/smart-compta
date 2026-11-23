@@ -1515,6 +1515,93 @@ class InvoiceJournalAndScfAccountTests(APITestCase):
         self.assertTrue(any("999999" in error for error in response.data["erreurs"]))
 
 
+class ClientInvoiceAiLinesTests(APITestCase):
+    """A client's invoice keeps the AI's account lines and is posted from them at validation."""
+
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="client-lines-accountant", role="accountant"
+        )
+        self.client_user = get_user_model().objects.create_user(
+            username="client-lines-client", role="client"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SARL CLIENT LIGNES", nif="client-lines-1", nis="client-lines-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+        ClientAccess.objects.create(
+            client=self.client_user, entreprise=self.entreprise, nom_client="Client lignes"
+        )
+        load_scf_table()
+        self.lines = [
+            {"compte": "607000", "libelle": "Achat fournitures de bureau", "debit": 34300, "credit": 0},
+            {"compte": "445600", "libelle": "TVA déductible", "debit": 6517, "credit": 0},
+            {"compte": "401000", "libelle": "EURL BUREAU PLUS", "debit": 0, "credit": 40817},
+        ]
+
+    def submit(self, lignes, numero="CLI-1"):
+        self.client.force_authenticate(self.client_user)
+        response = self.client.post(
+            "/api/factures/",
+            {
+                "numero_facture": numero,
+                "date_facture": "2026-11-05",
+                "fournisseur_client": "EURL BUREAU PLUS",
+                "montant_ht": "34300",
+                "tva_pourcentage": "19",
+                "montant_tva": "6517",
+                "montant_ttc": "40817",
+                "confiance_ia": "95",
+                "lignes": lignes,
+            },
+            format="json",
+        )
+        self.client.force_authenticate(self.accountant)
+        return response
+
+    def test_client_submission_keeps_the_ai_lines(self):
+        response = self.submit(self.lines)
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        facture = Facture.objects.get(numero_facture="CLI-1")
+        self.assertEqual(
+            [(l["compte"], l["debit"], l["credit"]) for l in facture.lignes_ia],
+            [("607000", 34300, 0), ("445600", 6517, 0), ("401000", 0, 40817)],
+        )
+
+    def test_validation_posts_the_ai_charge_lines_to_operations_diverses(self):
+        self.submit(self.lines)
+        facture = Facture.objects.get(numero_facture="CLI-1")
+
+        response = self.client.post(f"/api/factures/{facture.id}/validate/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        ecriture = Ecriture.objects.get(numero_piece="CLI-1")
+        self.assertEqual(ecriture.journal.type_journal, Journal.Type.OD)
+        comptes = set(ecriture.lignes.values_list("numero_compte", flat=True))
+        self.assertIn("607000", comptes)
+        self.assertNotIn("380000", comptes)
+        self.assertTrue(Fournisseur.objects.filter(
+            entreprise=self.entreprise, nom="EURL BUREAU PLUS"
+        ).exists())
+
+    def test_validation_refuses_an_account_outside_the_scf_table(self):
+        bad = [dict(l) for l in self.lines]
+        bad[0]["compte"] = "999999"
+        self.submit(bad, numero="CLI-BAD")
+        facture = Facture.objects.get(numero_facture="CLI-BAD")
+
+        response = self.client.post(f"/api/factures/{facture.id}/validate/", {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST, response.data)
+        self.assertIn("999999", response.data["error"])
+        self.assertFalse(Ecriture.objects.filter(numero_piece="CLI-BAD").exists())
+        facture.refresh_from_db()
+        self.assertEqual(facture.statut, Facture.Statut.EN_COURS)
+
+
 class FactureDeletionTests(APITestCase):
     def setUp(self):
         user_model = get_user_model()
