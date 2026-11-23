@@ -3,6 +3,7 @@ from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.http import FileResponse
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -54,6 +55,7 @@ from .report_exports import (
 from .scanner import (
     WebhookError,
     _parse_date,
+    apply_invoice_journal,
     call_webhook,
     pdf_to_jpeg,
     persist_extraction,
@@ -819,6 +821,7 @@ class ScannerUploadView(APIView):
                 "marchandise": ent.marchandise,
                 "matiere_premiere": ent.matiere_premiere,
                 "matieres_consommables": ent.matieres_consommables,
+                "comptes_scf": _invoice_scf_accounts_context(ent),
             }
         # Optional journal the user pre-selected for this operation.
         hint = (request.data.get("journal_hint") or "").strip()
@@ -876,10 +879,27 @@ class ScannerUploadView(APIView):
             data.setdefault("journal_hint", hint)
 
         data = sanitize_bank_statement_data(data, entreprise=ent)
+        data = apply_invoice_journal(data)
 
         errors = validate_extraction(data, entreprise=ent)
         return Response({"data": data, "erreurs": errors,
                          "confiance": data.get("confiance")})
+
+
+def _invoice_scf_accounts_context(entreprise):
+    """The SCF accounts an invoice may use (stocks 38x, charges 6, produits 7),
+    sent to the AI so it picks accounts from the platform's own table."""
+    accounts = (
+        SCFAccount.objects.filter(
+            Q(entreprise__isnull=True) | Q(entreprise=entreprise),
+            Q(numero_compte__startswith="38")
+            | Q(numero_compte__startswith="6")
+            | Q(numero_compte__startswith="7"),
+        )
+        .order_by("numero_compte")
+        .values_list("numero_compte", "libelle")
+    )
+    return " | ".join(f"{numero} {libelle}" for numero, libelle in accounts)
 
 
 class ScannerConfirmView(APIView):

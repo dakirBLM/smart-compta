@@ -21,10 +21,16 @@ from .models import BankAccount, BankStatement, BankStatementSubmission, ClientA
 from .account_helpers import apply_scf_subaccounts
 from .bank_test_utils import make_bank
 from .reports import build_balance, build_grand_livre
-from .scanner import persist_extraction, upload_invoice_image
+from .scanner import WebhookError, persist_extraction, upload_invoice_image
 from .bank_statements import BankStatementError
 from .serializers import FactureSerializer
 from .views import MAX_BANK_STATEMENT_UPLOAD_BYTES, MAX_MESSAGE_ATTACHMENT_BYTES
+
+SCF_TABLE_CSV = Path(__file__).resolve().parent.parent / "data" / "LA_TABLE_SCF.csv"
+
+
+def load_scf_table():
+    call_command("import_scf", str(SCF_TABLE_CSV), verbosity=0)
 
 
 class FactureImageUrlSerializerTests(APITestCase):
@@ -1343,9 +1349,7 @@ class PurchaseInvoiceAccountingTests(APITestCase):
         ExerciceAnnee.objects.create(
             entreprise=self.entreprise, annee=2026, is_active=True
         )
-        SCFAccount.objects.create(
-            numero_compte="380", libelle="Marchandises stockees", classe=3
-        )
+        load_scf_table()
         self.client.force_authenticate(self.accountant)
 
     def _create_invoice(self, type_facture):
@@ -1367,7 +1371,7 @@ class PurchaseInvoiceAccountingTests(APITestCase):
 
         response = self.client.post(f"/api/factures/{facture.id}/validate/", {}, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         ecriture = Ecriture.objects.get()
         comptes = list(ecriture.lignes.values_list("numero_compte", flat=True))
         self.assertIn("380000", comptes)
@@ -1385,10 +1389,130 @@ class PurchaseInvoiceAccountingTests(APITestCase):
 
         response = self.client.post(f"/api/factures/{facture.id}/validate/", {}, format="json")
 
-        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
         comptes = set(Ecriture.objects.get().lignes.values_list("numero_compte", flat=True))
         self.assertIn("700000", comptes)
         self.assertNotIn("380000", comptes)
+
+
+class InvoiceJournalAndScfAccountTests(APITestCase):
+    """Principal matter goes to Achats, charges to OD, every account follows the SCF table."""
+
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="journal-rules-accountant", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SARL PIECES DETACHEES", nif="rules-1", nis="rules-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            activite="Commerce", marchandise="Pièces détachées",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+        load_scf_table()
+        self.client.force_authenticate(self.accountant)
+
+    def invoice(self, compte, libelle, journal="Achats", numero="FA-1", **extra):
+        return {
+            "fournisseur": "EURL BUREAU PLUS",
+            "date_facture": "05/11/2026",
+            "numero_facture": numero,
+            "montant_ht": 34300,
+            "tva_pourcentage": 19,
+            "montant_tva": 6517,
+            "montant_ttc": 40817,
+            "journal": journal,
+            "confiance": 95,
+            "lignes": [
+                {"compte": compte, "libelle": libelle, "debit": 34300, "credit": 0},
+                {"compte": "445600", "libelle": "TVA déductible", "debit": 6517, "credit": 0},
+                {"compte": "401000", "libelle": "EURL BUREAU PLUS", "debit": 0, "credit": 40817},
+            ],
+            **extra,
+        }
+
+    def test_office_supplies_are_a_charge_posted_to_operations_diverses(self):
+        ecriture = persist_extraction(
+            self.entreprise, self.invoice("607000", "Achat fournitures de bureau")
+        )
+
+        self.assertEqual(ecriture.journal.type_journal, Journal.Type.OD)
+        fournisseur = Fournisseur.objects.get(entreprise=self.entreprise, nom="EURL BUREAU PLUS")
+        comptes = set(ecriture.lignes.values_list("numero_compte", flat=True))
+        self.assertEqual(comptes, {"607000", "445600", fournisseur.numero_compte})
+        self.assertFalse(Journal.objects.filter(
+            entreprise=self.entreprise, type_journal=Journal.Type.ACHAT
+        ).exists())
+
+    def test_principal_matter_stays_in_journal_achats(self):
+        for numero, compte in (("FA-380", "380000"), ("FA-381", "381000"), ("FA-382", "382000")):
+            ecriture = persist_extraction(
+                self.entreprise, self.invoice(compte, "Achat", journal="OD", numero=numero)
+            )
+            self.assertEqual(ecriture.journal.type_journal, Journal.Type.ACHAT, compte)
+
+    def test_account_outside_the_scf_table_refuses_the_invoice(self):
+        with self.assertRaisesMessage(WebhookError, "Le compte 999999 n'existe pas dans le plan comptable SCF"):
+            persist_extraction(self.entreprise, self.invoice("999999", "Inconnu"))
+        self.assertEqual(Ecriture.objects.count(), 0)
+        self.assertEqual(Fournisseur.objects.count(), 0)
+
+    def test_cash_paid_charge_settles_the_supplier_in_caisse(self):
+        ecriture = persist_extraction(
+            self.entreprise,
+            self.invoice("626000", "Abonnement téléphone", mode_paiement="espèces"),
+        )
+
+        self.assertEqual(ecriture.journal.type_journal, Journal.Type.OD)
+        fournisseur = Fournisseur.objects.get(entreprise=self.entreprise)
+        reglement = Ecriture.objects.get(journal__type_journal=Journal.Type.CAISSE)
+        self.assertEqual(
+            set(reglement.lignes.values_list("numero_compte", flat=True)),
+            {fournisseur.numero_compte, "530000"},
+        )
+
+    def test_sales_invoice_stays_in_ventes(self):
+        data = self.invoice("700000", "Vente de pièces", journal="Ventes", fournisseur="SPA CLIENT")
+        data["lignes"] = [
+            {"compte": "411000", "libelle": "SPA CLIENT", "debit": 40817, "credit": 0},
+            {"compte": "700000", "libelle": "Vente de pièces", "debit": 0, "credit": 34300},
+            {"compte": "445700", "libelle": "TVA collectée", "debit": 0, "credit": 6517},
+        ]
+
+        ecriture = persist_extraction(self.entreprise, data)
+
+        self.assertEqual(ecriture.journal.type_journal, Journal.Type.VENTE)
+
+    @patch("core.views.call_webhook")
+    def test_scan_preview_shows_the_real_journal_and_sends_the_scf_table(self, webhook):
+        webhook.return_value = self.invoice("607000", "Achat fournitures de bureau")
+
+        response = self.client.post(
+            "/api/scanner/upload/",
+            {"entreprise": self.entreprise.id, "image": "aGVsbG8="},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+        self.assertEqual(response.data["data"]["journal"], "OD")
+        self.assertEqual(response.data["erreurs"], [])
+        comptes_scf = webhook.call_args.kwargs["context"]["comptes_scf"]
+        self.assertIn("607 Achats non stockes de matieres et fournitures", comptes_scf)
+        self.assertIn("380 Marchandises stockees", comptes_scf)
+        self.assertIn("700 Ventes de marchandises", comptes_scf)
+        self.assertNotIn("401 ", comptes_scf)
+
+    @patch("core.views.call_webhook")
+    def test_scan_preview_flags_accounts_outside_the_scf_table(self, webhook):
+        webhook.return_value = self.invoice("999999", "Inconnu")
+
+        response = self.client.post(
+            "/api/scanner/upload/",
+            {"entreprise": self.entreprise.id, "image": "aGVsbG8="},
+            format="json",
+        )
+
+        self.assertTrue(any("999999" in error for error in response.data["erreurs"]))
 
 
 class FactureDeletionTests(APITestCase):
@@ -1543,6 +1667,7 @@ class InvoiceReuseAfterEntryDeletionTests(APITestCase):
         self.journal = Journal.objects.create(
             entreprise=self.entreprise, annee=year, type_journal=Journal.Type.ACHAT
         )
+        load_scf_table()
         self.client.force_authenticate(self.accountant)
         self.invoice_number = "FAC-RETRY-1"
         self.confirm_url = "/api/scanner/confirm/"

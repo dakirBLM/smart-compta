@@ -20,6 +20,7 @@ from .account_helpers import (
     auto_balance_lines,
     get_or_create_client_comptable,
     get_or_create_fournisseur,
+    scf_account_exists,
     _normalize_name,
 )
 from .bank_statements import BankStatementError, validate_statement
@@ -40,6 +41,73 @@ JOURNAL_MAP = {
     "caisse": Journal.Type.CAISSE,
     "od": Journal.Type.OD,
 }
+
+# Purchases of the company's principal matter (marchandises, matières premières,
+# matières consommables) go to Journal Achats; every other purchase is a charge
+# (class 6) and goes to Journal Opérations diverses.
+PRINCIPAL_PURCHASE_PREFIXES = ("380", "381", "382", "600", "601", "602")
+
+
+def purchase_journal_type(lignes):
+    """Journal for a supplier invoice, decided by what it debits.
+
+    Achats when any line debits a principal-matter account, OD when the debits
+    are only charges, None when the lines say neither (left as the AI chose).
+    """
+    debited = [
+        str(ligne.get("compte") or "").strip()
+        for ligne in lignes or []
+        if float(ligne.get("debit") or 0) > 0
+    ]
+    if any(compte.startswith(PRINCIPAL_PURCHASE_PREFIXES) for compte in debited):
+        return Journal.Type.ACHAT
+    if any(compte.startswith("6") for compte in debited):
+        return Journal.Type.OD
+    return None
+
+
+def _is_supplier_invoice(lignes):
+    return any(
+        str(ligne.get("compte") or "").strip().startswith("401")
+        and float(ligne.get("credit") or 0) > 0
+        for ligne in lignes or []
+    )
+
+
+def invoice_journal_type(data):
+    """The journal an (non bank statement) invoice is posted to.
+
+    Sales stay in Ventes, cash/bank journals stay as chosen; a purchase (AI
+    label Achats or OD) is routed by purchase_journal_type.
+    """
+    base_type = JOURNAL_MAP.get(str(data.get("journal", "")).lower(), Journal.Type.ACHAT)
+    if base_type in (Journal.Type.ACHAT, Journal.Type.OD):
+        lignes = data.get("lignes") or []
+        if base_type == Journal.Type.ACHAT or _is_supplier_invoice(lignes):
+            return purchase_journal_type(lignes) or base_type
+    return base_type
+
+
+JOURNAL_LABELS = {Journal.Type.ACHAT: "Achats", Journal.Type.OD: "OD"}
+
+
+def apply_invoice_journal(data):
+    """Set data["journal"] to the journal the invoice will really be posted to."""
+    if isinstance(data, dict) and data.get("lignes"):
+        label = JOURNAL_LABELS.get(invoice_journal_type(data))
+        if label:
+            data["journal"] = label
+    return data
+
+
+def unknown_scf_accounts(lignes, entreprise=None):
+    """Accounts used by the lines that are not in the SCF table."""
+    unknown = []
+    for ligne in lignes or []:
+        compte = str(ligne.get("compte") or "").strip()
+        if not scf_account_exists(compte, entreprise) and compte not in unknown:
+            unknown.append(compte)
+    return unknown
 
 
 
@@ -328,6 +396,11 @@ def blocking_errors(data, entreprise=None):
         total_credit = sum(float(l.get("credit", 0) or 0) for l in lignes)
         if abs(total_debit - total_credit) > 0.01:
             errors.append(f"Débit ({total_debit}) ≠ Crédit ({total_credit}).")
+        for compte in unknown_scf_accounts(lignes, entreprise):
+            errors.append(
+                f"Le compte {compte or '(vide)'} n'existe pas dans le plan comptable SCF. "
+                "Facture non enregistrée."
+            )
     else:
         normalized_lignes = [_normalize_bank_line(l) for l in lignes]
         valid_ops = any(float(l.get("debit", 0) or 0) > 0 or float(l.get("credit", 0) or 0) > 0 for l in normalized_lignes)
@@ -751,9 +824,14 @@ def persist_extraction(entreprise, data, source="scanner"):
     if data.get("lignes"):
         data["lignes"] = auto_balance_lines(data["lignes"], is_vente=(base_type == Journal.Type.VENTE))
 
-    errors = blocking_errors(data)
+    errors = blocking_errors(data, entreprise=entreprise)
     if errors:
         raise WebhookError("; ".join(errors))
+
+    base_type = invoice_journal_type(data)
+    is_purchase = base_type == Journal.Type.ACHAT or (
+        base_type == Journal.Type.OD and _is_supplier_invoice(data["lignes"])
+    )
 
     date_fact = _parse_date(data["date_facture"])
     annee = _resolve_exercice(entreprise, date_fact)
@@ -794,7 +872,7 @@ def persist_extraction(entreprise, data, source="scanner"):
     # l'émetteur au lieu du client "Doit:"), on refuse avec un message clair :
     # le comptable corrige le champ Fournisseur/Client dans l'écran de
     # révision (il y est éditable) puis confirme.
-    if base_type in (Journal.Type.ACHAT, Journal.Type.VENTE) and _normalize_name(tiers_nom) == _normalize_name(entreprise.nom):
+    if (is_purchase or base_type == Journal.Type.VENTE) and _normalize_name(tiers_nom) == _normalize_name(entreprise.nom):
         if base_type == Journal.Type.VENTE:
             raise WebhookError(
                 "Le CLIENT de la facture n'a pas été identifié (l'IA a renvoyé "
@@ -811,8 +889,8 @@ def persist_extraction(entreprise, data, source="scanner"):
     tiers_compte = None
     lignes_data = list(data["lignes"])
     
-    if base_type == Journal.Type.ACHAT:
-        # C'est un achat → on crée un fournisseur (401)
+    if is_purchase:
+        # C'est un achat (Achats ou charge en OD) → on crée un fournisseur (401)
         try:
             tiers = get_or_create_fournisseur(entreprise, tiers_nom)
             tiers_compte = tiers.numero_compte
@@ -862,7 +940,7 @@ def persist_extraction(entreprise, data, source="scanner"):
     # For bank payments, the movement is already reflected by the bank statement import,
     # so we must not create an extra settlement entry in the Banque journal.
     # The caisse logic remains unchanged.
-    if is_cash and base_type in (Journal.Type.ACHAT, Journal.Type.VENTE):
+    if is_cash and (is_purchase or base_type == Journal.Type.VENTE):
         ttc = float(data.get("montant_ttc") or 0)
         if ttc > 0:
             reg_type = Journal.Type.CAISSE
@@ -883,7 +961,7 @@ def persist_extraction(entreprise, data, source="scanner"):
                 statut=statut,
                 mode_paiement=data.get("mode_paiement", "") or "",
             )
-            if base_type == Journal.Type.ACHAT:
+            if is_purchase:
                 compte_tiers = tiers_compte or "401000"
                 paires = [
                     (compte_tiers, f"Règlement fournisseur {fournisseur_client_nom} — {numero}", ttc, 0),
