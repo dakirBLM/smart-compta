@@ -1,17 +1,26 @@
-"""Everything a company leaves outside the database when it is deleted.
+"""Remove a company's files without losing them if the delete fails.
 
 Deleting an Entreprise cascades to its rows (journals, invoices, banks, client
 links, messages...). The files those rows point to live elsewhere (default
-storage, Cloudinary, the local media folder). They are collected before the
-delete and removed inside the same transaction, after the rows are gone: if a
-file cannot be removed, the transaction rolls back and nothing is deleted.
+storage, Cloudinary, the local media folder). The delete runs in three steps:
+
+1. Move every file to a trash location (storage copy, or Cloudinary rename).
+   The original is removed only after its trash copy exists.
+2. Delete the company rows and the client logins that had no other company,
+   in one database transaction.
+3. If step 2 fails, move every file back from the trash and report the error.
+   If step 2 succeeds, empty the trash.
 """
 import logging
 import os
 import re
+import uuid
+from dataclasses import dataclass
+from typing import Optional
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.files.base import ContentFile
 from django.core.files.storage import FileSystemStorage
 
 from .models import (
@@ -23,8 +32,28 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+STORAGE_TRASH_DIR = "_company_trash"
+CLOUDINARY_TRASH_FOLDER = "smart-compta-trash"
+
 # https://res.cloudinary.com/<cloud>/image/upload/v<version>/<public_id>.<ext>
 _CLOUDINARY_PUBLIC_ID = re.compile(r"/upload/(?:v\d+/)?(.+?)\.[A-Za-z0-9]+$")
+
+
+class CompanyFilesError(Exception):
+    """At least one company file could not be moved or removed."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        super().__init__("; ".join(failures))
+
+
+@dataclass
+class TrashedFile:
+    """A company file that now lives in the trash, with its original location."""
+
+    storage: Optional[object]  # None for Cloudinary images
+    original: str  # storage name, or Cloudinary public_id
+    trash: str  # storage name, or Cloudinary public_id
 
 
 def collect_company_files(entreprise):
@@ -49,57 +78,132 @@ def collect_company_files(entreprise):
     return stored_files, image_urls
 
 
-class CompanyFilesError(Exception):
-    """At least one company file could not be deleted."""
+def _cloudinary_uploader():
+    if not os.getenv("CLOUDINARY_URL"):
+        raise RuntimeError("CLOUDINARY_URL n'est pas configuré")
+    import cloudinary.uploader
 
-    def __init__(self, failures):
-        self.failures = failures
-        super().__init__("; ".join(failures))
+    return cloudinary.uploader
 
 
-def delete_invoice_image(url):
-    """Remove a scanned invoice image from Cloudinary or the local media folder.
-
-    Raises if the image cannot be removed, so the caller can stop the company
-    delete instead of silently leaving the file behind.
-    """
+def _is_local_media(url):
     media_url = settings.MEDIA_URL or ""
-    if media_url and url.startswith(media_url):
-        FileSystemStorage(location=str(settings.MEDIA_ROOT)).delete(url[len(media_url):])
-        return
-    if "res.cloudinary.com" in url:
-        if not os.getenv("CLOUDINARY_URL"):
-            raise RuntimeError("CLOUDINARY_URL n'est pas configuré")
-        match = _CLOUDINARY_PUBLIC_ID.search(url)
-        if not match:
-            raise RuntimeError("URL Cloudinary non reconnue")
-        import cloudinary.uploader
-
-        result = cloudinary.uploader.destroy(match.group(1), resource_type="image")
-        if result.get("result") not in ("ok", "not found"):
-            raise RuntimeError(f"Cloudinary a refusé la suppression : {result}")
+    return bool(media_url) and url.startswith(media_url)
 
 
-def delete_company_files(stored_files, image_urls):
-    """Delete every company file. Raises CompanyFilesError if any of them fails.
+def _move_storage_file(storage, name):
+    """Copy the file to the trash, then remove the original. None if it is gone."""
+    if not storage.exists(name):
+        return None
+    with storage.open(name, "rb") as source:
+        data = source.read()
+    trash_name = storage.save(f"{STORAGE_TRASH_DIR}/{uuid.uuid4().hex}/{name}", ContentFile(data))
+    try:
+        storage.delete(name)
+    except Exception:
+        _safe_delete_storage(storage, trash_name)
+        raise
+    return TrashedFile(storage=storage, original=name, trash=trash_name)
 
-    All files are attempted so the error lists every failure at once.
+
+def _move_cloudinary_image(url):
+    """Rename the image into the trash folder. None if Cloudinary has no such image."""
+    from cloudinary.exceptions import NotFound
+
+    match = _CLOUDINARY_PUBLIC_ID.search(url)
+    if not match:
+        raise RuntimeError("URL Cloudinary non reconnue")
+    public_id = match.group(1)
+    trash_id = f"{CLOUDINARY_TRASH_FOLDER}/{uuid.uuid4().hex}/{public_id}"
+    uploader = _cloudinary_uploader()
+    try:
+        result = uploader.rename(public_id, trash_id, resource_type="image")
+    except NotFound:
+        return None
+    if not result.get("public_id"):
+        raise RuntimeError(f"Cloudinary a refusé le déplacement : {result}")
+    return TrashedFile(storage=None, original=public_id, trash=trash_id)
+
+
+def _safe_delete_storage(storage, name):
+    try:
+        storage.delete(name)
+    except Exception:
+        logger.exception("Could not delete %s from storage", name)
+
+
+def move_company_files_to_trash(stored_files, image_urls):
+    """Step 1. Move every company file to the trash.
+
+    If any file cannot be moved, the files already moved are put back and
+    CompanyFilesError is raised, so nothing is left half-deleted.
     """
-    failures = []
+    trashed, failures = [], []
     for storage, name in stored_files:
         try:
-            storage.delete(name)
+            item = _move_storage_file(storage, name)
         except Exception as exc:
-            logger.exception("Could not delete stored file %s", name)
+            logger.exception("Could not move stored file %s to trash", name)
             failures.append(f"{name} ({exc})")
+            continue
+        if item:
+            trashed.append(item)
+
     for url in image_urls:
         try:
-            delete_invoice_image(url)
+            if _is_local_media(url):
+                item = _move_storage_file(
+                    FileSystemStorage(location=str(settings.MEDIA_ROOT)),
+                    url[len(settings.MEDIA_URL):],
+                )
+            else:
+                item = _move_cloudinary_image(url)
         except Exception as exc:
-            logger.exception("Could not delete invoice image %s", url)
+            logger.exception("Could not move invoice image %s to trash", url)
             failures.append(f"{url} ({exc})")
+            continue
+        if item:
+            trashed.append(item)
+
     if failures:
+        restore_company_files(trashed)
         raise CompanyFilesError(failures)
+    return trashed
+
+
+def restore_company_files(trashed):
+    """Step 3 (failure path). Put every trashed file back where it was."""
+    failures = []
+    for item in reversed(trashed):
+        try:
+            if item.storage is None:
+                _cloudinary_uploader().rename(item.trash, item.original, resource_type="image")
+                continue
+            with item.storage.open(item.trash, "rb") as source:
+                data = source.read()
+            restored = item.storage.save(item.original, ContentFile(data))
+            if restored != item.original:
+                raise RuntimeError(f"nom restauré différent : {restored}")
+            item.storage.delete(item.trash)
+        except Exception as exc:
+            logger.exception("Could not restore %s from trash %s", item.original, item.trash)
+            failures.append(f"{item.original} (corbeille : {item.trash}, {exc})")
+    if failures:
+        logger.error("Company files still in trash: %s", failures)
+    return failures
+
+
+def purge_trash(trashed):
+    """Step 3 (success path). Empty the trash once the company is deleted."""
+    for item in trashed:
+        try:
+            if item.storage is None:
+                _cloudinary_uploader().destroy(item.trash, resource_type="image")
+            else:
+                item.storage.delete(item.trash)
+        except Exception:
+            # The company is already gone; a leftover trash copy is only clutter.
+            logger.exception("Could not empty trash item %s", item.trash)
 
 
 def remove_orphan_clients(client_ids):

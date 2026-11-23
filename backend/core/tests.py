@@ -4,7 +4,7 @@ from datetime import date
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
@@ -2416,4 +2416,60 @@ class CompanyDeletionCleanupTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
         self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
         self.assertTrue(Facture.objects.filter(numero_facture="F-CLOUD").exists())
+
+    def media_files(self):
+        found = []
+        for root, _dirs, files in os.walk(self._media.name):
+            found.extend(os.path.relpath(os.path.join(root, f), self._media.name) for f in files)
+        return found
+
+    def test_successful_delete_empties_the_trash(self):
+        statement = self.store("bank_statement_submissions/gone.pdf")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=statement, original_filename="gone.pdf",
+        )
+
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(self.media_files(), [])
+
+    def test_failure_after_files_moved_to_trash_puts_them_back(self):
+        statement = self.store("bank_statement_submissions/back.pdf", b"contenu original")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=statement, original_filename="back.pdf",
+        )
+
+        with patch("core.views.remove_orphan_clients", side_effect=RuntimeError("base en panne")):
+            with self.assertRaises(RuntimeError):
+                self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
+        self.assertTrue(BankStatementSubmission.objects.filter(entreprise=self.entreprise).exists())
+        self.assertTrue(default_storage.exists(statement))
+        with default_storage.open(statement, "rb") as restored:
+            self.assertEqual(restored.read(), b"contenu original")
+        self.assertFalse(any(name.startswith("_company_trash") for name in self.media_files()))
+
+    def test_cloudinary_image_is_moved_to_trash_then_destroyed(self):
+        invoice_url = "https://res.cloudinary.com/demo/image/upload/v1/factures/facture.jpg"
+        Facture.objects.create(
+            entreprise=self.entreprise, client=self.accountant,
+            numero_facture="F-CLOUD-OK", montant_ttc=10, image_url=invoice_url,
+        )
+        uploader = MagicMock()
+        uploader.rename.return_value = {"public_id": "moved"}
+        uploader.destroy.return_value = {"result": "ok"}
+
+        with patch.dict(os.environ, {"CLOUDINARY_URL": "cloudinary://k:s@demo"}, clear=False), \
+                patch("core.company_cleanup._cloudinary_uploader", return_value=uploader):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        moved_to = uploader.rename.call_args.args[1]
+        self.assertEqual(uploader.rename.call_args.args[0], "factures/facture")
+        self.assertTrue(moved_to.startswith("smart-compta-trash/"))
+        uploader.destroy.assert_called_once_with(moved_to, resource_type="image")
 
