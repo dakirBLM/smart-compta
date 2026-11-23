@@ -427,6 +427,9 @@ class Facture(models.Model):
         choices=[("achat", "Achat"), ("vente", "Vente")],
         default="achat",
     )
+    # Account lines the AI proposed when the client submitted the invoice; used
+    # when the accountant validates it. Empty for invoices submitted before this.
+    lignes_ia = models.JSONField(default=list, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

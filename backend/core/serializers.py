@@ -1,10 +1,10 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.db import transaction
-from django.db.models import Q
 from django.urls import reverse
 from rest_framework import serializers
 
+from .account_helpers import scf_account_exists
 from .models import (
     BankAccount,
     ClientAccess,
@@ -417,26 +417,8 @@ class LigneEcritureSerializer(serializers.ModelSerializer):
 
     def validate_numero_compte(self, value):
         numero = str(value).strip()
-        entreprise = self.context.get("entreprise")
-
-        def scf_exists(num):
-            qs = SCFAccount.objects.filter(numero_compte=num)
-            if entreprise:
-                qs = qs.filter(Q(entreprise__isnull=True) | Q(entreprise=entreprise))
-            else:
-                qs = qs.filter(entreprise__isnull=True)
-            return qs.exists()
-
-        # Accept exact match first
-        if scf_exists(numero):
+        if scf_account_exists(numero, self.context.get("entreprise")):
             return numero
-
-        # Accept 6-digit padded accounts whose prefix exists in SCF
-        # e.g. "607000" is valid because "607" exists in SCF
-        for length in range(len(numero) - 1, 0, -1):
-            if scf_exists(numero[:length]):
-                return numero
-
         raise serializers.ValidationError(
             f"Le compte {numero} n'existe pas dans le plan comptable SCF."
         )

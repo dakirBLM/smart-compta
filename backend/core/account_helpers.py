@@ -3,11 +3,28 @@ import re
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
+from django.db.models import Q
 from .models import ClientComptable, Fournisseur, SCFAccount
 
 
 def _normalize_name(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
+
+
+def scf_account_exists(numero, entreprise=None) -> bool:
+    """True when the account is in the SCF table (global or the company's own).
+
+    A padded account is accepted when its root is in the table, e.g. "607000"
+    is valid because "607" exists.
+    """
+    numero = str(numero or "").strip()
+    if not numero:
+        return False
+    scope = Q(entreprise__isnull=True)
+    if entreprise is not None:
+        scope |= Q(entreprise=entreprise)
+    roots = [numero[:length] for length in range(len(numero), 0, -1)]
+    return SCFAccount.objects.filter(scope, numero_compte__in=roots).exists()
 
 
 def _collect_suffixes(entreprise, prefix: str) -> list[int]:

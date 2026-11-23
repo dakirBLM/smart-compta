@@ -3,6 +3,7 @@ from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Q
 from django.http import FileResponse
 from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
@@ -54,6 +55,7 @@ from .report_exports import (
 from .scanner import (
     WebhookError,
     _parse_date,
+    apply_invoice_journal,
     call_webhook,
     pdf_to_jpeg,
     persist_extraction,
@@ -819,6 +821,7 @@ class ScannerUploadView(APIView):
                 "marchandise": ent.marchandise,
                 "matiere_premiere": ent.matiere_premiere,
                 "matieres_consommables": ent.matieres_consommables,
+                "comptes_scf": _invoice_scf_accounts_context(ent),
             }
         # Optional journal the user pre-selected for this operation.
         hint = (request.data.get("journal_hint") or "").strip()
@@ -876,10 +879,27 @@ class ScannerUploadView(APIView):
             data.setdefault("journal_hint", hint)
 
         data = sanitize_bank_statement_data(data, entreprise=ent)
+        data = apply_invoice_journal(data)
 
         errors = validate_extraction(data, entreprise=ent)
         return Response({"data": data, "erreurs": errors,
                          "confiance": data.get("confiance")})
+
+
+def _invoice_scf_accounts_context(entreprise):
+    """The SCF accounts an invoice may use (stocks 38x, charges 6, produits 7),
+    sent to the AI so it picks accounts from the platform's own table."""
+    accounts = (
+        SCFAccount.objects.filter(
+            Q(entreprise__isnull=True) | Q(entreprise=entreprise),
+            Q(numero_compte__startswith="38")
+            | Q(numero_compte__startswith="6")
+            | Q(numero_compte__startswith="7"),
+        )
+        .order_by("numero_compte")
+        .values_list("numero_compte", "libelle")
+    )
+    return " | ".join(f"{numero} {libelle}" for numero, libelle in accounts)
 
 
 class ScannerConfirmView(APIView):
@@ -1372,6 +1392,7 @@ class FactureListCreateView(APIView):
                 fournisseur_client=fournisseur_client,
                 type_facture=type_facture,
                 mode_paiement=mode_paiement,
+                lignes_ia=lignes if isinstance(lignes, list) else [],
             )
             return Response(FactureSerializer(facture, context={"request": request}).data, status=status.HTTP_201_CREATED)
 
@@ -1508,7 +1529,14 @@ class FactureValidateView(APIView):
                     "tiers": tiers_nom,
                 }
             ]
+        elif facture.lignes_ia:
+            # The account lines the AI proposed at submission (charges in OD,
+            # stock in Achats...). persist_extraction checks them against the
+            # SCF table and routes the journal.
+            lignes = [dict(ligne) for ligne in facture.lignes_ia]
         else:
+            # Invoices submitted before the AI lines were stored: fall back to
+            # the generic purchase/sale accounts.
             compte_achat = None
             if not is_vente:
                 compte_achat_scf = SCFAccount.objects.filter(
