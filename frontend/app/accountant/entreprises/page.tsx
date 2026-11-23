@@ -47,6 +47,8 @@ export default function EntreprisesPage() {
   const [companySearch, setCompanySearch] = useState("");
   const [clientSearch, setClientSearch] = useState("");
   const [modal, setModal] = useState<"create" | "edit" | "delete" | null>(null);
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
   const [yearFilter, setYearFilter] = useState<number | null>(null);
   const [openId, setOpenId] = useState<number | null>(null);
   const [pinnedId, setPinnedId] = useState<number | null>(null);
@@ -101,12 +103,24 @@ export default function EntreprisesPage() {
 
   async function deleteEntreprise() {
     if (!selected) return;
-    await api.del(`/api/entreprises/${selected.id}/`);
-    setModal(null);
-    setSelected(null);
-    setOpenId(null);
-    setPinnedId(null);
-    load();
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await api.del(`/api/entreprises/${selected.id}/`);
+      setModal(null);
+      setSelected(null);
+      setOpenId(null);
+      setPinnedId(null);
+      load();
+    } catch (err) {
+      setDeleteError(
+        err instanceof Error && err.message
+          ? err.message
+          : "La suppression a échoué. Réessayez ou contactez le support."
+      );
+    } finally {
+      setDeleting(false);
+    }
   }
 
   function enter(e: Entreprise) {
@@ -346,6 +360,7 @@ export default function EntreprisesPage() {
                         onClick={(event) => {
                           event.stopPropagation();
                           setSelected(e);
+                          setDeleteError("");
                           setModal("delete");
                         }}
                         className="grid h-8 w-8 place-items-center rounded-full text-[#69736f] hover:bg-[#f8ecec]"
@@ -405,12 +420,13 @@ export default function EntreprisesPage() {
               Voulez-vous vraiment supprimer <strong>{selected.nom}</strong> ? Cette action
               supprimera aussi ses données associées.
             </p>
+            {deleteError && <p className="text-sm text-danger">{deleteError}</p>}
             <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setModal(null)}>
+              <Button variant="outline" onClick={() => setModal(null)} disabled={deleting}>
                 Annuler
               </Button>
-              <Button variant="danger" onClick={deleteEntreprise}>
-                Supprimer
+              <Button variant="danger" onClick={deleteEntreprise} disabled={deleting}>
+                {deleting ? "Suppression..." : "Supprimer"}
               </Button>
             </div>
           </div>

@@ -323,8 +323,11 @@ class BankAccount(models.Model):
     bank_name = models.CharField(max_length=120, blank=True, default="")
     account_number = models.CharField(max_length=60, blank=True, default="")
     rib = models.CharField(max_length=60, blank=True, default="")
+    # RESTRICT (not PROTECT): deleting the company deletes its banks and their
+    # 512 accounts together, but a bank's 512 account still cannot be deleted
+    # on its own while the bank exists.
     scf_account = models.OneToOneField(
-        SCFAccount, on_delete=models.PROTECT, related_name="bank_account"
+        SCFAccount, on_delete=models.RESTRICT, related_name="bank_account"
     )
 
     class Meta:

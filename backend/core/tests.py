@@ -2264,3 +2264,38 @@ class MessageAttachmentAPITests(APITestCase):
         self.client.force_authenticate(self.accountant)
         allowed = self.client.get(f"/api/messages/attachments/{attachment.id}/download/?inline=1")
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+
+
+class CompanyDeletionWithBanksTests(APITestCase):
+    """Deleting a company removes its banks and their 512 accounts; a bank's
+    512 account still cannot be deleted on its own."""
+
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="delete-company-accountant", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SARL SUPPRIMER", nif="del-1", nis="del-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+        self.bank = make_bank(self.entreprise, "BNA", "00123456")
+        self.client.force_authenticate(self.accountant)
+
+    def test_deleting_the_company_deletes_its_banks_and_512_accounts(self):
+        scf_number = self.bank.scf_account.numero_compte
+
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, getattr(response, "data", ""))
+        self.assertFalse(Entreprise.objects.filter(pk=self.entreprise.pk).exists())
+        self.assertFalse(BankAccount.objects.filter(pk=self.bank.pk).exists())
+        self.assertFalse(SCFAccount.objects.filter(entreprise_id=self.entreprise.pk, numero_compte=scf_number).exists())
+
+    def test_a_bank_512_account_cannot_be_deleted_while_the_bank_exists(self):
+        from django.db.models import RestrictedError
+
+        with self.assertRaises(RestrictedError):
+            self.bank.scf_account.delete()
+        self.assertTrue(BankAccount.objects.filter(pk=self.bank.pk).exists())
