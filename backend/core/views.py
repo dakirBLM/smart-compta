@@ -16,6 +16,14 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
 from .account_helpers import get_or_create_client_comptable
+from .company_cleanup import (
+    CompanyFilesError,
+    collect_company_files,
+    move_company_files_to_trash,
+    purge_trash,
+    remove_orphan_clients,
+    restore_company_files,
+)
 from .models import (
     ClientAccess,
     ClientComptable,
@@ -299,7 +307,31 @@ class EntrepriseDetailView(APIView):
 
     def delete(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
-        entreprise.delete()
+        client_ids = list(entreprise.client_accesses.values_list("client_id", flat=True))
+        stored_files, image_urls = collect_company_files(entreprise)
+        try:
+            # Step 1: files are moved to the trash before anything is deleted.
+            trashed = move_company_files_to_trash(stored_files, image_urls)
+        except CompanyFilesError as exc:
+            return Response(
+                {
+                    "detail": "Impossible de supprimer les fichiers de l'entreprise. "
+                    "Rien n'a été supprimé. Réessayez plus tard.",
+                    "fichiers": exc.failures,
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        try:
+            # Step 2: rows and client logins go in one transaction.
+            with transaction.atomic():
+                entreprise.delete()  # cascades to every row of the company
+                remove_orphan_clients(client_ids)
+        except Exception:
+            # Step 3 (failure): the company is kept, so its files come back.
+            restore_company_files(trashed)
+            raise
+        # Step 3 (success): the company is gone, so empty the trash.
+        purge_trash(trashed)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
