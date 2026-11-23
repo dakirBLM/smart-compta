@@ -2,8 +2,9 @@
 
 Deleting an Entreprise cascades to its rows (journals, invoices, banks, client
 links, messages...). The files those rows point to live elsewhere (default
-storage, Cloudinary, the local media folder), so they are collected before the
-delete and removed only after the delete commits.
+storage, Cloudinary, the local media folder). They are collected before the
+delete and removed inside the same transaction, after the rows are gone: if a
+file cannot be removed, the transaction rolls back and nothing is deleted.
 """
 import logging
 import os
@@ -12,7 +13,6 @@ import re
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.files.storage import FileSystemStorage
-from django.db import transaction
 
 from .models import (
     BankStatementSubmission,
@@ -49,36 +49,57 @@ def collect_company_files(entreprise):
     return stored_files, image_urls
 
 
+class CompanyFilesError(Exception):
+    """At least one company file could not be deleted."""
+
+    def __init__(self, failures):
+        self.failures = failures
+        super().__init__("; ".join(failures))
+
+
 def delete_invoice_image(url):
-    """Remove a scanned invoice image from Cloudinary or the local media folder."""
+    """Remove a scanned invoice image from Cloudinary or the local media folder.
+
+    Raises if the image cannot be removed, so the caller can stop the company
+    delete instead of silently leaving the file behind.
+    """
     media_url = settings.MEDIA_URL or ""
     if media_url and url.startswith(media_url):
         FileSystemStorage(location=str(settings.MEDIA_ROOT)).delete(url[len(media_url):])
         return
-    if "res.cloudinary.com" in url and os.getenv("CLOUDINARY_URL"):
+    if "res.cloudinary.com" in url:
+        if not os.getenv("CLOUDINARY_URL"):
+            raise RuntimeError("CLOUDINARY_URL n'est pas configuré")
         match = _CLOUDINARY_PUBLIC_ID.search(url)
-        if match:
-            import cloudinary.uploader
+        if not match:
+            raise RuntimeError("URL Cloudinary non reconnue")
+        import cloudinary.uploader
 
-            cloudinary.uploader.destroy(match.group(1), resource_type="image")
+        result = cloudinary.uploader.destroy(match.group(1), resource_type="image")
+        if result.get("result") not in ("ok", "not found"):
+            raise RuntimeError(f"Cloudinary a refusé la suppression : {result}")
 
 
-def _remove(stored_files, image_urls):
+def delete_company_files(stored_files, image_urls):
+    """Delete every company file. Raises CompanyFilesError if any of them fails.
+
+    All files are attempted so the error lists every failure at once.
+    """
+    failures = []
     for storage, name in stored_files:
         try:
             storage.delete(name)
-        except Exception:  # never fail the company delete because of a file
+        except Exception as exc:
             logger.exception("Could not delete stored file %s", name)
+            failures.append(f"{name} ({exc})")
     for url in image_urls:
         try:
             delete_invoice_image(url)
-        except Exception:
+        except Exception as exc:
             logger.exception("Could not delete invoice image %s", url)
-
-
-def remove_files_after_commit(stored_files, image_urls):
-    """Delete the files only once the database delete has really committed."""
-    transaction.on_commit(lambda: _remove(stored_files, image_urls))
+            failures.append(f"{url} ({exc})")
+    if failures:
+        raise CompanyFilesError(failures)
 
 
 def remove_orphan_clients(client_ids):

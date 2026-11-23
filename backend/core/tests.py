@@ -2367,8 +2367,7 @@ class CompanyDeletionCleanupTests(APITestCase):
         )
         MessageAttachment.objects.create(message=message, file=own_attachment)
 
-        with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, getattr(response, "data", ""))
         self.assertFalse(default_storage.exists(own_statement))
@@ -2377,12 +2376,44 @@ class CompanyDeletionCleanupTests(APITestCase):
         self.assertTrue(default_storage.exists(kept_invoice))
 
     def test_client_logins_without_another_company_are_removed_others_are_kept(self):
-        with self.captureOnCommitCallbacks(execute=True):
-            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
 
         self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
         self.assertFalse(get_user_model().objects.filter(pk=self.only_client.pk).exists())
         self.assertTrue(get_user_model().objects.filter(pk=self.shared_client.pk).exists())
         self.assertTrue(get_user_model().objects.filter(pk=self.accountant.pk).exists())
         self.assertTrue(Entreprise.objects.filter(pk=self.other.pk).exists())
+
+    def test_failed_file_delete_keeps_company_rows_and_files(self):
+        statement = self.store("bank_statement_submissions/keep.pdf")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=statement, original_filename="keep.pdf",
+        )
+
+        with patch("core.bank_statement_storage.BankStatementStorage.delete",
+                   side_effect=OSError("disque indisponible")):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertIn("Rien n'a été supprimé", response.data["detail"])
+        self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
+        self.assertTrue(ClientAccess.objects.filter(entreprise=self.entreprise).exists())
+        self.assertTrue(BankStatementSubmission.objects.filter(entreprise=self.entreprise).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.only_client.pk).exists())
+        self.assertTrue(default_storage.exists(statement))
+
+    def test_unreachable_cloudinary_image_keeps_company(self):
+        invoice_url = "https://res.cloudinary.com/demo/image/upload/v1/factures/facture.jpg"
+        Facture.objects.create(
+            entreprise=self.entreprise, client=self.accountant,
+            numero_facture="F-CLOUD", montant_ttc=10, image_url=invoice_url,
+        )
+
+        with patch.dict(os.environ, {"CLOUDINARY_URL": ""}, clear=False):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
+        self.assertTrue(Facture.objects.filter(numero_facture="F-CLOUD").exists())
 
