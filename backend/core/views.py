@@ -16,6 +16,11 @@ from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
 from .account_helpers import get_or_create_client_comptable
+from .company_cleanup import (
+    collect_company_files,
+    remove_files_after_commit,
+    remove_orphan_clients,
+)
 from .models import (
     ClientAccess,
     ClientComptable,
@@ -297,9 +302,14 @@ class EntrepriseDetailView(APIView):
         serializer.save()
         return Response(serializer.data)
 
+    @transaction.atomic
     def delete(self, request, pk):
         entreprise = _accountant_entreprise(request, pk)
-        entreprise.delete()
+        client_ids = list(entreprise.client_accesses.values_list("client_id", flat=True))
+        stored_files, image_urls = collect_company_files(entreprise)
+        entreprise.delete()  # cascades to every row of the company
+        remove_orphan_clients(client_ids)
+        remove_files_after_commit(stored_files, image_urls)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 

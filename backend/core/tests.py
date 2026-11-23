@@ -8,7 +8,8 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
-from django.core.files.storage import Storage
+from django.core.files.storage import Storage, default_storage
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management import call_command, CommandError
 from rest_framework import status
@@ -2299,3 +2300,89 @@ class CompanyDeletionWithBanksTests(APITestCase):
         with self.assertRaises(RestrictedError):
             self.bank.scf_account.delete()
         self.assertTrue(BankAccount.objects.filter(pk=self.bank.pk).exists())
+
+
+class CompanyDeletionCleanupTests(APITestCase):
+    """Deleting a company removes its rows, its stored files and the client logins
+    that had no other company."""
+
+    def setUp(self):
+        self._media = TemporaryDirectory()
+        self.addCleanup(self._media.cleanup)
+        self.media_override = override_settings(MEDIA_ROOT=self._media.name)
+        self.media_override.enable()
+        self.addCleanup(self.media_override.disable)
+
+        user_model = get_user_model()
+        self.accountant = user_model.objects.create_user(
+            username="cleanup-accountant", role="accountant"
+        )
+        self.only_client = user_model.objects.create_user(
+            username="cleanup-only-client", role="client"
+        )
+        self.shared_client = user_model.objects.create_user(
+            username="cleanup-shared-client", role="client"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SARL NETTOYAGE", nif="clean-1", nis="clean-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        self.other = Entreprise.objects.create(
+            nom="SARL GARDEE", nif="keep-1", nis="keep-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+        ClientAccess.objects.create(client=self.only_client, entreprise=self.entreprise, nom_client="Seul")
+        ClientAccess.objects.create(client=self.shared_client, entreprise=self.entreprise, nom_client="Partagé")
+        ClientAccess.objects.create(client=self.shared_client, entreprise=self.other, nom_client="Partagé")
+        self.client.force_authenticate(self.accountant)
+
+    def store(self, name, content=b"image"):
+        return default_storage.save(name, ContentFile(content))
+
+    def test_deleting_the_company_removes_its_stored_files_and_invoice_images(self):
+        own_statement = self.store("bank_statement_submissions/own.pdf")
+        own_attachment = self.store("message_attachments/own.pdf")
+        own_invoice = self.store("factures/own.jpg")
+        kept_invoice = self.store("factures/kept.jpg")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=own_statement, original_filename="own.pdf",
+        )
+        Facture.objects.create(
+            entreprise=self.entreprise, client=self.accountant,
+            numero_facture="F-OWN", montant_ttc=10,
+            image_url=settings.MEDIA_URL + own_invoice,
+        )
+        Facture.objects.create(
+            entreprise=self.other, client=self.accountant,
+            numero_facture="F-KEPT", montant_ttc=10,
+            image_url=settings.MEDIA_URL + kept_invoice,
+        )
+        message = Message.objects.create(
+            entreprise=self.entreprise, sender=self.accountant,
+            client_user=self.only_client, content="Bonjour",
+        )
+        MessageAttachment.objects.create(message=message, file=own_attachment)
+
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, getattr(response, "data", ""))
+        self.assertFalse(default_storage.exists(own_statement))
+        self.assertFalse(default_storage.exists(own_attachment))
+        self.assertFalse(default_storage.exists(own_invoice))
+        self.assertTrue(default_storage.exists(kept_invoice))
+
+    def test_client_logins_without_another_company_are_removed_others_are_kept(self):
+        with self.captureOnCommitCallbacks(execute=True):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(get_user_model().objects.filter(pk=self.only_client.pk).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.shared_client.pk).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.accountant.pk).exists())
+        self.assertTrue(Entreprise.objects.filter(pk=self.other.pk).exists())
+
