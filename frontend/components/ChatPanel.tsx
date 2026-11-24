@@ -1,9 +1,10 @@
 "use client";
 
 import { Search } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChatAvatar } from "@/components/ChatAvatar";
 import { ChatThread } from "@/components/ChatThread";
+import { ChatEvent } from "@/lib/chat-events";
 import { useI18n } from "@/lib/i18n-context";
 import { Conversation } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -23,6 +24,19 @@ function shortTime(iso: string | null, locale: string) {
     return date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   }
   return date.toLocaleDateString(locale, { day: "2-digit", month: "2-digit" });
+}
+
+/** True from the `md` breakpoint up, where list and thread sit side by side. */
+function useIsDesktop() {
+  const [isDesktop, setIsDesktop] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(min-width: 768px)");
+    const update = () => setIsDesktop(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+  return isDesktop;
 }
 
 /**
@@ -45,6 +59,7 @@ export function ChatPanel({
   const [query, setQuery] = useState("");
   // Small screens start on the list; opening a conversation switches to the thread.
   const [mobileThreadOpen, setMobileThreadOpen] = useState(false);
+  const isDesktop = useIsDesktop();
 
   const visibleConversations = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -66,12 +81,21 @@ export function ChatPanel({
   }, [conversations, query]);
 
   const selected = conversations.find((c) => c.client_id === selectedClientId);
-  const threadUrl = selected
-    ? `/api/entreprises/${entrepriseId}/conversations/${selected.client_id}/messages/`
-    : null;
+  // A thread hidden behind the list on a phone must not load: loading marks it as read.
+  const threadVisible = isDesktop || mobileThreadOpen;
+  const threadUrl =
+    selected && threadVisible
+      ? `/api/entreprises/${entrepriseId}/conversations/${selected.client_id}/messages/`
+      : null;
+  const threadClientId = selected?.client_id;
+  const concernsThread = useCallback(
+    (event: ChatEvent) =>
+      event.type === "message" && event.entreprise === entrepriseId && event.client_id === threadClientId,
+    [entrepriseId, threadClientId]
+  );
 
   return (
-    <div className="flex h-[calc(100dvh-9.5rem)] min-h-[440px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-card md:h-[calc(100vh-12rem)] md:min-h-[500px]">
+    <div className="flex h-full min-h-0 overflow-hidden bg-white">
       <aside
         className={cn(
           "min-h-0 w-full flex-col bg-brand-dark text-white md:flex md:w-72 md:shrink-0 lg:w-80",
@@ -157,7 +181,7 @@ export function ChatPanel({
         url={threadUrl}
         title={selected?.nom_client ?? t("messages")}
         subtitle={selected?.username}
-        peerName={selected?.nom_client}
+        eventMatches={concernsThread}
         onBack={() => setMobileThreadOpen(false)}
         className={cn("md:flex", mobileThreadOpen ? "flex" : "hidden")}
       />

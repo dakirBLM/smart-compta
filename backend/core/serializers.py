@@ -391,6 +391,7 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
 class MessageSerializer(serializers.ModelSerializer):
     sender_username = serializers.CharField(source="sender.username", read_only=True)
     sender_role = serializers.CharField(source="sender.role", read_only=True)
+    sender_photo = serializers.SerializerMethodField()
     attachments = MessageAttachmentSerializer(many=True, read_only=True)
     is_mine = serializers.SerializerMethodField()
 
@@ -398,10 +399,17 @@ class MessageSerializer(serializers.ModelSerializer):
         model = Message
         fields = [
             "id", "entreprise", "sender", "sender_username", "sender_role",
-            "client_user", "content", "read_at", "created_at", "is_mine",
-            "attachments",
+            "sender_photo", "client_user", "content", "read_at", "created_at",
+            "is_mine", "attachments",
         ]
         read_only_fields = ["entreprise", "sender", "client_user", "created_at"]
+
+    def get_sender_photo(self, obj):
+        photo = obj.sender.photo
+        if not photo:
+            return None
+        request = self.context.get("request")
+        return request.build_absolute_uri(photo.url) if request else photo.url
 
     def get_is_mine(self, obj):
         request = self.context.get("request")

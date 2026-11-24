@@ -19,15 +19,29 @@ const NAV = [
   { href: "/client/settings", icon: Settings, labelKey: "settings" as const },
 ];
 
-export function ClientShell({ children }: { children: React.ReactNode }) {
+export function ClientShell({
+  children,
+  title,
+  fullBleed = false,
+}: {
+  children: React.ReactNode;
+  title?: string;
+  /** Fill the whole area under the header (no page padding or scrolling), e.g. for chat. */
+  fullBleed?: boolean;
+}) {
   const pathname = usePathname();
   const { user } = useAuth();
   const { t } = useI18n();
   const [navOpen, setNavOpen] = useState(false);
-  const heading = user?.username ? `Bonjour, ${user.username}` : t("dashboard");
+  const heading = title ?? (user?.username ? `Bonjour, ${user.username}` : t("dashboard"));
 
   return (
-    <div className="studio-ui flex min-h-screen bg-[#f5f7f5] antialiased selection:bg-[#eaf2ee] selection:text-[#173c32]">
+    <div
+      className={cn(
+        "studio-ui flex bg-[#f5f7f5] antialiased selection:bg-[#eaf2ee] selection:text-[#173c32]",
+        fullBleed ? "h-dvh overflow-hidden" : "min-h-screen"
+      )}
+    >
       {navOpen && (
         <button
           type="button"
@@ -86,8 +100,15 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-[78px] items-center justify-between bg-[#f5f7f5]/90 px-5 backdrop-blur-md lg:h-[94px] lg:px-8">
+      <div className={cn("flex min-w-0 flex-1 flex-col", fullBleed && "min-h-0")}>
+        <header
+          className={cn(
+            "sticky top-0 z-20 flex items-center justify-between backdrop-blur-md",
+            fullBleed
+              ? "h-14 shrink-0 border-b border-[#e5e9e6] bg-white px-4 lg:px-6"
+              : "h-[78px] bg-[#f5f7f5]/90 px-5 lg:h-[94px] lg:px-8"
+          )}
+        >
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -115,7 +136,14 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
           </Link>
         </header>
 
-        <main className="mx-auto w-full max-w-[1440px] flex-1 px-5 pb-12 pt-2 lg:px-8 lg:pb-14">{children}</main>
+        <main
+          className={cn(
+            "w-full flex-1",
+            fullBleed ? "min-h-0" : "mx-auto max-w-[1440px] px-5 pb-12 pt-2 lg:px-8 lg:pb-14"
+          )}
+        >
+          {children}
+        </main>
       </div>
     </div>
   );

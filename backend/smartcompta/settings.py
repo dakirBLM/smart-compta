@@ -197,3 +197,8 @@ WEBHOOK_IMAGE_MODE = os.getenv("WEBHOOK_IMAGE_MODE", "multipart").lower()
 # Seconds to wait for the AI webhook to return the extraction (vision models
 # can be slow). Keep below gunicorn's --timeout so the worker isn't killed.
 WEBHOOK_TIMEOUT = int(os.getenv("WEBHOOK_TIMEOUT", "300"))
+
+# Live chat (Server-Sent Events). Redis pub/sub fans events out between server
+# processes. Leave empty in development: events then stay inside one process,
+# which is enough for `runserver` or a single gunicorn worker.
+REDIS_URL = os.getenv("REDIS_URL", "")

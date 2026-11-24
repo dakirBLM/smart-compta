@@ -2,7 +2,7 @@
 
 import { AIExtraction, BankStatementExtraction, BankStatementImportResult, BankStatementMatchedBank, BankStatementSubmission, ClientEntreprise, EcrituresPreviewRow } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const TOKEN_KEY = "sc_token";
 
 export function resolveInvoiceFileUrl(value?: string | null): string | null {

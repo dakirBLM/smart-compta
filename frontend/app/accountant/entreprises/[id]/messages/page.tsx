@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { ChatPanel } from "@/components/ChatPanel";
 import { api } from "@/lib/api";
+import { subscribeChatEvents } from "@/lib/chat-events";
 import { useI18n } from "@/lib/i18n-context";
 import { Conversation } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
@@ -32,11 +33,16 @@ export default function MessagesPage() {
         .catch(() => {});
     }
     load();
-    // Keep previews and unread counts fresh while the page is open.
-    const interval = setInterval(load, 10000);
+    // Live events refresh previews and unread counts at once; the slow poll is
+    // only a safety net if the stream is down.
+    const unsubscribe = subscribeChatEvents((event) => {
+      if (event.type === "resync" || event.entreprise === id) load();
+    });
+    const interval = setInterval(load, 30000);
     return () => {
       cancelled = true;
       clearInterval(interval);
+      unsubscribe();
     };
   }, [id]);
 
@@ -46,6 +52,7 @@ export default function MessagesPage() {
       entrepriseId={id}
       entrepriseName={entreprise?.nom}
       annee={annee}
+      fullBleed
     >
       {id && (
         <ChatPanel

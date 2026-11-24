@@ -1,10 +1,11 @@
+import json
 import csv
 import os
 from datetime import date
 from io import BytesIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
@@ -2264,3 +2265,136 @@ class MessageAttachmentAPITests(APITestCase):
         self.client.force_authenticate(self.accountant)
         allowed = self.client.get(f"/api/messages/attachments/{attachment.id}/download/?inline=1")
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
+
+
+class ChatRealtimeTests(APITestCase):
+    """Live chat events: published on send, delivered over the SSE stream."""
+
+    def setUp(self):
+        from . import realtime
+
+        self.realtime = realtime
+        realtime.reset_broker()
+        self.addCleanup(realtime.reset_broker)
+        super().setUp()
+        User = get_user_model()
+        self.accountant = User.objects.create_user(
+            username="rt-accountant", password="StrongPass!123", role="accountant"
+        )
+        self.client_user = User.objects.create_user(
+            username="rt-client", password="StrongPass!123", role="client"
+        )
+        self.outsider = User.objects.create_user(
+            username="rt-outsider", password="StrongPass!123", role="accountant"
+        )
+        self.company = Entreprise.objects.create(
+            nom="Temps Réel SAS",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ClientAccess.objects.create(client=self.client_user, entreprise=self.company, nom_client="Client RT")
+
+    def subscribe(self, user):
+        return self.realtime.get_broker().subscribe(self.realtime.user_channel(user.id))
+
+    def test_sending_a_message_notifies_the_accountant_and_the_client_only(self):
+        accountant_stream = self.subscribe(self.accountant)
+        client_stream = self.subscribe(self.client_user)
+        outsider_stream = self.subscribe(self.outsider)
+
+        self.client.force_authenticate(self.client_user)
+        response = self.client.post("/api/messages/", {"content": "Bonjour"}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        expected = {
+            "type": "message",
+            "entreprise": self.company.id,
+            "client_id": self.client_user.id,
+            "message_id": response.data["id"],
+        }
+        self.assertEqual(json.loads(accountant_stream.get(timeout=1)), expected)
+        self.assertEqual(json.loads(client_stream.get(timeout=1)), expected)
+        self.assertIsNone(outsider_stream.get(timeout=0.05))
+
+    def test_accountant_message_also_reaches_the_client(self):
+        client_stream = self.subscribe(self.client_user)
+        self.client.force_authenticate(self.accountant)
+
+        response = self.client.post(
+            f"/api/entreprises/{self.company.id}/conversations/{self.client_user.id}/messages/",
+            {"content": "Réponse"},
+            format="multipart",
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(json.loads(client_stream.get(timeout=1))["message_id"], response.data["id"])
+
+    def test_broker_failure_does_not_block_sending(self):
+        with patch.object(self.realtime, "get_broker", side_effect=RuntimeError("redis down")):
+            self.client.force_authenticate(self.client_user)
+            response = self.client.post("/api/messages/", {"content": "Toujours envoyé"}, format="multipart")
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(Message.objects.count(), 1)
+
+    def test_event_stream_sends_events_and_keepalives_then_unsubscribes(self):
+        stream = self.realtime.event_stream(self.accountant.id, heartbeat=0.05)
+
+        self.assertEqual(next(stream), "retry: 3000\n\n")
+        self.assertEqual(next(stream), ": connected\n\n")
+        self.assertEqual(next(stream), ": keepalive\n\n")
+        self.realtime.get_broker().publish(self.realtime.user_channel(self.accountant.id), '{"type": "message"}')
+        self.assertEqual(next(stream), 'data: {"type": "message"}\n\n')
+
+        stream.close()
+        self.assertEqual(self.realtime.get_broker()._subscriptions, {})
+
+    def test_stream_endpoint_requires_authentication(self):
+        response = self.client.get("/api/chat/stream/")
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_stream_endpoint_returns_an_event_stream(self):
+        self.client.force_authenticate(self.accountant)
+        response = self.client.get("/api/chat/stream/", HTTP_ACCEPT="text/event-stream")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response["Content-Type"], "text/event-stream")
+        self.assertIn("no-cache", response["Cache-Control"])
+        self.assertEqual(response["X-Accel-Buffering"], "no")
+        self.assertEqual(next(iter(response.streaming_content)), b"retry: 3000\n\n")
+        response.close()
+
+    def test_redis_broker_publishes_and_reads_through_redis(self):
+        fake_client = MagicMock()
+        fake_pubsub = fake_client.pubsub.return_value
+        fake_pubsub.get_message.return_value = {"type": "message", "data": "payload"}
+
+        with patch("redis.Redis.from_url", return_value=fake_client) as from_url:
+            broker = self.realtime._RedisBroker("redis://example:6379/0")
+            broker.publish("chan", "hello")
+            subscription = broker.subscribe("chan")
+
+        from_url.assert_called_once()
+        fake_client.publish.assert_called_once_with("chan", "hello")
+        fake_pubsub.subscribe.assert_called_once_with("chan")
+        self.assertEqual(subscription.get(timeout=1), "payload")
+        fake_pubsub.get_message.assert_called_once_with(ignore_subscribe_messages=True, timeout=1)
+        subscription.close()
+        fake_pubsub.close.assert_called_once()
+
+    @override_settings(REDIS_URL="redis://example:6379/0")
+    def test_broker_uses_redis_when_configured(self):
+        self.realtime.reset_broker()
+        with patch("redis.Redis.from_url", return_value=MagicMock()):
+            self.assertIsInstance(self.realtime.get_broker(), self.realtime._RedisBroker)
+
+    def test_messages_include_the_sender_photo_field(self):
+        self.client.force_authenticate(self.client_user)
+        self.client.post("/api/messages/", {"content": "Avec photo ?"}, format="multipart")
+
+        data = self.client.get("/api/messages/").data
+
+        self.assertIn("sender_photo", data[0])
+        self.assertIsNone(data[0]["sender_photo"])
+

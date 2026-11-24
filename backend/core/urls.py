@@ -26,6 +26,7 @@ urlpatterns = [
     path("entreprises/<int:pk>/conversations/<int:client_id>/messages/",
          views.MessageListCreateView.as_view()),
     path("messages/", views.MessageListCreateView.as_view()),
+    path("chat/stream/", views.ChatStreamView.as_view()),
     path("messages/attachments/<int:attachment_id>/download/",
          views.MessageAttachmentDownloadView.as_view(),
          name="message-attachment-download"),

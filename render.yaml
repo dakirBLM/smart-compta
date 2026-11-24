@@ -16,7 +16,10 @@ services:
       python manage.py import_scf &&
       python manage.py sync_scf_from_ledger
     # --timeout 320: vision extraction can be slow; keep above WEBHOOK_TIMEOUT.
-    startCommand: gunicorn smartcompta.wsgi --bind 0.0.0.0:$PORT --timeout 320
+    # --threads: live chat keeps one Server-Sent Events stream open per browser
+    # tab, and each stream holds a thread. One worker with many threads serves
+    # them without blocking normal requests.
+    startCommand: gunicorn smartcompta.wsgi --bind 0.0.0.0:$PORT --workers 1 --threads 32 --timeout 320
     healthCheckPath: /
     envVars:
       - key: PYTHON_VERSION
@@ -41,3 +44,16 @@ services:
         sync: false                # optional; Render host is auto-added
       - key: CLOUDINARY_URL
         sync: false                # cloudinary://<key>:<secret>@<cloud_name>
+      # Live chat events (pub/sub between server processes).
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: smartcompta-redis
+          property: connectionString
+
+  # Redis-compatible Key Value store for live chat events. Internal only.
+  - type: keyvalue
+    name: smartcompta-redis
+    plan: free
+    maxmemoryPolicy: allkeys-lru
+    ipAllowList: []

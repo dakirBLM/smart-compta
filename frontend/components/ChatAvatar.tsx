@@ -22,22 +22,32 @@ function paletteFor(name: string) {
   return PALETTE[hash % PALETTE.length];
 }
 
-/** Round initials avatar. `mine` uses the brand colours, others a colour from their name. */
+/** Profile photo when there is one, otherwise soft-coloured initials. */
 export function ChatAvatar({
   name,
-  mine = false,
+  photoUrl,
   className,
 }: {
   name: string;
-  mine?: boolean;
+  photoUrl?: string | null;
   className?: string;
 }) {
+  if (photoUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={photoUrl}
+        alt={name}
+        className={cn("h-9 w-9 shrink-0 rounded-lg bg-gray-100 object-cover", className)}
+      />
+    );
+  }
   return (
     <span
       aria-hidden
       className={cn(
         "grid h-9 w-9 shrink-0 place-items-center rounded-lg text-xs font-bold",
-        mine ? "bg-brand text-lime" : paletteFor(name),
+        paletteFor(name),
         className
       )}
     >

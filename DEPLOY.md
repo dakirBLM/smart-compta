@@ -29,7 +29,8 @@ git push -u origin main
 ## 2. Backend → Render (uses render.yaml)
 1. Render dashboard → **New +** → **Blueprint**.
 2. Pick your GitHub repo. Render reads `render.yaml` and proposes
-   `smartcompta-api` (Python web service, root `backend/`).
+   `smartcompta-api` (Python web service, root `backend/`) and
+   `smartcompta-redis` (Key Value store for live chat events).
 3. It will ask for the env vars marked `sync: false`. Set at least:
    - `DATABASE_URL` = your **Neon** connection string (from step 1a)
    - `WEBHOOK_URL` = your **public** webhook URL
@@ -82,6 +83,7 @@ Push to `main` → both Render and Vercel auto-redeploy.
 | `CORS_ALLOWED_ORIGINS` | your Vercel URL |
 | `ALLOWED_HOSTS` | optional (Render host auto-added) |
 | `CLOUDINARY_URL` | `cloudinary://<key>:<secret>@<cloud_name>` (persistent image storage) |
+| `REDIS_URL` | set automatically from `smartcompta-redis`; live chat (Server-Sent Events) uses it to share events between processes. Without it chat still works inside one process |
 
 ### Vercel (frontend)
 | Key | Value |

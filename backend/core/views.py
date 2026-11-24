@@ -2,16 +2,17 @@ import logging
 from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
+from django.db import connections, transaction
 from django.db.models import Q
 from django.http import FileResponse
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.negotiation import BaseContentNegotiation
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
@@ -39,6 +40,7 @@ from .bank_statements import (
     validate_statement,
 )
 from .permissions import IsAccountant, IsClient
+from .realtime import event_stream, notify_new_message
 from .reports import (
     build_balance,
     build_compte_resultat,
@@ -617,10 +619,42 @@ class MessageListCreateView(APIView):
                 {"error": "Erreur lors de la création du message."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        notify_new_message(msg)
         return Response(
             MessageSerializer(msg, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class _AcceptAnyContentNegotiation(BaseContentNegotiation):
+    """The event stream is not JSON, whatever the client's Accept header says."""
+
+    def select_parser(self, request, parsers):
+        return parsers[0] if parsers else None
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        return (renderers[0], renderers[0].media_type)
+
+
+class ChatStreamView(APIView):
+    """Server-Sent Events stream with this user's live chat events."""
+
+    permission_classes = [IsAuthenticated]
+    content_negotiation_class = _AcceptAnyContentNegotiation
+
+    def get(self, request):
+        # The stream stays open for as long as the tab does and never touches
+        # the database again, so release this thread's connection now instead
+        # of holding one database connection per open chat.
+        for connection in connections.all():
+            if not connection.in_atomic_block:
+                connection.close()
+        response = StreamingHttpResponse(
+            event_stream(request.user.id), content_type="text/event-stream"
+        )
+        response["Cache-Control"] = "no-cache, no-transform"
+        response["X-Accel-Buffering"] = "no"
+        return response
 
 
 class MessageAttachmentDownloadView(APIView):

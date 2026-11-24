@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatAvatar } from "@/components/ChatAvatar";
 import { Spinner } from "@/components/ui";
 import { api, getToken } from "@/lib/api";
+import { ChatEvent, isChatStreamConnected, subscribeChatEvents } from "@/lib/chat-events";
 import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage, MessageAttachment } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -13,7 +14,10 @@ const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp";
 const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
 const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
 const GROUP_WINDOW_MS = 5 * 60 * 1000;
+// Live events (SSE) deliver new messages at once. Polling stays as a safety net:
+// slow while the stream is open, fast while it is down.
 const POLL_MS = 8000;
+const POLL_WHEN_LIVE_MS = 60000;
 
 function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
@@ -109,7 +113,7 @@ export function ChatThread({
   url,
   title,
   subtitle,
-  peerName,
+  eventMatches,
   onBack,
   className,
 }: {
@@ -117,8 +121,8 @@ export function ChatThread({
   url: string | null;
   title: string;
   subtitle?: string;
-  /** Display name of the other side for messages that are not mine. */
-  peerName?: string;
+  /** Which live events concern this thread. Defaults to all of them. */
+  eventMatches?: (event: ChatEvent) => boolean;
   /** Shows a back button on small screens when set. */
   onBack?: () => void;
   className?: string;
@@ -141,6 +145,8 @@ export function ChatThread({
   const feedContentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
   const objectUrlsRef = useRef<Record<number, string>>({});
+  const eventMatchesRef = useRef(eventMatches);
+  eventMatchesRef.current = eventMatches;
 
   // Load and poll the thread. Everything is reset when the thread changes.
   useEffect(() => {
@@ -154,22 +160,37 @@ export function ChatThread({
       return;
     }
     let cancelled = false;
+    let latestRequest = 0;
+    let lastLoadedAt = 0;
     setLoading(true);
     async function load() {
+      const request = ++latestRequest;
       try {
         const data = await api.get<ChatMessage[]>(url as string);
-        if (!cancelled) setMessages(data);
+        // Ignore answers that were overtaken by a newer request.
+        if (!cancelled && request === latestRequest) {
+          setMessages(data);
+          lastLoadedAt = Date.now();
+        }
       } catch {
-        // Keep what is already shown; the next poll retries.
+        // Keep what is already shown; the next poll or event retries.
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && request === latestRequest) setLoading(false);
       }
     }
     load();
-    const interval = setInterval(load, POLL_MS);
+    const interval = setInterval(() => {
+      if (isChatStreamConnected() && Date.now() - lastLoadedAt < POLL_WHEN_LIVE_MS) return;
+      void load();
+    }, POLL_MS);
+    const unsubscribe = subscribeChatEvents((event) => {
+      const matches = eventMatchesRef.current;
+      if (event.type === "resync" || !matches || matches(event)) void load();
+    });
     return () => {
       cancelled = true;
       clearInterval(interval);
+      unsubscribe();
     };
   }, [url]);
 
@@ -427,7 +448,7 @@ export function ChatThread({
             <p className="px-6 py-10 text-center text-sm text-gray-400">{t("aucunMessage")}</p>
           ) : (
             rows.map(({ message, date, newDay, grouped }) => {
-              const name = message.is_mine ? t("vous") : peerName || message.sender_username;
+              const name = message.sender_username;
               return (
                 <div key={message.id}>
                   {newDay && (
@@ -451,7 +472,7 @@ export function ChatThread({
                           {timeOf(date)}
                         </span>
                       ) : (
-                        <ChatAvatar name={name} mine={message.is_mine} />
+                        <ChatAvatar name={name} photoUrl={message.sender_photo} />
                       )}
                     </div>
                     <div className="min-w-0 flex-1">
