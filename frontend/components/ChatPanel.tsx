@@ -146,6 +146,13 @@ export function ChatPanel({
 
   const selected = conversations.find((c) => c.client_id === selectedClientId);
   // A thread hidden behind the list on a phone must not load: loading marks it as read.
+  // On a phone, entering the page opens the conversation that has new messages, once.
+  const autoOpenedRef = useRef(false);
+  useEffect(() => {
+    if (autoOpenedRef.current || !selected) return;
+    autoOpenedRef.current = true;
+    if (!isDesktop && selected.unread_count > 0) setMobileThreadOpen(true);
+  }, [selected, isDesktop]);
   const threadVisible = isDesktop || mobileThreadOpen;
   const threadUrl =
     selected && threadVisible

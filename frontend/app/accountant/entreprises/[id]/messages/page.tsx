@@ -9,6 +9,14 @@ import { useI18n } from "@/lib/i18n-context";
 import { Conversation } from "@/lib/types";
 import { useEntreprise } from "@/lib/useEntreprise";
 
+/** Where to land on entry: the conversation with new messages, else the most recent one. */
+function pickConversation(list: Conversation[]): Conversation | undefined {
+  const time = (c: Conversation) => (c.last_message_at ? Date.parse(c.last_message_at) : 0);
+  const unread = list.filter((c) => c.unread_count > 0);
+  const pool = unread.length > 0 ? unread : list;
+  return [...pool].sort((a, b) => time(b) - time(a))[0];
+}
+
 export default function MessagesPage() {
   const { t } = useI18n();
   const { id, entreprise, annee } = useEntreprise();
@@ -24,11 +32,9 @@ export default function MessagesPage() {
         .then((data) => {
           if (cancelled) return;
           setConversations(data);
-          // Wide screens open the first conversation. On phones the list comes first,
-          // so nothing is opened (and marked as read) before the user picks it.
-          if (data.length > 0 && window.matchMedia("(min-width: 768px)").matches) {
-            setSelectedClientId((prev) => prev ?? data[0].client_id);
-          }
+          // Land on the conversation with new messages (or the latest one), only once.
+          const target = pickConversation(data);
+          if (target) setSelectedClientId((prev) => prev ?? target.client_id);
         })
         .catch(() => {});
     }
