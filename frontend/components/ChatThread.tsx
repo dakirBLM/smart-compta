@@ -18,6 +18,7 @@ const GROUP_WINDOW_MS = 5 * 60 * 1000;
 // slow while the stream is open, fast while it is down.
 const POLL_MS = 8000;
 const POLL_WHEN_LIVE_MS = 60000;
+const PIN_ON_OPEN_MS = 1500;
 
 function isImageAttachment(filename: string, contentType: string) {
   return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
@@ -147,6 +148,8 @@ export function ChatThread({
   const feedRef = useRef<HTMLDivElement>(null);
   const feedContentRef = useRef<HTMLDivElement>(null);
   const stickToBottomRef = useRef(true);
+  // Right after a thread opens, keep the newest message in view while layout settles.
+  const pinUntilRef = useRef(0);
   const objectUrlsRef = useRef<Record<number, string>>({});
   const eventMatchesRef = useRef(eventMatches);
   eventMatchesRef.current = eventMatches;
@@ -165,6 +168,7 @@ export function ChatThread({
     let cancelled = false;
     let latestRequest = 0;
     let lastLoadedAt = 0;
+    let opening = true;
     setLoading(true);
     async function load() {
       const request = ++latestRequest;
@@ -172,6 +176,11 @@ export function ChatThread({
         const data = await api.get<ChatMessage[]>(url as string);
         // Ignore answers that were overtaken by a newer request.
         if (!cancelled && request === latestRequest) {
+          if (opening) {
+            opening = false;
+            stickToBottomRef.current = true;
+            pinUntilRef.current = Date.now() + PIN_ON_OPEN_MS;
+          }
           setMessages(data);
           lastLoadedAt = Date.now();
           window.dispatchEvent(new Event(CHAT_READ_EVENT));
@@ -243,7 +252,9 @@ export function ChatThread({
     const content = feedContentRef.current;
     if (!feed || !content) return;
     const toBottom = () => {
-      if (stickToBottomRef.current) feed.scrollTop = feed.scrollHeight;
+      if (stickToBottomRef.current || Date.now() < pinUntilRef.current) {
+        feed.scrollTop = feed.scrollHeight;
+      }
     };
     toBottom();
     const observer = new ResizeObserver(toBottom);
@@ -284,6 +295,7 @@ export function ChatThread({
   function onFeedScroll() {
     const feed = feedRef.current;
     if (!feed) return;
+    if (Date.now() < pinUntilRef.current) return;
     stickToBottomRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
   }
 
