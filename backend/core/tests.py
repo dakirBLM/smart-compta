@@ -2268,6 +2268,51 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
 
 
+class MessageSenderNameTests(APITestCase):
+    """sender_name: the client's name for the company, else the person's name, else the login."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.accountant = User.objects.create_user(
+            username="name-accountant", password="StrongPass!123", role="accountant"
+        )
+        self.client_user = User.objects.create_user(
+            username="name-client", password="StrongPass!123", role="client"
+        )
+        self.company = Entreprise.objects.create(
+            nom="Nom SAS",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ClientAccess.objects.create(client=self.client_user, entreprise=self.company, nom_client="Société Belle")
+
+    def test_client_messages_show_the_client_name_not_the_login(self):
+        self.client.force_authenticate(self.client_user)
+        self.client.post("/api/messages/", {"content": "Bonjour"}, format="multipart")
+
+        message = self.client.get("/api/messages/").data[0]
+        self.assertEqual(message["sender_name"], "Société Belle")
+        self.assertEqual(message["sender_username"], "name-client")
+
+    def test_accountant_message_shows_full_name_when_set_and_login_otherwise(self):
+        self.client.force_authenticate(self.accountant)
+        url = f"/api/entreprises/{self.company.id}/conversations/{self.client_user.id}/messages/"
+        self.client.post(url, {"content": "Sans nom"}, format="multipart")
+
+        self.client.force_authenticate(self.client_user)
+        self.assertEqual(self.client.get("/api/messages/").data[0]["sender_name"], "name-accountant")
+
+        self.accountant.first_name = "Karim"
+        self.accountant.last_name = "Amrani"
+        self.accountant.save()
+        self.client.force_authenticate(self.accountant)
+        self.client.post(url, {"content": "Avec nom"}, format="multipart")
+
+        self.client.force_authenticate(self.client_user)
+        self.assertEqual(self.client.get("/api/messages/").data[-1]["sender_name"], "Karim Amrani")
+
+
 class UnreadMessageCountTests(APITestCase):
     """Badge count in the navigation: messages waiting for the current user."""
 

@@ -475,7 +475,7 @@ export function ChatThread({
             <p className="px-6 py-10 text-center text-sm text-gray-400">{t("aucunMessage")}</p>
           ) : (
             rows.map(({ message, date, newDay, grouped }) => {
-              const name = message.sender_username;
+              const name = message.sender_name || message.sender_username;
               return (
                 <div key={message.id}>
                   {newDay && (

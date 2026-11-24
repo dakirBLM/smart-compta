@@ -121,6 +121,8 @@ export interface ChatMessage {
   entreprise: number;
   sender: number;
   sender_username: string;
+  /** Name to show in the chat: the client's name for the company, else the person's name, else the login. */
+  sender_name: string;
   sender_role: Role;
   sender_photo: string | null;
   client_user: number;
