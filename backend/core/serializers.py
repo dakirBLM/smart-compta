@@ -390,6 +390,7 @@ class MessageAttachmentSerializer(serializers.ModelSerializer):
 
 class MessageSerializer(serializers.ModelSerializer):
     sender_username = serializers.CharField(source="sender.username", read_only=True)
+    sender_name = serializers.SerializerMethodField()
     sender_role = serializers.CharField(source="sender.role", read_only=True)
     sender_photo = serializers.SerializerMethodField()
     attachments = MessageAttachmentSerializer(many=True, read_only=True)
@@ -398,11 +399,28 @@ class MessageSerializer(serializers.ModelSerializer):
     class Meta:
         model = Message
         fields = [
-            "id", "entreprise", "sender", "sender_username", "sender_role",
+            "id", "entreprise", "sender", "sender_username", "sender_name", "sender_role",
             "sender_photo", "client_user", "content", "read_at", "created_at",
             "is_mine", "attachments",
         ]
         read_only_fields = ["entreprise", "sender", "client_user", "created_at"]
+
+    def get_sender_name(self, obj):
+        """Name to show in the chat: the client's name for this company, else the
+        person's full name, else the login name. Cached per list, since every
+        message in a thread usually has the same sender."""
+        cache = self.__dict__.setdefault("_sender_name_cache", {})
+        key = (obj.entreprise_id, obj.sender_id)
+        if key not in cache:
+            name = (
+                ClientAccess.objects.filter(entreprise_id=obj.entreprise_id, client_id=obj.sender_id)
+                .values_list("nom_client", flat=True)
+                .first()
+            )
+            if not name:
+                name = obj.sender.get_full_name().strip() or obj.sender.username
+            cache[key] = name
+        return cache[key]
 
     def get_sender_photo(self, obj):
         photo = obj.sender.photo
