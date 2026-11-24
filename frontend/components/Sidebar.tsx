@@ -21,9 +21,11 @@ import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { BrandLogo } from "@/components/BrandLogo";
 import { LanguageToggle } from "@/components/LanguageToggle";
+import { UnreadBadge } from "@/components/UnreadBadge";
 import { api } from "@/lib/api";
 import { useI18n } from "@/lib/i18n-context";
 import { Journal } from "@/lib/types";
+import { useUnreadMessages } from "@/lib/unread-messages";
 import { cn } from "@/lib/utils";
 
 const JOURNAL_TYPES: { key: string; label: string }[] = [
@@ -40,6 +42,7 @@ function Item({
   label,
   active,
   badge,
+  count,
   onNavigate,
 }: {
   href: string;
@@ -47,6 +50,8 @@ function Item({
   label: string;
   active: boolean;
   badge?: string;
+  /** Number waiting for the user, shown as a small count on the icon. */
+  count?: number;
   onNavigate?: () => void;
 }) {
   return (
@@ -60,7 +65,10 @@ function Item({
         active && "bg-[#eaf2ee] text-[#214f40]"
       )}
     >
-      <span className="shrink-0">{icon}</span>
+      <span className="relative shrink-0">
+        {icon}
+        {count !== undefined && <UnreadBadge count={count} />}
+      </span>
       <span
         className={cn(
           "text-[9px] font-medium leading-tight tracking-tight max-lg:text-[11px]",
@@ -97,6 +105,9 @@ export function Sidebar({
   const [journalPos, setJournalPos] = useState<{ top: number; left: number } | null>(null);
   const [customJournaux, setCustomJournaux] = useState<Journal[]>([]);
   const journalBtn = useRef<HTMLButtonElement>(null);
+  const unreadMessages = useUnreadMessages(
+    entrepriseId ? `/api/entreprises/${entrepriseId}/messages/unread-count/` : null
+  );
   const journalPanel = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -324,6 +335,7 @@ export function Sidebar({
               href={`${base}/messages`}
               icon={<MessageSquare size={18} />}
               label={t("messages")}
+              count={unreadMessages}
               active={is(`${base}/messages`)}
               onNavigate={nav}
             />

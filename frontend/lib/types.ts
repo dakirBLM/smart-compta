@@ -122,6 +122,7 @@ export interface ChatMessage {
   sender: number;
   sender_username: string;
   sender_role: Role;
+  sender_photo: string | null;
   client_user: number;
   content: string;
   read_at: string | null;

@@ -2,16 +2,17 @@ import logging
 from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
-from django.db import transaction
-from django.db.models import Q
+from django.db import connections, transaction
+from django.db.models import F, Q
 from django.http import FileResponse
-from django.http import HttpResponse
+from django.http import HttpResponse, StreamingHttpResponse
 from django.shortcuts import get_object_or_404
 from django.utils.text import slugify
 from django.utils import timezone
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.negotiation import BaseContentNegotiation
 from rest_framework.views import APIView
 from rest_framework.permissions import AllowAny
 
@@ -47,6 +48,7 @@ from .bank_statements import (
     validate_statement,
 )
 from .permissions import IsAccountant, IsClient
+from .realtime import event_stream, notify_new_message
 from .reports import (
     build_balance,
     build_compte_resultat,
@@ -539,6 +541,43 @@ class ConversationListView(APIView):
         return Response(result)
 
 
+class UnreadMessageCountView(APIView):
+    """Messages en attente, pour le badge de la navigation.
+
+    Client : messages non lus envoyés par le comptable de son entreprise.
+    Comptable (avec `pk`) : messages non lus des clients de cette entreprise,
+    avec le même périmètre que la liste des conversations.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, pk=None):
+        if pk is not None:
+            if request.user.role != "accountant":
+                return Response(status=status.HTTP_403_FORBIDDEN)
+            entreprise = _accountant_entreprise(request, pk)
+            client_ids = entreprise.client_accesses.values_list("client_id", flat=True)
+            unread = Message.objects.filter(
+                entreprise=entreprise,
+                client_user_id__in=client_ids,
+                sender_id=F("client_user_id"),
+                read_at__isnull=True,
+            ).count()
+            return Response({"unread": unread})
+
+        if request.user.role != "client":
+            return Response(status=status.HTTP_403_FORBIDDEN)
+        access = ClientAccess.objects.filter(client=request.user).select_related("entreprise").first()
+        if not access:
+            return Response({"unread": 0})
+        unread = Message.objects.filter(
+            entreprise=access.entreprise,
+            client_user=request.user,
+            sender=access.entreprise.accountant,
+            read_at__isnull=True,
+        ).count()
+        return Response({"unread": unread})
+
+
 class MessageListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -649,10 +688,42 @@ class MessageListCreateView(APIView):
                 {"error": "Erreur lors de la création du message."},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+        notify_new_message(msg)
         return Response(
             MessageSerializer(msg, context={"request": request}).data,
             status=status.HTTP_201_CREATED,
         )
+
+
+class _AcceptAnyContentNegotiation(BaseContentNegotiation):
+    """The event stream is not JSON, whatever the client's Accept header says."""
+
+    def select_parser(self, request, parsers):
+        return parsers[0] if parsers else None
+
+    def select_renderer(self, request, renderers, format_suffix=None):
+        return (renderers[0], renderers[0].media_type)
+
+
+class ChatStreamView(APIView):
+    """Server-Sent Events stream with this user's live chat events."""
+
+    permission_classes = [IsAuthenticated]
+    content_negotiation_class = _AcceptAnyContentNegotiation
+
+    def get(self, request):
+        # The stream stays open for as long as the tab does and never touches
+        # the database again, so release this thread's connection now instead
+        # of holding one database connection per open chat.
+        for connection in connections.all():
+            if not connection.in_atomic_block:
+                connection.close()
+        response = StreamingHttpResponse(
+            event_stream(request.user.id), content_type="text/event-stream"
+        )
+        response["Cache-Control"] = "no-cache, no-transform"
+        response["X-Accel-Buffering"] = "no"
+        return response
 
 
 class MessageAttachmentDownloadView(APIView):

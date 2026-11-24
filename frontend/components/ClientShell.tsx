@@ -6,10 +6,12 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
+import { useUnreadMessages } from "@/lib/unread-messages";
 import { cn } from "@/lib/utils";
 import { BackButton } from "./BackButton";
 import { BrandLogo } from "./BrandLogo";
 import { LanguageToggle } from "./LanguageToggle";
+import { UnreadBadge } from "./UnreadBadge";
 
 const NAV = [
   { href: "/client/dashboard", icon: Home, labelKey: "dashboard" as const },
@@ -19,15 +21,30 @@ const NAV = [
   { href: "/client/settings", icon: Settings, labelKey: "settings" as const },
 ];
 
-export function ClientShell({ children }: { children: React.ReactNode }) {
+export function ClientShell({
+  children,
+  title,
+  fullBleed = false,
+}: {
+  children: React.ReactNode;
+  title?: string;
+  /** Fill the whole area under the header (no page padding or scrolling), e.g. for chat. */
+  fullBleed?: boolean;
+}) {
   const pathname = usePathname();
   const { user } = useAuth();
   const { t } = useI18n();
   const [navOpen, setNavOpen] = useState(false);
-  const heading = user?.username ? `Bonjour, ${user.username}` : t("dashboard");
+  const unreadMessages = useUnreadMessages(user ? "/api/messages/unread-count/" : null);
+  const heading = title ?? (user?.username ? `Bonjour, ${user.username}` : t("dashboard"));
 
   return (
-    <div className="studio-ui flex min-h-screen bg-[#f5f7f5] antialiased selection:bg-[#eaf2ee] selection:text-[#173c32]">
+    <div
+      className={cn(
+        "studio-ui flex bg-[#f5f7f5] antialiased selection:bg-[#eaf2ee] selection:text-[#173c32]",
+        fullBleed ? "h-dvh overflow-hidden" : "min-h-screen"
+      )}
+    >
       {navOpen && (
         <button
           type="button"
@@ -72,7 +89,10 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
                   active && "bg-[#eaf2ee] text-[#214f40]"
                 )}
               >
-                <Icon size={18} className="shrink-0" />
+                <span className="relative shrink-0">
+                  <Icon size={18} />
+                  {href === "/client/messages" && <UnreadBadge count={unreadMessages} />}
+                </span>
                 <span className={cn("text-[9px] font-medium leading-tight tracking-tight max-lg:text-[11px]", active && "font-semibold")}>
                   {t(labelKey)}
                 </span>
@@ -86,8 +106,8 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-20 flex h-[78px] items-center justify-between bg-[#f5f7f5]/90 px-5 backdrop-blur-md lg:h-[94px] lg:px-8">
+      <div className={cn("flex min-w-0 flex-1 flex-col", fullBleed && "min-h-0")}>
+        <header className="sticky top-0 z-20 flex h-[78px] shrink-0 items-center justify-between bg-[#f5f7f5]/90 px-5 backdrop-blur-md lg:h-[94px] lg:px-8">
           <div className="flex min-w-0 items-center gap-2">
             <button
               type="button"
@@ -115,7 +135,16 @@ export function ClientShell({ children }: { children: React.ReactNode }) {
           </Link>
         </header>
 
-        <main className="mx-auto w-full max-w-[1440px] flex-1 px-5 pb-12 pt-2 lg:px-8 lg:pb-14">{children}</main>
+        <main
+          className={cn(
+            "w-full flex-1",
+            fullBleed
+              ? "min-h-0 border-t border-[#e5e9e6]"
+              : "mx-auto max-w-[1440px] px-5 pb-12 pt-2 lg:px-8 lg:pb-14"
+          )}
+        >
+          {children}
+        </main>
       </div>
     </div>
   );
