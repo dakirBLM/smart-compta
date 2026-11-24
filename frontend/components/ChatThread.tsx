@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronLeft, FileText, Paperclip, Send, X } from "lucide-react";
+import { ChevronLeft, FileText, PanelLeftOpen, Paperclip, Send, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatAvatar } from "@/components/ChatAvatar";
 import { Spinner } from "@/components/ui";
@@ -115,6 +115,7 @@ export function ChatThread({
   subtitle,
   eventMatches,
   onBack,
+  onOpenList,
   className,
 }: {
   /** Endpoint used to list (GET) and send (POST) messages. */
@@ -125,6 +126,8 @@ export function ChatThread({
   eventMatches?: (event: ChatEvent) => boolean;
   /** Shows a back button on small screens when set. */
   onBack?: () => void;
+  /** Shows a button (wide screens) to bring back a conversation list that was dragged shut. */
+  onOpenList?: () => void;
   className?: string;
 }) {
   const { t, lang } = useI18n();
@@ -420,6 +423,17 @@ export function ChatThread({
             className="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-brand hover:bg-gray-100 md:hidden"
           >
             <ChevronLeft size={22} className="rtl:rotate-180" />
+          </button>
+        )}
+        {onOpenList && (
+          <button
+            type="button"
+            onClick={onOpenList}
+            aria-label={t("messagesDirects")}
+            title={t("messagesDirects")}
+            className="hidden h-9 w-9 shrink-0 place-items-center rounded-lg text-brand hover:bg-gray-100 md:grid"
+          >
+            <PanelLeftOpen size={20} className="rtl:-scale-x-100" />
           </button>
         )}
         <ChatAvatar name={title} />

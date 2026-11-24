@@ -65,14 +65,7 @@ export function AppShell({
       />
 
       <div className={cn("flex min-w-0 flex-1 flex-col", fullBleed && "min-h-0")}>
-        <header
-          className={cn(
-            "sticky top-0 z-20 flex items-center justify-between backdrop-blur-md",
-            fullBleed
-              ? "h-14 shrink-0 border-b border-[#e5e9e6] bg-white px-4 lg:px-6"
-              : "h-[78px] bg-[#f5f7f5]/90 px-5 lg:h-[94px] lg:px-8"
-          )}
-        >
+        <header className="sticky top-0 z-20 flex h-[78px] shrink-0 items-center justify-between bg-[#f5f7f5]/90 px-5 backdrop-blur-md lg:h-[94px] lg:px-8">
           <div className="flex min-w-0 items-center gap-2">
             <button
               onClick={() => setNavOpen(true)}
@@ -123,7 +116,7 @@ export function AppShell({
           className={cn(
             "w-full flex-1",
             fullBleed
-              ? "min-h-0"
+              ? "min-h-0 border-t border-[#e5e9e6]"
               : "mx-auto max-w-[1440px] px-5 pb-12 pt-2 lg:px-8 lg:pb-14"
           )}
         >
