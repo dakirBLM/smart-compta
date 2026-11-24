@@ -9,7 +9,8 @@ from unittest.mock import MagicMock, patch
 
 from django.contrib.auth import get_user_model
 from django.core.files.base import ContentFile
-from django.core.files.storage import Storage
+from django.core.files.storage import Storage, default_storage
+from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.management import call_command, CommandError
 from rest_framework import status
@@ -2470,4 +2471,211 @@ class ChatRealtimeTests(APITestCase):
 
         self.assertIn("sender_photo", data[0])
         self.assertIsNone(data[0]["sender_photo"])
+
+
+class CompanyDeletionWithBanksTests(APITestCase):
+    """Deleting a company removes its banks and their 512 accounts; a bank's
+    512 account still cannot be deleted on its own."""
+
+    def setUp(self):
+        self.accountant = get_user_model().objects.create_user(
+            username="delete-company-accountant", role="accountant"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SARL SUPPRIMER", nif="del-1", nis="del-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+        self.bank = make_bank(self.entreprise, "BNA", "00123456")
+        self.client.force_authenticate(self.accountant)
+
+    def test_deleting_the_company_deletes_its_banks_and_512_accounts(self):
+        scf_number = self.bank.scf_account.numero_compte
+
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, getattr(response, "data", ""))
+        self.assertFalse(Entreprise.objects.filter(pk=self.entreprise.pk).exists())
+        self.assertFalse(BankAccount.objects.filter(pk=self.bank.pk).exists())
+        self.assertFalse(SCFAccount.objects.filter(entreprise_id=self.entreprise.pk, numero_compte=scf_number).exists())
+
+    def test_a_bank_512_account_cannot_be_deleted_while_the_bank_exists(self):
+        from django.db.models import RestrictedError
+
+        with self.assertRaises(RestrictedError):
+            self.bank.scf_account.delete()
+        self.assertTrue(BankAccount.objects.filter(pk=self.bank.pk).exists())
+
+
+class CompanyDeletionCleanupTests(APITestCase):
+    """Deleting a company removes its rows, its stored files and the client logins
+    that had no other company."""
+
+    def setUp(self):
+        self._media = TemporaryDirectory()
+        self.addCleanup(self._media.cleanup)
+        self.media_override = override_settings(MEDIA_ROOT=self._media.name)
+        self.media_override.enable()
+        self.addCleanup(self.media_override.disable)
+
+        user_model = get_user_model()
+        self.accountant = user_model.objects.create_user(
+            username="cleanup-accountant", role="accountant"
+        )
+        self.only_client = user_model.objects.create_user(
+            username="cleanup-only-client", role="client"
+        )
+        self.shared_client = user_model.objects.create_user(
+            username="cleanup-shared-client", role="client"
+        )
+        self.entreprise = Entreprise.objects.create(
+            nom="SARL NETTOYAGE", nif="clean-1", nis="clean-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        self.other = Entreprise.objects.create(
+            nom="SARL GARDEE", nif="keep-1", nis="keep-2",
+            date_creation=date(2026, 1, 1), exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ExerciceAnnee.objects.create(entreprise=self.entreprise, annee=2026, is_active=True)
+        ClientAccess.objects.create(client=self.only_client, entreprise=self.entreprise, nom_client="Seul")
+        ClientAccess.objects.create(client=self.shared_client, entreprise=self.entreprise, nom_client="Partagé")
+        ClientAccess.objects.create(client=self.shared_client, entreprise=self.other, nom_client="Partagé")
+        self.client.force_authenticate(self.accountant)
+
+    def store(self, name, content=b"image"):
+        return default_storage.save(name, ContentFile(content))
+
+    def test_deleting_the_company_removes_its_stored_files_and_invoice_images(self):
+        own_statement = self.store("bank_statement_submissions/own.pdf")
+        own_attachment = self.store("message_attachments/own.pdf")
+        own_invoice = self.store("factures/own.jpg")
+        kept_invoice = self.store("factures/kept.jpg")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=own_statement, original_filename="own.pdf",
+        )
+        Facture.objects.create(
+            entreprise=self.entreprise, client=self.accountant,
+            numero_facture="F-OWN", montant_ttc=10,
+            image_url=settings.MEDIA_URL + own_invoice,
+        )
+        Facture.objects.create(
+            entreprise=self.other, client=self.accountant,
+            numero_facture="F-KEPT", montant_ttc=10,
+            image_url=settings.MEDIA_URL + kept_invoice,
+        )
+        message = Message.objects.create(
+            entreprise=self.entreprise, sender=self.accountant,
+            client_user=self.only_client, content="Bonjour",
+        )
+        MessageAttachment.objects.create(message=message, file=own_attachment)
+
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT, getattr(response, "data", ""))
+        self.assertFalse(default_storage.exists(own_statement))
+        self.assertFalse(default_storage.exists(own_attachment))
+        self.assertFalse(default_storage.exists(own_invoice))
+        self.assertTrue(default_storage.exists(kept_invoice))
+
+    def test_client_logins_without_another_company_are_removed_others_are_kept(self):
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertFalse(get_user_model().objects.filter(pk=self.only_client.pk).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.shared_client.pk).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.accountant.pk).exists())
+        self.assertTrue(Entreprise.objects.filter(pk=self.other.pk).exists())
+
+    def test_failed_file_delete_keeps_company_rows_and_files(self):
+        statement = self.store("bank_statement_submissions/keep.pdf")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=statement, original_filename="keep.pdf",
+        )
+
+        with patch("core.bank_statement_storage.BankStatementStorage.delete",
+                   side_effect=OSError("disque indisponible")):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertIn("Rien n'a été supprimé", response.data["detail"])
+        self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
+        self.assertTrue(ClientAccess.objects.filter(entreprise=self.entreprise).exists())
+        self.assertTrue(BankStatementSubmission.objects.filter(entreprise=self.entreprise).exists())
+        self.assertTrue(get_user_model().objects.filter(pk=self.only_client.pk).exists())
+        self.assertTrue(default_storage.exists(statement))
+
+    def test_unreachable_cloudinary_image_keeps_company(self):
+        invoice_url = "https://res.cloudinary.com/demo/image/upload/v1/factures/facture.jpg"
+        Facture.objects.create(
+            entreprise=self.entreprise, client=self.accountant,
+            numero_facture="F-CLOUD", montant_ttc=10, image_url=invoice_url,
+        )
+
+        with patch.dict(os.environ, {"CLOUDINARY_URL": ""}, clear=False):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_500_INTERNAL_SERVER_ERROR)
+        self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
+        self.assertTrue(Facture.objects.filter(numero_facture="F-CLOUD").exists())
+
+    def media_files(self):
+        found = []
+        for root, _dirs, files in os.walk(self._media.name):
+            found.extend(os.path.relpath(os.path.join(root, f), self._media.name) for f in files)
+        return found
+
+    def test_successful_delete_empties_the_trash(self):
+        statement = self.store("bank_statement_submissions/gone.pdf")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=statement, original_filename="gone.pdf",
+        )
+
+        response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        self.assertEqual(self.media_files(), [])
+
+    def test_failure_after_files_moved_to_trash_puts_them_back(self):
+        statement = self.store("bank_statement_submissions/back.pdf", b"contenu original")
+        BankStatementSubmission.objects.create(
+            entreprise=self.entreprise, client=self.only_client,
+            file=statement, original_filename="back.pdf",
+        )
+
+        with patch("core.views.remove_orphan_clients", side_effect=RuntimeError("base en panne")):
+            with self.assertRaises(RuntimeError):
+                self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertTrue(Entreprise.objects.filter(pk=self.entreprise.id).exists())
+        self.assertTrue(BankStatementSubmission.objects.filter(entreprise=self.entreprise).exists())
+        self.assertTrue(default_storage.exists(statement))
+        with default_storage.open(statement, "rb") as restored:
+            self.assertEqual(restored.read(), b"contenu original")
+        self.assertFalse(any(name.startswith("_company_trash") for name in self.media_files()))
+
+    def test_cloudinary_image_is_moved_to_trash_then_destroyed(self):
+        invoice_url = "https://res.cloudinary.com/demo/image/upload/v1/factures/facture.jpg"
+        Facture.objects.create(
+            entreprise=self.entreprise, client=self.accountant,
+            numero_facture="F-CLOUD-OK", montant_ttc=10, image_url=invoice_url,
+        )
+        uploader = MagicMock()
+        uploader.rename.return_value = {"public_id": "moved"}
+        uploader.destroy.return_value = {"result": "ok"}
+
+        with patch.dict(os.environ, {"CLOUDINARY_URL": "cloudinary://k:s@demo"}, clear=False), \
+                patch("core.company_cleanup._cloudinary_uploader", return_value=uploader):
+            response = self.client.delete(f"/api/entreprises/{self.entreprise.id}/")
+
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+        moved_to = uploader.rename.call_args.args[1]
+        self.assertEqual(uploader.rename.call_args.args[0], "factures/facture")
+        self.assertTrue(moved_to.startswith("smart-compta-trash/"))
+        uploader.destroy.assert_called_once_with(moved_to, resource_type="image")
 
