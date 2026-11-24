@@ -18,6 +18,12 @@ export interface ChatResyncEvent {
 export type ChatEvent = ChatMessageEvent | ChatResyncEvent;
 type Handler = (event: ChatEvent) => void;
 
+/**
+ * Window event fired after a thread has been loaded. Loading marks the
+ * messages as read on the server, so navigation badges must be refreshed.
+ */
+export const CHAT_READ_EVENT = "chat-read";
+
 const handlers = new Set<Handler>();
 let controller: AbortController | null = null;
 let connected = false;

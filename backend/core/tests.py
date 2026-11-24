@@ -2267,6 +2267,79 @@ class MessageAttachmentAPITests(APITestCase):
         self.assertEqual(allowed.status_code, status.HTTP_200_OK)
 
 
+class UnreadMessageCountTests(APITestCase):
+    """Badge count in the navigation: messages waiting for the current user."""
+
+    def setUp(self):
+        User = get_user_model()
+        self.accountant = User.objects.create_user(
+            username="badge-accountant", password="StrongPass!123", role="accountant"
+        )
+        self.client_user = User.objects.create_user(
+            username="badge-client", password="StrongPass!123", role="client"
+        )
+        self.outsider = User.objects.create_user(
+            username="badge-outsider", password="StrongPass!123", role="accountant"
+        )
+        self.company = Entreprise.objects.create(
+            nom="Badge SAS",
+            date_creation=date(2026, 1, 1),
+            exercice_comptable="2026",
+            accountant=self.accountant,
+        )
+        ClientAccess.objects.create(client=self.client_user, entreprise=self.company, nom_client="Client Badge")
+        self.company_count_url = f"/api/entreprises/{self.company.id}/messages/unread-count/"
+
+    def test_accountant_sees_unread_client_messages_until_the_thread_is_opened(self):
+        self.client.force_authenticate(self.client_user)
+        self.client.post("/api/messages/", {"content": "Bonjour"}, format="multipart")
+        self.client.post("/api/messages/", {"content": "Vous êtes là ?"}, format="multipart")
+
+        self.client.force_authenticate(self.accountant)
+        self.assertEqual(self.client.get(self.company_count_url).data, {"unread": 2})
+
+        self.client.get(
+            f"/api/entreprises/{self.company.id}/conversations/{self.client_user.id}/messages/"
+        )
+        self.assertEqual(self.client.get(self.company_count_url).data, {"unread": 0})
+
+    def test_accountant_does_not_count_their_own_messages(self):
+        self.client.force_authenticate(self.accountant)
+        self.client.post(
+            f"/api/entreprises/{self.company.id}/conversations/{self.client_user.id}/messages/",
+            {"content": "Réponse"},
+            format="multipart",
+        )
+        self.assertEqual(self.client.get(self.company_count_url).data, {"unread": 0})
+
+    def test_client_sees_unread_accountant_messages_only(self):
+        self.client.force_authenticate(self.accountant)
+        self.client.post(
+            f"/api/entreprises/{self.company.id}/conversations/{self.client_user.id}/messages/",
+            {"content": "Votre bilan est prêt"},
+            format="multipart",
+        )
+        self.client.force_authenticate(self.client_user)
+        self.client.post("/api/messages/", {"content": "Merci"}, format="multipart")
+        self.assertEqual(self.client.get("/api/messages/unread-count/").data, {"unread": 1})
+
+        self.client.get("/api/messages/")
+        self.assertEqual(self.client.get("/api/messages/unread-count/").data, {"unread": 0})
+
+    def test_other_accountants_and_roles_get_no_company_count(self):
+        self.client.force_authenticate(self.outsider)
+        self.assertEqual(self.client.get(self.company_count_url).status_code, status.HTTP_404_NOT_FOUND)
+
+        self.client.force_authenticate(self.client_user)
+        self.assertEqual(self.client.get(self.company_count_url).status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_client_without_company_gets_zero(self):
+        User = get_user_model()
+        lonely = User.objects.create_user(username="badge-lonely", password="StrongPass!123", role="client")
+        self.client.force_authenticate(lonely)
+        self.assertEqual(self.client.get("/api/messages/unread-count/").data, {"unread": 0})
+
+
 class ChatRealtimeTests(APITestCase):
     """Live chat events: published on send, delivered over the SSE stream."""
 

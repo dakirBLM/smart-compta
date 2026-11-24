@@ -23,6 +23,9 @@ urlpatterns = [
     # Messages
     path("entreprises/<int:pk>/conversations/",
          views.ConversationListView.as_view()),
+    path("entreprises/<int:pk>/messages/unread-count/",
+         views.UnreadMessageCountView.as_view()),
+    path("messages/unread-count/", views.UnreadMessageCountView.as_view()),
     path("entreprises/<int:pk>/conversations/<int:client_id>/messages/",
          views.MessageListCreateView.as_view()),
     path("messages/", views.MessageListCreateView.as_view()),

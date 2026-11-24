@@ -5,7 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChatAvatar } from "@/components/ChatAvatar";
 import { Spinner } from "@/components/ui";
 import { api, getToken } from "@/lib/api";
-import { ChatEvent, isChatStreamConnected, subscribeChatEvents } from "@/lib/chat-events";
+import { CHAT_READ_EVENT, ChatEvent, isChatStreamConnected, subscribeChatEvents } from "@/lib/chat-events";
 import { useI18n } from "@/lib/i18n-context";
 import { ChatMessage, MessageAttachment } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -174,6 +174,7 @@ export function ChatThread({
         if (!cancelled && request === latestRequest) {
           setMessages(data);
           lastLoadedAt = Date.now();
+          window.dispatchEvent(new Event(CHAT_READ_EVENT));
         }
       } catch {
         // Keep what is already shown; the next poll or event retries.

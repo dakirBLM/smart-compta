@@ -6,10 +6,12 @@ import { usePathname } from "next/navigation";
 import { useState } from "react";
 import { useAuth } from "@/lib/auth-context";
 import { useI18n } from "@/lib/i18n-context";
+import { useUnreadMessages } from "@/lib/unread-messages";
 import { cn } from "@/lib/utils";
 import { BackButton } from "./BackButton";
 import { BrandLogo } from "./BrandLogo";
 import { LanguageToggle } from "./LanguageToggle";
+import { UnreadBadge } from "./UnreadBadge";
 
 const NAV = [
   { href: "/client/dashboard", icon: Home, labelKey: "dashboard" as const },
@@ -33,6 +35,7 @@ export function ClientShell({
   const { user } = useAuth();
   const { t } = useI18n();
   const [navOpen, setNavOpen] = useState(false);
+  const unreadMessages = useUnreadMessages(user ? "/api/messages/unread-count/" : null);
   const heading = title ?? (user?.username ? `Bonjour, ${user.username}` : t("dashboard"));
 
   return (
@@ -86,7 +89,10 @@ export function ClientShell({
                   active && "bg-[#eaf2ee] text-[#214f40]"
                 )}
               >
-                <Icon size={18} className="shrink-0" />
+                <span className="relative shrink-0">
+                  <Icon size={18} />
+                  {href === "/client/messages" && <UnreadBadge count={unreadMessages} />}
+                </span>
                 <span className={cn("text-[9px] font-medium leading-tight tracking-tight max-lg:text-[11px]", active && "font-semibold")}>
                   {t(labelKey)}
                 </span>
