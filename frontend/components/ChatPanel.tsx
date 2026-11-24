@@ -27,10 +27,10 @@ function shortTime(iso: string | null, locale: string) {
 }
 
 const LIST_MAX_WIDTH = 320;
-// Below this the list is too narrow to be useful and snaps shut.
-const LIST_SNAP_CLOSED_BELOW = 64;
-// Below this only avatars are shown.
-const LIST_COMPACT_BELOW = 190;
+const LIST_MIN_WIDTH = 220;
+// Dragging the list narrower than this closes it. Between this and the minimum
+// it stays at the minimum, so it is either comfortable to read or hidden.
+const LIST_SNAP_CLOSED_BELOW = 170;
 const LIST_WIDTH_KEY = "chat_list_width";
 
 /** True from the `md` breakpoint up, where list and thread sit side by side. */
@@ -72,18 +72,17 @@ export function ChatPanel({
   const [listWidth, setListWidth] = useState(LIST_MAX_WIDTH);
   const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const compact = listWidth > 0 && listWidth < LIST_COMPACT_BELOW;
 
   useEffect(() => {
-    const saved = Number(window.localStorage.getItem(LIST_WIDTH_KEY));
-    if (window.localStorage.getItem(LIST_WIDTH_KEY) !== null && saved >= 0 && saved <= LIST_MAX_WIDTH) {
-      setListWidth(saved);
-    }
+    const raw = window.localStorage.getItem(LIST_WIDTH_KEY);
+    if (raw === null || !Number.isFinite(Number(raw))) return;
+    const saved = Number(raw);
+    setListWidth(saved <= 0 ? 0 : Math.min(LIST_MAX_WIDTH, Math.max(LIST_MIN_WIDTH, saved)));
   }, []);
 
   const applyListWidth = useCallback((width: number, persist: boolean) => {
-    const clamped = Math.max(0, Math.min(LIST_MAX_WIDTH, width));
-    const next = clamped < LIST_SNAP_CLOSED_BELOW ? 0 : clamped;
+    const next =
+      width < LIST_SNAP_CLOSED_BELOW ? 0 : Math.min(LIST_MAX_WIDTH, Math.max(LIST_MIN_WIDTH, width));
     setListWidth(next);
     if (persist) window.localStorage.setItem(LIST_WIDTH_KEY, String(next));
     return next;
@@ -118,8 +117,8 @@ export function ChatPanel({
     const rtl = containerRef.current ? getComputedStyle(containerRef.current).direction === "rtl" : false;
     const grow = rtl ? "ArrowLeft" : "ArrowRight";
     const shrink = rtl ? "ArrowRight" : "ArrowLeft";
-    if (event.key === grow) applyListWidth(Math.max(listWidth, LIST_SNAP_CLOSED_BELOW) + 24, true);
-    else if (event.key === shrink) applyListWidth(listWidth - 24, true);
+    if (event.key === grow) applyListWidth(listWidth === 0 ? LIST_MIN_WIDTH : listWidth + 24, true);
+    else if (event.key === shrink) applyListWidth(listWidth - 24 < LIST_MIN_WIDTH ? 0 : listWidth - 24, true);
     else if (event.key === "Home") applyListWidth(0, true);
     else if (event.key === "End") applyListWidth(LIST_MAX_WIDTH, true);
     else return;
@@ -172,34 +171,22 @@ export function ChatPanel({
           mobileThreadOpen ? "hidden" : "flex"
         )}
       >
-        {!compact && (
-          <div className="px-4 pb-2 pt-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <h2 className="truncate text-[15px] font-bold">{t("messagesDirects")}</h2>
-              <span className="rounded-full bg-[#e5e9e6] px-2 py-0.5 text-xs font-semibold text-[#52605a]">
-                {conversations.length}
-              </span>
-            </div>
-            <label className="flex items-center gap-2 rounded-lg border border-[#dfe5e1] bg-white px-2.5 py-2 focus-within:border-brand/50">
-              <Search size={15} className="shrink-0 text-gray-400" />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder={t("rechercherConversation")}
-                aria-label={t("rechercherConversation")}
-                className="w-full min-w-0 bg-transparent text-base text-[#17221f] outline-none placeholder:text-gray-400 md:text-sm"
-              />
-            </label>
-          </div>
-        )}
+        <div className="px-4 pb-2 pt-4">
+          <h2 className="mb-3 truncate text-[15px] font-bold">{t("messagesDirects")}</h2>
+          <label className="flex items-center gap-2 rounded-lg border border-[#dfe5e1] bg-white px-2.5 py-2 focus-within:border-brand/50">
+            <Search size={15} className="shrink-0 text-gray-400" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("rechercherConversation")}
+              aria-label={t("rechercherConversation")}
+              className="w-full min-w-0 bg-transparent text-base text-[#17221f] outline-none placeholder:text-gray-400 md:text-sm"
+            />
+          </label>
+        </div>
 
-        <div
-          className={cn(
-            "min-h-0 flex-1 overflow-y-auto overscroll-contain pb-3",
-            compact ? "px-1.5 pt-3" : "px-2 pt-1"
-          )}
-        >
-          {visibleConversations.length === 0 && !compact && (
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-1">
+          {visibleConversations.length === 0 && (
             <p className="px-3 py-6 text-center text-xs text-gray-500">
               {conversations.length === 0 ? t("aucuneDonnee") : t("aucunClientTrouve")}
             </p>
@@ -212,54 +199,46 @@ export function ChatPanel({
               <button
                 key={c.client_id}
                 type="button"
-                title={compact ? c.nom_client : undefined}
                 onClick={() => {
                   onSelectClient(c.client_id);
                   setMobileThreadOpen(true);
                 }}
                 aria-current={active ? "true" : undefined}
                 className={cn(
-                  "relative flex w-full items-center rounded-lg py-2 text-start transition-colors",
-                  compact ? "justify-center px-1" : "gap-2.5 px-2.5",
+                  "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-start transition-colors",
                   active
                     ? "bg-white shadow-[0_1px_2px_rgba(23,34,31,0.08)] ring-1 ring-[#dfe5e1]"
                     : "hover:bg-white/70"
                 )}
               >
                 <ChatAvatar name={c.nom_client} />
-                {compact ? (
-                  unread > 0 && (
-                    <span className="absolute end-1 top-1 h-2.5 w-2.5 rounded-full border-2 border-[#f5f7f5] bg-brand" />
-                  )
-                ) : (
-                  <span className="min-w-0 flex-1">
-                    <span className="flex items-baseline justify-between gap-2">
-                      <span
-                        className={cn(
-                          "truncate text-sm text-[#17221f]",
-                          unread > 0 || active ? "font-bold" : "font-medium"
-                        )}
-                      >
-                        {c.nom_client}
-                      </span>
-                      <span className="shrink-0 text-[11px] text-gray-500">
-                        {shortTime(c.last_message_at, locale)}
-                      </span>
-                    </span>
-                    <span className="flex items-center justify-between gap-2">
-                      <span
-                        className={cn("truncate text-xs", unread > 0 ? "font-semibold text-[#17221f]" : "text-gray-500")}
-                      >
-                        {c.last_message || t("aucunMessage")}
-                      </span>
-                      {unread > 0 && (
-                        <span className="shrink-0 rounded-full bg-brand px-1.5 py-px text-[11px] font-bold text-lime">
-                          {unread}
-                        </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span
+                      className={cn(
+                        "truncate text-sm text-[#17221f]",
+                        unread > 0 || active ? "font-bold" : "font-medium"
                       )}
+                    >
+                      {c.nom_client}
+                    </span>
+                    <span className="shrink-0 text-[11px] text-gray-500">
+                      {shortTime(c.last_message_at, locale)}
                     </span>
                   </span>
-                )}
+                  <span className="flex items-center justify-between gap-2">
+                    <span
+                      className={cn("truncate text-xs", unread > 0 ? "font-semibold text-[#17221f]" : "text-gray-500")}
+                    >
+                      {c.last_message || t("aucunMessage")}
+                    </span>
+                    {unread > 0 && (
+                      <span className="shrink-0 rounded-full bg-brand px-1.5 py-px text-[11px] font-bold text-lime">
+                        {unread}
+                      </span>
+                    )}
+                  </span>
+                </span>
               </button>
             );
           })}
@@ -282,10 +261,11 @@ export function ChatPanel({
         onDoubleClick={() => applyListWidth(listWidth === 0 ? LIST_MAX_WIDTH : 0, true)}
         onKeyDown={onHandleKeyDown}
         className={cn(
-          "group relative hidden w-px shrink-0 cursor-col-resize touch-none bg-[#e5e9e6] outline-none md:block",
+          "relative hidden w-px shrink-0 cursor-col-resize touch-none bg-[#e5e9e6] outline-none md:block",
+          // Wider invisible grab area, and a hairline highlight on hover/drag.
           "before:absolute before:inset-y-0 before:-inset-x-1.5 before:content-['']",
-          "after:absolute after:inset-y-0 after:-inset-x-px after:bg-brand/0 after:transition-colors after:content-[''] hover:after:bg-brand/40 focus-visible:after:bg-brand/60",
-          resizing && "after:bg-brand/60"
+          "after:absolute after:inset-y-0 after:left-0 after:w-px after:bg-transparent after:transition-colors after:content-[''] hover:after:bg-brand/50 focus-visible:after:bg-brand/50",
+          resizing && "after:bg-brand/50"
         )}
       />
 
