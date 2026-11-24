@@ -1,58 +1,34 @@
 "use client";
 
-import { FileText, Paperclip, Send, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Input, Spinner } from "@/components/ui";
-import { api, getToken } from "@/lib/api";
+import { Search } from "lucide-react";
+import { useMemo, useState } from "react";
+import { ChatAvatar } from "@/components/ChatAvatar";
+import { ChatThread } from "@/components/ChatThread";
 import { useI18n } from "@/lib/i18n-context";
-import { ChatMessage, Conversation } from "@/lib/types";
-import { cn, formatDateTime } from "@/lib/utils";
+import { Conversation } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-const ATTACHMENT_ACCEPT = ".pdf,image/png,image/jpeg,image/webp";
-const MAX_MESSAGE_ATTACHMENT_BYTES = 10 * 1024 * 1024;
-const MAX_MESSAGE_ATTACHMENT_COUNT = 3;
-
-function isImageAttachment(filename: string, contentType: string) {
-  return contentType.startsWith("image/") || /\.(png|jpe?g|webp)$/i.test(filename);
+function sameDay(a: Date, b: Date) {
+  return (
+    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate()
+  );
 }
 
-function validateAttachmentFile(file: File | null): string | null {
-  if (!file) return null;
-  if (file.size > MAX_MESSAGE_ATTACHMENT_BYTES) {
-    return "Le fichier dépasse la taille maximale de 10 Mo.";
+/** "14:05" for today, "22/11" for anything older. */
+function shortTime(iso: string | null, locale: string) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  if (sameDay(date, new Date())) {
+    return date.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
   }
-  const allowedExtensions = [".pdf", ".png", ".jpg", ".jpeg", ".webp"];
-  const fileName = file.name.toLowerCase();
-  const isAllowed = allowedExtensions.some((extension) => fileName.endsWith(extension));
-  if (!isAllowed) {
-    return "Format non supporté. Utilisez un PDF, PNG, JPG ou WEBP.";
-  }
-  return null;
+  return date.toLocaleDateString(locale, { day: "2-digit", month: "2-digit" });
 }
 
-function getAttachmentSelectionError(files: File[]): string | null {
-  if (files.length > MAX_MESSAGE_ATTACHMENT_COUNT) {
-    return `Vous pouvez joindre jusqu'à ${MAX_MESSAGE_ATTACHMENT_COUNT} fichiers maximum.`;
-  }
-  const totalSize = files.reduce((total, file) => total + file.size, 0);
-  if (totalSize > MAX_MESSAGE_ATTACHMENT_BYTES) {
-    return "Le total des fichiers dépasse la limite de 10 Mo.";
-  }
-  return null;
-}
-
-function formatFileSize(size: number) {
-  if (!size) return "0 KB";
-  const units = ["B", "KB", "MB"];
-  let value = size;
-  let unitIndex = 0;
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex += 1;
-  }
-  return `${value.toFixed(value >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
-}
-
+/**
+ * Accountant messaging: a conversation list (one per client) next to the open
+ * thread. On small screens only one of the two is shown at a time.
+ */
 export function ChatPanel({
   entrepriseId,
   selectedClientId,
@@ -64,456 +40,127 @@ export function ChatPanel({
   conversations: Conversation[];
   onSelectClient: (clientId: number) => void;
 }) {
-  const { t } = useI18n();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [text, setText] = useState("");
-  const [sending, setSending] = useState(false);
-  const [error, setError] = useState("");
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
-  const [attachmentPreviewUrls, setAttachmentPreviewUrls] = useState<Record<number, string>>({});
-  const [previewAttachment, setPreviewAttachment] = useState<
-    { id: number; filename: string; content_type: string; open_url: string } | null
-  >(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const bottomRef = useRef<HTMLDivElement>(null);
+  const { t, lang } = useI18n();
+  const locale = lang === "ar" ? "ar" : "fr-FR";
+  const [query, setQuery] = useState("");
+  // Small screens start on the list; opening a conversation switches to the thread.
+  const [mobileThreadOpen, setMobileThreadOpen] = useState(false);
 
-  const openAttachment = useCallback(async (attachment: { id: number; open_url: string; filename: string; content_type: string }) => {
-    const url = attachment.open_url || "";
-    if (!url) return;
-    setPreviewAttachment(attachment);
-    setPreviewLoading(true);
-    setPreviewUrl(null);
-    const token = getToken();
-    try {
-      const response = await fetch(url, {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      });
-      if (!response.ok) {
-        throw new Error("Impossible d'ouvrir la pièce jointe.");
-      }
-      const blob = await response.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      setPreviewUrl(objectUrl);
-    } catch {
-      setError("Impossible d'ouvrir la pièce jointe. Veuillez réessayer.");
-    } finally {
-      setPreviewLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-    const imageAttachments = messages.flatMap((message) =>
-      message.attachments.filter((attachment) =>
-        isImageAttachment(attachment.filename, attachment.content_type)
+  const visibleConversations = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    return conversations
+      .filter(
+        (c) =>
+          !needle ||
+          c.nom_client.toLowerCase().includes(needle) ||
+          c.username.toLowerCase().includes(needle)
       )
-    );
-
-    const nextUrls: Record<number, string> = { ...attachmentPreviewUrls };
-
-    async function loadPreviews() {
-      for (const attachment of imageAttachments) {
-        if (nextUrls[attachment.id]) continue;
-        try {
-          const token = getToken();
-          const response = await fetch(attachment.open_url, {
-            headers: token ? { Authorization: `Bearer ${token}` } : {},
-          });
-          if (!response.ok) continue;
-          const blob = await response.blob();
-          const objectUrl = URL.createObjectURL(blob);
-          if (!cancelled) {
-            nextUrls[attachment.id] = objectUrl;
-          }
-        } catch {
-          // Ignore preview failures; the open action still works when the user clicks the file.
+      .sort((a, b) => {
+        if (a.last_message_at && b.last_message_at) {
+          return b.last_message_at.localeCompare(a.last_message_at);
         }
-      }
-
-      if (!cancelled) {
-        setAttachmentPreviewUrls(nextUrls);
-      }
-    }
-
-    loadPreviews();
-
-    return () => {
-      cancelled = true;
-      for (const url of Object.values(nextUrls)) {
-        URL.revokeObjectURL(url);
-      }
-    };
-  }, [messages]);
-
-  const loadMessages = useCallback(async () => {
-    if (!selectedClientId) return;
-    setLoading(true);
-    try {
-      const data = await api.get<ChatMessage[]>(
-        `/api/entreprises/${entrepriseId}/conversations/${selectedClientId}/messages/`
-      );
-      setMessages(data);
-    } catch {
-      setMessages([]);
-    } finally {
-      setLoading(false);
-    }
-  }, [entrepriseId, selectedClientId]);
-
-  useEffect(() => {
-    loadMessages();
-    const interval = setInterval(loadMessages, 8000);
-    return () => clearInterval(interval);
-  }, [loadMessages]);
-
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  async function send() {
-    const hasContent = Boolean(text.trim()) || selectedFiles.length > 0;
-    if (!selectedClientId || !hasContent || sending) return;
-    const selectionError = getAttachmentSelectionError(selectedFiles);
-    if (selectionError) {
-      setError(selectionError);
-      return;
-    }
-    setError("");
-    setSending(true);
-    try {
-      const form = new FormData();
-      if (text.trim()) form.append("content", text.trim());
-      selectedFiles.forEach((file) => form.append("file", file));
-      const msg = await api.post<ChatMessage>(
-        `/api/entreprises/${entrepriseId}/conversations/${selectedClientId}/messages/`,
-        form
-      );
-      setMessages((prev) => [...prev, msg]);
-      setText("");
-      setSelectedFiles([]);
-      if (fileInputRef.current) fileInputRef.current.value = "";
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Erreur lors de l'envoi du message");
-    } finally {
-      setSending(false);
-    }
-  }
+        if (a.last_message_at) return -1;
+        if (b.last_message_at) return 1;
+        return a.nom_client.localeCompare(b.nom_client);
+      });
+  }, [conversations, query]);
 
   const selected = conversations.find((c) => c.client_id === selectedClientId);
+  const threadUrl = selected
+    ? `/api/entreprises/${entrepriseId}/conversations/${selected.client_id}/messages/`
+    : null;
 
   return (
-    <>
-      {previewAttachment && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/65 p-4 backdrop-blur-sm">
-          <div className="relative w-full max-w-4xl rounded-2xl border border-white/10 bg-white shadow-2xl">
-            <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
-              <div className="truncate text-sm font-semibold text-gray-800">{previewAttachment.filename}</div>
-              <button
-                type="button"
-                onClick={() => {
-                  setPreviewAttachment(null);
-                  setPreviewUrl(null);
-                  setPreviewLoading(false);
-                }}
-                className="rounded-lg border border-gray-200 px-2 py-1 text-xs font-semibold text-gray-600 hover:text-gray-900"
-              >
-                Fermer
-              </button>
-            </div>
-            <div className="flex min-h-[420px] items-center justify-center bg-gray-50 p-4">
-              {previewLoading ? (
-                <div className="flex items-center gap-2 text-sm text-gray-500"><Spinner className="h-5 w-5 text-brand" /> Chargement...</div>
-              ) : previewUrl ? (
-                isImageAttachment(previewAttachment.filename, previewAttachment.content_type) ? (
-                  <img src={previewUrl} alt={previewAttachment.filename} className="max-h-[75vh] max-w-full rounded-xl object-contain" />
-                ) : previewAttachment.content_type === "application/pdf" || /\.pdf$/i.test(previewAttachment.filename) ? (
-                  <iframe src={previewUrl} title={previewAttachment.filename} className="h-[75vh] w-full rounded-xl border-0" />
-                ) : (
-                  <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-gray-300 bg-white px-8 py-10 text-center text-sm text-gray-600">
-                    <FileText size={32} className="text-brand" />
-                    <div className="font-semibold text-gray-800">Aperçu non disponible</div>
-                    <div>Ce type de fichier ne peut pas être prévisualisé dans le navigateur.</div>
-                  </div>
-                )
-              ) : null}
-            </div>
+    <div className="flex h-[calc(100dvh-9.5rem)] min-h-[440px] overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-card md:h-[calc(100vh-12rem)] md:min-h-[500px]">
+      <aside
+        className={cn(
+          "min-h-0 w-full flex-col bg-brand-dark text-white md:flex md:w-72 md:shrink-0 lg:w-80",
+          mobileThreadOpen ? "hidden" : "flex"
+        )}
+      >
+        <div className="px-4 pb-2 pt-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-[15px] font-bold">{t("messagesDirects")}</h2>
+            <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs font-semibold text-white/70">
+              {conversations.length}
+            </span>
           </div>
+          <label className="flex items-center gap-2 rounded-lg border border-white/15 bg-white/10 px-2.5 py-2 focus-within:border-white/40">
+            <Search size={15} className="shrink-0 text-white/60" />
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder={t("rechercherConversation")}
+              aria-label={t("rechercherConversation")}
+              className="w-full bg-transparent text-base text-white outline-none placeholder:text-white/50 md:text-sm"
+            />
+          </label>
         </div>
-      )}
-      <div className="flex h-[calc(100vh-12rem)] min-h-[500px] overflow-hidden rounded-3xl border border-gray-200 bg-white shadow-card">
-      <div className="w-full max-w-xs shrink-0 border-r border-gray-200 bg-[#F7FAF7]">
-        <div className="border-b border-gray-200 bg-brand px-5 py-4 text-xs font-bold uppercase tracking-wider text-white flex items-center justify-between">
-          <span>{t("clients")} ({conversations.length})</span>
-        </div>
-        <div className="overflow-y-auto max-h-[calc(100%-3rem)] divide-y divide-gray-100">
-          {conversations.length === 0 && (
-            <p className="p-5 text-xs text-gray-400 text-center">{t("aucuneDonnee")}</p>
+
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 pt-1">
+          {visibleConversations.length === 0 && (
+            <p className="px-3 py-6 text-center text-xs text-white/50">
+              {conversations.length === 0 ? t("aucuneDonnee") : t("aucunClientTrouve")}
+            </p>
           )}
-          {conversations.map((c) => {
+          {visibleConversations.map((c) => {
             const active = selectedClientId === c.client_id;
+            // The open thread marks its messages as read, so never flag it as unread.
+            const unread = active ? 0 : c.unread_count;
             return (
               <button
                 key={c.client_id}
-                onClick={() => onSelectClient(c.client_id)}
+                type="button"
+                onClick={() => {
+                  onSelectClient(c.client_id);
+                  setMobileThreadOpen(true);
+                }}
+                aria-current={active ? "true" : undefined}
                 className={cn(
-                  "flex w-full flex-col gap-1 px-4 py-3.5 text-left transition-all",
-                  active
-                    ? "bg-white font-bold text-brand border-l-4 border-l-brand shadow-sm"
-                    : "hover:bg-gray-100 text-gray-700"
+                  "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-start transition-colors",
+                  active ? "bg-lime text-brand-dark" : "text-white/85 hover:bg-white/10"
                 )}
               >
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-xs font-bold text-brand truncate">{c.nom_client}</span>
-                  {c.unread_count > 0 && (
-                    <span className="shrink-0 rounded-full bg-lime px-2 py-0.5 text-[10px] font-black text-brand shadow-glow-sm">
-                      {c.unread_count}
+                <ChatAvatar name={c.nom_client} />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-baseline justify-between gap-2">
+                    <span className={cn("truncate text-sm", unread > 0 || active ? "font-bold" : "font-medium")}>
+                      {c.nom_client}
                     </span>
-                  )}
-                </div>
-                <span className="text-[11px] text-gray-400 truncate">
-                  {c.last_message || t("aucunMessage")}
+                    <span className={cn("shrink-0 text-[11px]", active ? "text-brand-dark/70" : "text-white/50")}>
+                      {shortTime(c.last_message_at, locale)}
+                    </span>
+                  </span>
+                  <span className="flex items-center justify-between gap-2">
+                    <span
+                      className={cn(
+                        "truncate text-xs",
+                        active ? "text-brand-dark/75" : unread > 0 ? "text-white" : "text-white/55"
+                      )}
+                    >
+                      {c.last_message || t("aucunMessage")}
+                    </span>
+                    {unread > 0 && (
+                      <span className="shrink-0 rounded-full bg-lime px-1.5 py-px text-[11px] font-black text-brand-dark">
+                        {unread}
+                      </span>
+                    )}
+                  </span>
                 </span>
               </button>
             );
           })}
         </div>
-      </div>
+      </aside>
 
-      <div className="flex flex-1 flex-col min-w-0 bg-white">
-        {selectedClientId ? (
-          <>
-            <div className="border-b border-gray-200 px-6 py-3.5 bg-gray-50 flex items-center justify-between">
-              <div>
-                <div className="font-bold text-brand text-sm">{selected?.nom_client}</div>
-                <div className="text-[11px] text-gray-400">{selected?.username}</div>
-              </div>
-              <span className="rounded-full bg-emerald-100 px-2.5 py-0.5 text-[10px] font-bold text-emerald-800">
-                Canal direct
-              </span>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-5 space-y-3.5 bg-[#F9FBF9]">
-              {loading && messages.length === 0 ? (
-                <div className="flex justify-center py-10">
-                  <Spinner className="h-6 w-6 text-brand" />
-                </div>
-              ) : messages.length === 0 ? (
-                <p className="text-center text-xs text-gray-400 py-10">{t("aucunMessage")}</p>
-              ) : (
-                messages.map((m) => (
-                  <div
-                    key={m.id}
-                    className={cn("flex", m.is_mine ? "justify-end" : "justify-start")}
-                  >
-                    <div
-                      className={cn(
-                        "max-w-[75%] rounded-2xl px-4 py-2.5 text-xs shadow-sm",
-                        m.is_mine
-                          ? "bg-brand text-white rounded-br-none shadow-brand-glow"
-                          : "bg-white border border-gray-200 text-gray-800 rounded-bl-none"
-                      )}
-                    >
-                      {m.content ? <p className="leading-relaxed">{m.content}</p> : null}
-                      {m.attachments.length > 0 && (
-                        <div className={cn("mt-2 space-y-2", m.content ? "pt-2 border-t border-white/20" : "") }>
-                          {m.attachments.map((attachment) => {
-                            const isImage = isImageAttachment(attachment.filename, attachment.content_type);
-                            return (
-                              <div
-                                key={attachment.id}
-                                className={cn(
-                                  "overflow-hidden rounded-xl border",
-                                  m.is_mine
-                                    ? "border-white/20 bg-white/10"
-                                    : "border-gray-200 bg-gray-50"
-                                )}
-                              >
-                                {isImage ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => openAttachment(attachment)}
-                                    className="block w-full bg-black/5"
-                                  >
-                                    <img
-                                      src={attachmentPreviewUrls[attachment.id] || ""}
-                                      alt={attachment.filename}
-                                      className="h-36 w-full object-cover"
-                                    />
-                                  </button>
-                                ) : (
-                                  <div className="flex items-center gap-2 px-2.5 py-2">
-                                    <div
-                                      className={cn(
-                                        "flex h-8 w-8 items-center justify-center rounded-lg",
-                                        m.is_mine ? "bg-white/10 text-white" : "bg-white text-brand"
-                                      )}
-                                    >
-                                      <FileText size={14} />
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() => void openAttachment(attachment)}
-                                      className={cn(
-                                        "max-w-full truncate text-left text-xs font-semibold underline-offset-2 hover:underline",
-                                        m.is_mine ? "text-white" : "text-brand"
-                                      )}
-                                    >
-                                      {attachment.filename}
-                                    </button>
-                                  </div>
-                                )}
-                                {!isImage && (
-                                  <div className={cn("px-2.5 pb-2 text-[10px]", m.is_mine ? "text-white/70" : "text-gray-500")}>
-                                    {formatFileSize(attachment.size)}
-                                  </div>
-                                )}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      )}
-                      <p
-                        className={cn(
-                          "mt-1 text-[10px] text-right",
-                          m.is_mine ? "text-white/60" : "text-gray-400"
-                        )}
-                      >
-                        {formatDateTime(m.created_at)}
-                      </p>
-                    </div>
-                  </div>
-                ))
-              )}
-              <div ref={bottomRef} />
-            </div>
-
-            <div className="border-t border-gray-200 bg-white p-3.5">
-              {error && (
-                <div role="alert" className="mb-2 rounded-xl border border-rose-200 bg-rose-50 px-4 py-2.5 text-xs font-semibold text-rose-700">
-                  {error}
-                </div>
-              )}
-              {selectedFiles.length > 0 && (
-                <div className="mb-2 space-y-2">
-                  {selectedFiles.map((file, index) => (
-                    <div key={`${file.name}-${index}`} className="flex items-center justify-between gap-2 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-[11px] text-gray-700">
-                      <div className="flex min-w-0 items-center gap-2">
-                        {isImageAttachment(file.name, file.type) ? (
-                          <img
-                            src={URL.createObjectURL(file)}
-                            alt={file.name}
-                            className="h-8 w-8 rounded-lg object-cover"
-                          />
-                        ) : (
-                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-white text-brand">
-                            <FileText size={14} />
-                          </div>
-                        )}
-                        <div className="min-w-0">
-                          <div className="truncate font-semibold text-brand">{file.name}</div>
-                          <div className="text-gray-500">{formatFileSize(file.size)}</div>
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedFiles((current) => current.filter((item) => item !== file));
-                        }}
-                        className="inline-flex h-7 w-7 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 hover:text-rose-600"
-                        aria-label="Supprimer la pièce jointe"
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="flex gap-2.5">
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  hidden
-                  multiple
-                  accept={ATTACHMENT_ACCEPT}
-                  onChange={(event) => {
-                    const nextFiles = Array.from(event.target.files ?? []);
-                    const allFiles = [...selectedFiles, ...nextFiles];
-                    if (allFiles.length > MAX_MESSAGE_ATTACHMENT_COUNT) {
-                      setError("Vous pouvez joindre jusqu'à 3 fichiers maximum.");
-                      event.target.value = "";
-                      return;
-                    }
-                    const validationError = getAttachmentSelectionError(allFiles);
-                    if (validationError) {
-                      setError(validationError);
-                      event.target.value = "";
-                      return;
-                    }
-                    const validFiles: File[] = [];
-                    for (const file of nextFiles) {
-                      const validationMessage = validateAttachmentFile(file);
-                      if (validationMessage) {
-                        setError(validationMessage);
-                        event.target.value = "";
-                        return;
-                      }
-                      validFiles.push(file);
-                    }
-                    setError("");
-                    setSelectedFiles((current) => [...current, ...validFiles]);
-                    event.target.value = "";
-                  }}
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT}
-                  aria-label="Ajouter un fichier"
-                  title={
-                    selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT
-                      ? "Limite de 3 fichiers atteinte"
-                      : "Ajouter un fichier"
-                  }
-                  className={cn(
-                    "shrink-0 border-dashed p-2.5",
-                    selectedFiles.length >= MAX_MESSAGE_ATTACHMENT_COUNT
-                      ? "cursor-not-allowed border-gray-200 bg-gray-100 text-gray-400"
-                      : "border-gray-300 bg-white text-brand"
-                  )}
-                >
-                  <Paperclip size={15} />
-                </Button>
-                <Input
-                  value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  placeholder={t("ecrireMessage")}
-                  onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
-                  className="flex-1 text-xs"
-                />
-                <Button
-                  variant="primary"
-                  onClick={send}
-                  disabled={(!text.trim() && selectedFiles.length === 0) || sending || getAttachmentSelectionError(selectedFiles) !== null}
-                  className="font-bold text-xs gap-1.5 shadow-glow-sm"
-                >
-                  {sending ? <Spinner className="h-4 w-4 text-brand" /> : <Send size={15} />}
-                  <span>{t("envoyerMessage")}</span>
-                </Button>
-              </div>
-            </div>
-          </>
-        ) : (
-          <div className="flex flex-1 items-center justify-center text-xs text-gray-400">
-            {t("nouvelleConversation")}
-          </div>
-        )}
-      </div>
+      <ChatThread
+        url={threadUrl}
+        title={selected?.nom_client ?? t("messages")}
+        subtitle={selected?.username}
+        peerName={selected?.nom_client}
+        onBack={() => setMobileThreadOpen(false)}
+        className={cn("md:flex", mobileThreadOpen ? "flex" : "hidden")}
+      />
     </div>
-    </>
   );
 }
