@@ -515,7 +515,7 @@ export function ChatThread({
                         </p>
                       ) : null}
                       {message.attachments.length > 0 && (
-                        <div className="mt-1.5 flex flex-col items-start gap-2">
+                        <div className="mt-1.5 flex flex-wrap items-start gap-2">
                           {message.attachments.map((attachment) =>
                             isImageAttachment(attachment.filename, attachment.content_type) ? (
                               <button
